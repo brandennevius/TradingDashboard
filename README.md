@@ -24,6 +24,7 @@ A local Streamlit dashboard for importing trade-log spreadsheets (Excel/CSV), ca
   - YTD
 - Deviation table against trailing historical average
 - Goal tracking and comparison for Net P&L, Win Rate, and Expectancy (R)
+- Weekly, monthly, and quarterly check-ins with saved reviews and reminders
 - Specific trade logging with persistent annotations:
   - Setup tags
   - Mistake type
@@ -36,6 +37,7 @@ A local Streamlit dashboard for importing trade-log spreadsheets (Excel/CSV), ca
   - P&L by period bar chart
   - Trade P&L and R-multiple distributions
   - Losses by mistake-type pie chart
+  - Weekly check-in summary charts
 
 ## Quick start
 
@@ -64,4 +66,4 @@ Optional but recommended:
 
 - The app parses values like `$1,250`, `-350`, and `(200)` automatically.
 - KPI calculations are based on realized trade close date.
-- If your workbook has multiple sheets, choose the correct sheet in the sidebar.
+- If your workbook has multiple sheets, choose the correct sheet in the top import panel.
