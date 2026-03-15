@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+monthly_checkins.csv
+monthly_checkin_responses.csv
+quarterly_checkins.csv
+quarterly_checkin_responses.csv
+weekly_checkins.csv
+weekly_checkin_responses.csv
+trade_annotations.csv

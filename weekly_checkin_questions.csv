@@ -1,0 +1,11 @@
+question_id,section,prompt,display_order,is_active,created_at,updated_at
+rule_predefined_grades,A. Rule Adherence,Did I trade predefined grades ?,1,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+rule_max_risk_by_grade,A. Rule Adherence,Did I respect max risk per trade based on grade ?,2,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+rule_weekly_max_loss,A. Rule Adherence,Did I respect weekly max loss ?,3,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+rule_no_impulse_revenge,A. Rule Adherence,Did I avoid impulse / revenge trades ?,4,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+exec_entries_as_planned,B. Execution Quality,Were all entries taken as planned ?,5,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+exec_stops_placed_per_plan,B. Execution Quality,Were stops placed exactly as per plan ?,6,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+exec_no_moving_stops,B. Execution Quality,Did I avoid moving stops ?,7,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+exec_winners_to_1r_before_manage,B. Execution Quality,Did I let winners reach at least 1R before management ?,8,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+journal_all_trades_logged_tradezella,C. Journaling Discipline,Were 100% of the trades logged in Tradezella ? Ideally same day when they closed ?,9,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+journal_execution_graded_separately,C. Journaling Discipline,Was execution graded separately from outcome ?,10,True,2026-02-27T02:26:30,2026-02-27T02:26:30

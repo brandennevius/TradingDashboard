@@ -1,0 +1,11 @@
+question_id,section,prompt,response_type,display_order,is_active,created_at,updated_at
+quarterly_expectancy_by_grade,A. Edge Strength,Expectancy by trade grade,text,1,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+quarterly_expectancy_by_asset,A. Edge Strength,Expectancy by asset,text,2,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+quarterly_expectancy_by_market_type,A. Edge Strength,Expectancy by market type,text,3,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+quarterly_sample_size_ok,A. Edge Strength,Sample size met (at least 30 trades per segment),yesno,4,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+quarterly_trades_by_market_regime,B. Trade Selection and Focus,Trades per quarter (downtrend / uptrend / counter-trend),text,5,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+quarterly_results_by_market_regime,B. Trade Selection and Focus,Results by market regime,text,6,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+quarterly_top3_assets_expectancy,B. Trade Selection and Focus,Top 3 assets by expectancy,text,7,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+quarterly_emotional_triggers,C. Behavioral Patterns,Recurring emotional triggers,text,8,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+quarterly_rule_pressure_conditions,C. Behavioral Patterns,Markets/conditions causing rule pressure,text,9,True,2026-02-27T02:26:30,2026-02-27T02:26:30
+quarterly_prep_confidence_correlation,C. Behavioral Patterns,Correlation between preparation and confidence,text,10,True,2026-02-27T02:26:30,2026-02-27T02:26:30
