@@ -351,7 +351,7 @@ st.sidebar.caption(f"Auto-detected header row: {detected_header}. For this Trade
 
 raw = load_workbook(uploaded, sheet_name, int(header_row))
 raw.columns = [str(c).strip() for c in raw.columns]
-raw = raw.loc[:, ~pd.Series(raw.columns).str.startswith("Unnamed")]
+raw = raw.loc[:, [not str(c).startswith("Unnamed") for c in raw.columns]]
 
 matches = auto_match_columns(raw.columns)
 with st.sidebar.expander("Column mapping", expanded=False):
