@@ -122,6 +122,20 @@ def _longest_streaks(pnl: pd.Series) -> tuple[int, int]:
     return longest_win, longest_loss
 
 
+def _safe_ratio(numerator: float, denominator: float) -> float:
+    if pd.isna(numerator) or pd.isna(denominator) or denominator == 0:
+        return np.nan
+    return float(numerator / denominator)
+
+
+def _max_drawdown(values: pd.Series) -> float:
+    if values.empty:
+        return 0.0
+    cumulative = values.fillna(0).cumsum()
+    drawdown = cumulative - cumulative.cummax()
+    return float(drawdown.min()) if len(drawdown) else 0.0
+
+
 def compute_kpis(trades: pd.DataFrame) -> Dict[str, float]:
     if trades.empty:
         return {
@@ -129,16 +143,33 @@ def compute_kpis(trades: pd.DataFrame) -> Dict[str, float]:
             "Wins": 0,
             "Losses": 0,
             "Win Rate": np.nan,
+            "Loss Rate": np.nan,
             "Net P&L": 0.0,
             "Avg Trade": np.nan,
+            "Median Trade": np.nan,
+            "Best Trade": np.nan,
+            "Worst Trade": np.nan,
             "Avg Win": np.nan,
             "Avg Loss": np.nan,
+            "Payoff Ratio": np.nan,
+            "Breakeven Win Rate": np.nan,
             "Profit Factor": np.nan,
             "Expectancy ($)": np.nan,
             "Avg R": np.nan,
+            "Median R": np.nan,
             "Expectancy (R)": np.nan,
             "Avg Win R": np.nan,
             "Avg Loss R": np.nan,
+            "Payoff Ratio R": np.nan,
+            "Best R": np.nan,
+            "Worst R": np.nan,
+            "Max Drawdown R": 0.0,
+            "Risk Efficiency": np.nan,
+            "Avg Risk": np.nan,
+            "Total Risk": np.nan,
+            "Largest Risk": np.nan,
+            "Recovery Factor": np.nan,
+            "System Quality Number": np.nan,
             "Longest Win Streak": 0,
             "Longest Loss Streak": 0,
             "Sharpe (approx)": np.nan,
@@ -154,52 +185,97 @@ def compute_kpis(trades: pd.DataFrame) -> Dict[str, float]:
     gross_loss = losses.sum()
     net = pnl.sum()
 
-    profit_factor = gross_win / abs(gross_loss) if gross_loss < 0 else np.nan
+    avg_win = float(wins.mean()) if len(wins) else np.nan
+    avg_loss = float(losses.mean()) if len(losses) else np.nan
+    payoff_ratio = _safe_ratio(avg_win, abs(avg_loss))
+    breakeven_win_rate = _safe_ratio(1, 1 + payoff_ratio) if not pd.isna(payoff_ratio) else np.nan
+    profit_factor = _safe_ratio(gross_win, abs(gross_loss)) if gross_loss < 0 else np.nan
 
     longest_win, longest_loss = _longest_streaks(pnl)
-
-    rolling_equity = pnl.cumsum()
-    drawdown = rolling_equity - rolling_equity.cummax()
-    max_drawdown = float(drawdown.min()) if len(drawdown) else 0.0
+    max_drawdown = _max_drawdown(pnl)
+    recovery_factor = _safe_ratio(net, abs(max_drawdown)) if max_drawdown < 0 else np.nan
 
     sharpe = np.nan
     if "risk" in trades.columns:
         returns = (trades["pnl"] / trades["risk"].replace(0, np.nan)).replace([np.inf, -np.inf], np.nan).dropna()
     else:
+        rolling_equity = pnl.cumsum()
         returns = rolling_equity.pct_change().replace([np.inf, -np.inf], np.nan).dropna()
 
     if len(returns) > 1 and returns.std(ddof=1) > 0:
         sharpe = float(np.sqrt(252) * returns.mean() / returns.std(ddof=1))
 
     avg_r = np.nan
+    median_r = np.nan
     expectancy_r = np.nan
     avg_win_r = np.nan
     avg_loss_r = np.nan
+    payoff_ratio_r = np.nan
+    best_r = np.nan
+    worst_r = np.nan
+    max_drawdown_r = 0.0
+    system_quality_number = np.nan
     if "r_multiple" in trades.columns:
-        valid_r = trades["r_multiple"].dropna()
+        valid_r = trades["r_multiple"].dropna().astype(float)
         if len(valid_r):
             avg_r = float(valid_r.mean())
-            expectancy_r = float(valid_r.mean())
+            median_r = float(valid_r.median())
+            expectancy_r = avg_r
             positive_r = valid_r[valid_r > 0]
             negative_r = valid_r[valid_r < 0]
             avg_win_r = float(positive_r.mean()) if len(positive_r) else np.nan
             avg_loss_r = float(negative_r.mean()) if len(negative_r) else np.nan
+            payoff_ratio_r = _safe_ratio(avg_win_r, abs(avg_loss_r))
+            best_r = float(valid_r.max())
+            worst_r = float(valid_r.min())
+            max_drawdown_r = _max_drawdown(valid_r)
+            if len(valid_r) > 1 and valid_r.std(ddof=1) > 0:
+                system_quality_number = float((valid_r.mean() / valid_r.std(ddof=1)) * np.sqrt(len(valid_r)))
+
+    avg_risk = np.nan
+    total_risk = np.nan
+    largest_risk = np.nan
+    risk_efficiency = np.nan
+    if "risk" in trades.columns:
+        risk = trades["risk"].replace(0, np.nan).dropna().astype(float)
+        if len(risk):
+            avg_risk = float(risk.mean())
+            total_risk = float(risk.sum())
+            largest_risk = float(risk.max())
+            risk_efficiency = _safe_ratio(net, total_risk)
 
     return {
         "Trades": total,
         "Wins": int((pnl > 0).sum()),
         "Losses": int((pnl < 0).sum()),
         "Win Rate": float((pnl > 0).mean()) if total else np.nan,
+        "Loss Rate": float((pnl < 0).mean()) if total else np.nan,
         "Net P&L": float(net),
         "Avg Trade": float(pnl.mean()) if total else np.nan,
-        "Avg Win": float(wins.mean()) if len(wins) else np.nan,
-        "Avg Loss": float(losses.mean()) if len(losses) else np.nan,
-        "Profit Factor": float(profit_factor) if not np.isnan(profit_factor) else np.nan,
+        "Median Trade": float(pnl.median()) if total else np.nan,
+        "Best Trade": float(pnl.max()) if total else np.nan,
+        "Worst Trade": float(pnl.min()) if total else np.nan,
+        "Avg Win": avg_win,
+        "Avg Loss": avg_loss,
+        "Payoff Ratio": payoff_ratio,
+        "Breakeven Win Rate": breakeven_win_rate,
+        "Profit Factor": profit_factor,
         "Expectancy ($)": float(pnl.mean()) if total else np.nan,
         "Avg R": avg_r,
+        "Median R": median_r,
         "Expectancy (R)": expectancy_r,
         "Avg Win R": avg_win_r,
         "Avg Loss R": avg_loss_r,
+        "Payoff Ratio R": payoff_ratio_r,
+        "Best R": best_r,
+        "Worst R": worst_r,
+        "Max Drawdown R": max_drawdown_r,
+        "Risk Efficiency": risk_efficiency,
+        "Avg Risk": avg_risk,
+        "Total Risk": total_risk,
+        "Largest Risk": largest_risk,
+        "Recovery Factor": recovery_factor,
+        "System Quality Number": system_quality_number,
         "Longest Win Streak": longest_win,
         "Longest Loss Streak": longest_loss,
         "Sharpe (approx)": sharpe,
@@ -240,11 +316,23 @@ def period_kpi_table(trades: pd.DataFrame, frequency: str) -> pd.DataFrame:
                 "Trades": metrics["Trades"],
                 "Net P&L": metrics["Net P&L"],
                 "Win Rate": metrics["Win Rate"],
+                "Breakeven Win Rate": metrics["Breakeven Win Rate"],
                 "Profit Factor": metrics["Profit Factor"],
+                "Payoff Ratio": metrics["Payoff Ratio"],
                 "Expectancy ($)": metrics["Expectancy ($)"],
                 "Expectancy (R)": metrics["Expectancy (R)"],
                 "Avg R": metrics["Avg R"],
+                "Median R": metrics["Median R"],
+                "Payoff Ratio R": metrics["Payoff Ratio R"],
+                "Best R": metrics["Best R"],
+                "Worst R": metrics["Worst R"],
+                "Best Trade": metrics["Best Trade"],
+                "Worst Trade": metrics["Worst Trade"],
+                "Risk Efficiency": metrics["Risk Efficiency"],
+                "System Quality Number": metrics["System Quality Number"],
+                "Recovery Factor": metrics["Recovery Factor"],
                 "Max Drawdown": metrics["Max Drawdown"],
+                "Max Drawdown R": metrics["Max Drawdown R"],
             }
         )
 
@@ -255,14 +343,21 @@ def build_deviation_table(period_table: pd.DataFrame, lookback: int = 3) -> pd.D
     if period_table.empty or len(period_table) < 2:
         return pd.DataFrame()
 
-    numeric_cols = [
+    candidate_cols = [
         "Net P&L",
         "Win Rate",
+        "Breakeven Win Rate",
         "Profit Factor",
+        "Payoff Ratio",
         "Expectancy ($)",
         "Expectancy (R)",
         "Avg R",
+        "Median R",
+        "Risk Efficiency",
+        "System Quality Number",
+        "Recovery Factor",
     ]
+    numeric_cols = [col for col in candidate_cols if col in period_table.columns]
 
     current = period_table.iloc[-1]
     baseline = period_table.iloc[max(0, len(period_table) - 1 - lookback) : -1][numeric_cols].mean(numeric_only=True)
@@ -319,8 +414,13 @@ def horizon_snapshot(trades: pd.DataFrame, end_date: pd.Timestamp) -> pd.DataFra
                 "Trades": k["Trades"],
                 "Net P&L": k["Net P&L"],
                 "Win Rate": k["Win Rate"],
+                "Breakeven Win Rate": k["Breakeven Win Rate"],
                 "Expectancy ($)": k["Expectancy ($)"],
                 "Expectancy (R)": k["Expectancy (R)"],
+                "Payoff Ratio R": k["Payoff Ratio R"],
+                "Risk Efficiency": k["Risk Efficiency"],
+                "Max Drawdown": k["Max Drawdown"],
+                "Max Drawdown R": k["Max Drawdown R"],
             }
         )
 
