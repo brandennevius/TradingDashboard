@@ -28,33 +28,66 @@ def parse_numeric(series: pd.Series) -> pd.Series:
 
 
 def auto_match_columns(columns: Iterable[str]) -> Dict[str, Optional[str]]:
-    candidates = {
-        "exit_date": ["exit", "closedate", "exitdate", "close", "dateclosed", "closeout"],
-        "entry_date": ["entry", "entrydate", "opendate", "dateopened", "open"],
-        "pnl": ["pnl", "profitloss", "profit", "pl", "netpnl", "p&l", "return$", "totpayout"],
-        "r_multiple": ["rmultiple", "r", "rmult", "rmultiple"],
-        "risk": ["risk", "risk$", "riskusd", "riskvalue"],
+    normalized_pairs = [(normalize_name(col), col) for col in columns]
+
+    # Preserve first match when normalized names collide, e.g. Risk ($) and Risk (%) both normalize to "risk".
+    lookup: Dict[str, str] = {}
+    for normalized, original in normalized_pairs:
+        lookup.setdefault(normalized, original)
+
+    output: Dict[str, Optional[str]] = {
+        "exit_date": None,
+        "entry_date": None,
+        "pnl": None,
+        "r_multiple": None,
+        "risk": None,
+        "asset": None,
+        "side": None,
+        "notes": None,
+        "mistake_type": None,
+        "chart_link": None,
+        "chart_image": None,
+    }
+
+    exact_candidates = {
+        "exit_date": ["exit", "closedate", "exitdate", "dateclosed", "closeout"],
+        "entry_date": ["entry", "entrydate", "opendate", "dateopened"],
+        "pnl": ["pnl", "pl", "profitloss", "netpnl", "totpayout"],
+        # Include common typo from the user's sheet: "R Muliple".
+        # Do not use a bare "r" fallback; it incorrectly matches fields like Running P&L.
+        "r_multiple": ["rmultiple", "rmuliple", "rmult", "rscore", "rvalue"],
+        "risk": ["risk", "riskusd", "riskvalue", "riskdollars", "riskamount"],
         "asset": ["asset", "symbol", "ticker", "instrument"],
         "side": ["side", "direction", "longshort", "position"],
-        "notes": ["note", "notes", "comment", "mistake"],
-        "mistake_type": ["mistake", "errortype", "error", "tag", "reason"],
+        "notes": ["notes", "note", "comment", "comments"],
+        "mistake_type": ["mistake", "mistaketype", "errortype", "error", "tag", "reason"],
         "chart_link": ["link", "chartlink", "tradingviewlink", "url"],
         "chart_image": ["image", "chartimage", "screenshot", "imgurl", "imageurl"],
     }
 
-    lookup = {normalize_name(col): col for col in columns}
-    output: Dict[str, Optional[str]] = {k: None for k in candidates}
+    contains_candidates = {
+        "exit_date": ["exitdate", "closedate", "dateclosed"],
+        "entry_date": ["entrydate", "opendate", "dateopened"],
+        "pnl": ["pnl", "profitloss", "netpnl"],
+        "r_multiple": ["rmultiple", "rmuliple", "rmult"],
+        "risk": ["riskusd", "riskvalue", "riskdollar", "riskamount"],
+        "asset": ["asset", "symbol", "ticker", "instrument"],
+        "side": ["direction", "longshort"],
+        "notes": ["notes", "comment"],
+        "mistake_type": ["mistake", "errortype", "mistaketype"],
+        "chart_link": ["chartlink", "tradingviewlink"],
+        "chart_image": ["chartimage", "screenshot", "imageurl"],
+    }
 
-    for key, tokens in candidates.items():
+    for key, tokens in exact_candidates.items():
         for token in tokens:
             if token in lookup:
                 output[key] = lookup[token]
                 break
         if output[key] is not None:
             continue
-
-        for normalized, original in lookup.items():
-            if any(token in normalized for token in tokens):
+        for normalized, original in normalized_pairs:
+            if any(token in normalized for token in contains_candidates.get(key, [])):
                 output[key] = original
                 break
 
