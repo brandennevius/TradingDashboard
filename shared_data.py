@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
 
 from kpi_engine import auto_match_columns, prepare_trades
+
+APP_DIR = Path(__file__).resolve().parent
+DATA_DIR = APP_DIR / "data"
+DATA_DIR.mkdir(exist_ok=True)
+LATEST_FILE = DATA_DIR / "latest_trade_log.bin"
+LATEST_META = DATA_DIR / "latest_trade_log_meta.txt"
 
 STANDARD_FIELDS = [
     "exit_date",
@@ -47,6 +54,21 @@ def _load_from_bytes(payload: bytes, name: str, sheet_name: Optional[str], heade
     return pd.read_excel(io.BytesIO(payload), sheet_name=sheet_name, header=header_row)
 
 
+def _save_latest(payload: bytes, name: str) -> None:
+    LATEST_FILE.write_bytes(payload)
+    LATEST_META.write_text(name, encoding="utf-8")
+
+
+def _load_latest_from_disk() -> bool:
+    if "shared_trade_file_bytes" in st.session_state:
+        return True
+    if not LATEST_FILE.exists() or not LATEST_META.exists():
+        return False
+    st.session_state["shared_trade_file_bytes"] = LATEST_FILE.read_bytes()
+    st.session_state["shared_trade_file_name"] = LATEST_META.read_text(encoding="utf-8").strip() or "latest_trade_log.xlsx"
+    return True
+
+
 def detect_header_row(preview: pd.DataFrame) -> int:
     best_row, best_score = 0, -1
     for idx, row in preview.iterrows():
@@ -83,16 +105,24 @@ def load_shared_trade_data(page_key: str = "global") -> Tuple[pd.DataFrame, pd.D
     )
 
     if uploaded is not None:
+        payload = uploaded.getvalue()
         st.session_state["shared_trade_file_name"] = uploaded.name
-        st.session_state["shared_trade_file_bytes"] = uploaded.getvalue()
+        st.session_state["shared_trade_file_bytes"] = payload
+        _save_latest(payload, uploaded.name)
+
+    _load_latest_from_disk()
 
     if "shared_trade_file_bytes" not in st.session_state:
-        st.info("Upload your trade log once. It will stay loaded while you switch pages in this Streamlit session.")
+        st.info("Upload your trade log once. It will be available across pages and reloads on this machine.")
         st.stop()
 
     if st.sidebar.button("Clear loaded trade log", key=f"clear_shared_trade_log_{page_key}"):
         for key in ["shared_trade_file_name", "shared_trade_file_bytes", "shared_sheet_name", "shared_header_row"]:
             st.session_state.pop(key, None)
+        if LATEST_FILE.exists():
+            LATEST_FILE.unlink()
+        if LATEST_META.exists():
+            LATEST_META.unlink()
         st.rerun()
 
     payload = st.session_state["shared_trade_file_bytes"]
