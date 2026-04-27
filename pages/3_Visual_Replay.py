@@ -196,7 +196,7 @@ link_col_guess = find_link_column(raw, matches.get("chart_link"))
 if link_col_guess:
     matches["chart_link"] = link_col_guess
 
-with st.sidebar.expander("Column mapping", expanded=True):
+with st.sidebar.expander("Column mapping", expanded=False):
     mapping: Dict[str, Optional[str]] = {}
     options = [None] + list(raw.columns)
     for field in STANDARD_FIELDS:
@@ -219,7 +219,7 @@ trades["_chart_img"] = trades["chart_link"].apply(tradingview_snapshot_to_image)
 
 filter_cols = candidate_filter_columns(raw, mapping.values())
 default_filters = [c for c in filter_cols if normalize(c) in {"grade", "trend", "freshness", "coverage", "cot", "valuation", "seasonality", "mistake"}]
-selected_filter_cols = st.sidebar.multiselect("Filter columns", filter_cols, default=default_filters[:8])
+selected_filter_cols = st.sidebar.multiselect("Available filter columns (optional)", filter_cols, default=[])
 trades = attach_columns(trades, raw, selected_filter_cols)
 
 filtered = trades.copy()
@@ -241,10 +241,17 @@ if isinstance(date_range, tuple) and len(date_range) == 2:
 
 for col in ["asset", "side"] + selected_filter_cols:
     if col in filtered.columns and is_categorical(filtered[col]):
-        values = sorted([v for v in filtered[col].dropna().astype(str).str.strip().unique() if v])
-        chosen = st.sidebar.multiselect(f"Filter: {col}", values, default=values)
-        if chosen:
-            filtered = filtered[filtered[col].astype(str).str.strip().isin(chosen)]
+        values = sorted([v for v in filtered[col].fillna("__BLANK__").astype(str).str.strip().replace({"": "__BLANK__"}).unique()])
+        label_map = {"__BLANK__": "(blank)"}
+        chosen_labels = st.sidebar.multiselect(
+            f"Filter: {col}",
+            [label_map.get(v, v) for v in values],
+            default=[label_map.get(v, v) for v in values],
+        )
+        chosen_raw = ["__BLANK__" if v == "(blank)" else v for v in chosen_labels]
+        if set(chosen_raw) != set(values):
+            comparable = filtered[col].fillna("__BLANK__").astype(str).str.strip().replace({"": "__BLANK__"})
+            filtered = filtered[comparable.isin(chosen_raw)]
 
 only_with_images = st.sidebar.checkbox("Only rows with images", value=True)
 if only_with_images:
@@ -272,6 +279,7 @@ with st.expander("Diagnostics", expanded=False):
     st.write("Rows in raw file:", len(raw))
     st.write("Rows prepared as trades:", len(trades))
     st.write("Rows after filters:", len(filtered))
+    st.write("Available suggested filters (not applied by default):", default_filters)
     if link_col:
         failed = trades[(trades["chart_link"].astype(str).str.contains("tradingview", case=False, na=False)) & (trades["_chart_img"].isna())]
         st.write("TradingView links that failed conversion:", len(failed))
