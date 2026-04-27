@@ -1,83 +1,17 @@
 from __future__ import annotations
 
-import io
-from typing import Dict, Iterable, List, Optional
+import re
+from typing import Iterable, List
 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from kpi_engine import auto_match_columns, compute_kpis, prepare_trades
+from kpi_engine import compute_kpis
+from shared_data import load_shared_trade_data, normalize
 
 st.set_page_config(page_title="Actionable Review", layout="wide")
-
-STANDARD_FIELDS = [
-    "exit_date",
-    "entry_date",
-    "pnl",
-    "r_multiple",
-    "risk",
-    "asset",
-    "side",
-    "notes",
-    "mistake_type",
-]
-
-
-def normalize(value: object) -> str:
-    return "".join(ch for ch in str(value).lower().strip() if ch.isalnum())
-
-
-@st.cache_data(show_spinner=False)
-def list_sheets(uploaded_file) -> List[str]:
-    if not uploaded_file.name.lower().endswith((".xlsx", ".xls")):
-        return []
-    return list(pd.ExcelFile(io.BytesIO(uploaded_file.getvalue())).sheet_names)
-
-
-@st.cache_data(show_spinner=False)
-def preview_workbook(uploaded_file, sheet_name: Optional[str]) -> pd.DataFrame:
-    payload = uploaded_file.getvalue()
-    if uploaded_file.name.lower().endswith(".csv"):
-        return pd.read_csv(io.BytesIO(payload), header=None, nrows=40)
-    return pd.read_excel(io.BytesIO(payload), sheet_name=sheet_name, header=None, nrows=40)
-
-
-@st.cache_data(show_spinner=False)
-def load_workbook(uploaded_file, sheet_name: Optional[str], header_row: int) -> pd.DataFrame:
-    payload = uploaded_file.getvalue()
-    if uploaded_file.name.lower().endswith(".csv"):
-        return pd.read_csv(io.BytesIO(payload), header=header_row)
-    return pd.read_excel(io.BytesIO(payload), sheet_name=sheet_name, header=header_row)
-
-
-def detect_header_row(preview: pd.DataFrame) -> int:
-    best_row, best_score = 0, -1
-    for idx, row in preview.iterrows():
-        cells = {normalize(v) for v in row.dropna().tolist() if normalize(v)}
-        score = sum(any(token in c for c in cells) for token in ["asset", "side", "entry", "exit", "pnl", "pl", "risk", "grade", "trend", "mistake"])
-        if {"asset", "side"}.issubset(cells) and ("pnl" in cells or "pl" in cells):
-            score += 10
-        if score > best_score:
-            best_row, best_score = int(idx), score
-    return best_row
-
-
-def fix_excel_serial_dates(df: pd.DataFrame) -> pd.DataFrame:
-    out = df.copy()
-    for col in ["close_date", "entry_date"]:
-        if col not in out.columns:
-            continue
-        parsed = pd.to_datetime(out[col], errors="coerce")
-        years = parsed.dropna().dt.year
-        if not years.empty and years.median() < 1990:
-            numeric = pd.to_numeric(out[col], errors="coerce")
-            serial_dates = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
-            out[col] = serial_dates.where(serial_dates.notna(), parsed)
-        else:
-            out[col] = parsed
-    return out
 
 
 def is_categorical(series: pd.Series) -> bool:
@@ -218,32 +152,7 @@ st.markdown("""
 <div class="review-hero"><h1>Actionable Review</h1><p>Turn the trade log into decisions: what to keep, cut, size down, and review visually.</p></div>
 """, unsafe_allow_html=True)
 
-uploaded = st.sidebar.file_uploader("Upload trade log", type=["csv", "xlsx", "xls"])
-if not uploaded:
-    st.info("Upload your trade log to generate the review.")
-    st.stop()
-
-sheets = list_sheets(uploaded)
-sheet_name = st.sidebar.selectbox("Sheet", sheets, index=sheets.index("Trade Log") if "Trade Log" in sheets else 0) if sheets else None
-preview = preview_workbook(uploaded, sheet_name)
-header_row = st.sidebar.number_input("Header row (0-indexed)", min_value=0, max_value=50, value=detect_header_row(preview), step=1)
-raw = load_workbook(uploaded, sheet_name, int(header_row))
-raw.columns = [str(c).strip() for c in raw.columns]
-raw = raw.loc[:, [not str(c).startswith("Unnamed") for c in raw.columns]]
-
-matches = auto_match_columns(raw.columns)
-with st.sidebar.expander("Column mapping", expanded=False):
-    mapping: Dict[str, Optional[str]] = {}
-    options = [None] + list(raw.columns)
-    for field in STANDARD_FIELDS:
-        default = matches.get(field)
-        index = options.index(default) if default in options else 0
-        mapping[field] = st.selectbox(field, options, index=index, format_func=lambda x: "-" if x is None else str(x))
-
-trades = fix_excel_serial_dates(prepare_trades(raw, mapping))
-if trades.empty:
-    st.error("Could not prepare trades. Map Exit and P&L.")
-    st.stop()
+raw, trades, mapping, _ = load_shared_trade_data("actionable_review")
 
 characteristics = candidate_characteristics(raw, mapping.values())
 default_chars = [c for c in characteristics if normalize(c) in {"grade", "trend", "freshness", "coverage", "cot", "valuation", "seasonality", "mistake"}]
@@ -286,13 +195,10 @@ if not combo.empty:
     summary.append(f"Best repeatable segment: **{best_label}** with **{int(best['Trades'])} trades**, expectancy **{fmt_num(best['Expectancy (R)'])}R**, net **{fmt_money(best['Net P&L'])}**.")
     summary.append(f"Weakest segment: **{worst_label}** with **{int(worst['Trades'])} trades**, expectancy **{fmt_num(worst['Expectancy (R)'])}R**, net **{fmt_money(worst['Net P&L'])}**.")
 
-risk_warnings = []
 if "risk" in filtered.columns and "Grade" in filtered.columns:
     weak_big = filtered[(filtered["Grade"].astype(str).str.upper().isin(["C", "D", "F"])) & (filtered["risk"] > filtered["risk"].median())]
     if not weak_big.empty:
-        risk_warnings.append(f"{len(weak_big)} weak-grade trades risked more than median risk. This is a rule-quality problem, not a setup problem.")
-if risk_warnings:
-    summary.extend(risk_warnings)
+        summary.append(f"{len(weak_big)} weak-grade trades risked more than median risk. This is a rule-quality problem, not a setup problem.")
 
 if not summary:
     st.info("Not enough signal yet. Add Grade, Trend, COT, Valuation, Mistake, and Notes tags for stronger review output.")
@@ -311,7 +217,6 @@ else:
     with right:
         st.markdown("### Cut / reduce")
         st.dataframe(style_table(combo.tail(10).sort_values("Expectancy (R)" if combo["Expectancy (R)"].notna().any() else "Net P&L")), use_container_width=True, hide_index=True)
-
     chart_df = combo.head(20).copy()
     chart_df["Segment"] = chart_df[combo_cols].astype(str).agg(" | ".join, axis=1)
     fig = px.bar(chart_df.sort_values("Expectancy (R)"), x="Expectancy (R)", y="Segment", orientation="h", title="Top setup segments by expectancy")
