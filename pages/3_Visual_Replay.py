@@ -23,7 +23,6 @@ STANDARD_FIELDS = [
     "notes",
     "mistake_type",
     "chart_link",
-    "chart_image",
 ]
 
 
@@ -33,11 +32,9 @@ def normalize(value: object) -> str:
 
 @st.cache_data(show_spinner=False)
 def list_sheets(uploaded_file) -> List[str]:
-    name = uploaded_file.name.lower()
-    if not name.endswith((".xlsx", ".xls")):
+    if not uploaded_file.name.lower().endswith((".xlsx", ".xls")):
         return []
-    xls = pd.ExcelFile(io.BytesIO(uploaded_file.getvalue()))
-    return list(xls.sheet_names)
+    return list(pd.ExcelFile(io.BytesIO(uploaded_file.getvalue())).sheet_names)
 
 
 @st.cache_data(show_spinner=False)
@@ -57,28 +54,14 @@ def load_workbook(uploaded_file, sheet_name: Optional[str], header_row: int) -> 
 
 
 def detect_header_row(preview: pd.DataFrame) -> int:
-    required_sets = [
-        {"asset", "side", "pnl"},
-        {"asset", "side", "pl"},
-        {"entry", "exit", "pnl"},
-        {"entry", "exit", "pl"},
-    ]
-    best_row = 0
-    best_score = -1
+    best_row, best_score = 0, -1
     for idx, row in preview.iterrows():
-        cells = {normalize(v) for v in row.dropna().tolist()}
-        cells = {c for c in cells if c}
-        if not cells:
-            continue
-        score = 0
-        for token in ["asset", "side", "entry", "exit", "pnl", "pl", "risk", "grade", "trend", "mistake", "link"]:
-            if token in cells or any(token in c for c in cells):
-                score += 1
-        if any(req.issubset(cells) for req in required_sets):
+        cells = {normalize(v) for v in row.dropna().tolist() if normalize(v)}
+        score = sum(any(token in c for c in cells) for token in ["asset", "side", "entry", "exit", "pnl", "pl", "risk", "grade", "trend", "mistake", "link"])
+        if {"asset", "side"}.issubset(cells) and ("pnl" in cells or "pl" in cells):
             score += 10
         if score > best_score:
-            best_score = score
-            best_row = int(idx)
+            best_row, best_score = int(idx), score
     return best_row
 
 
@@ -89,15 +72,10 @@ def fix_excel_serial_dates(df: pd.DataFrame) -> pd.DataFrame:
             continue
         parsed = pd.to_datetime(out[col], errors="coerce")
         years = parsed.dropna().dt.year
-        if years.empty:
-            continue
-        if years.median() < 1990:
+        if not years.empty and years.median() < 1990:
             numeric = pd.to_numeric(out[col], errors="coerce")
             serial_dates = pd.to_datetime(numeric, unit="D", origin="1899-12-30", errors="coerce")
-            if serial_dates.notna().sum() >= parsed.notna().sum() * 0.8:
-                out[col] = serial_dates
-            else:
-                out[col] = parsed
+            out[col] = serial_dates.where(serial_dates.notna(), parsed)
         else:
             out[col] = parsed
     return out
@@ -114,13 +92,7 @@ def is_categorical(series: pd.Series) -> bool:
 
 def candidate_filter_columns(raw: pd.DataFrame, mapped_cols: Iterable[str]) -> List[str]:
     excluded = {c for c in mapped_cols if c}
-    candidates: List[str] = []
-    for col in raw.columns:
-        if col in excluded:
-            continue
-        if is_categorical(raw[col]):
-            candidates.append(col)
-    return sorted(candidates)
+    return sorted([col for col in raw.columns if col not in excluded and is_categorical(raw[col])])
 
 
 def attach_columns(trades: pd.DataFrame, raw: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
@@ -134,25 +106,24 @@ def attach_columns(trades: pd.DataFrame, raw: pd.DataFrame, cols: List[str]) -> 
 def tradingview_snapshot_to_image(url: object) -> Optional[str]:
     if not isinstance(url, str):
         return None
-    match = re.search(r"tradingview\.com/x/([A-Za-z0-9]+)/?", url)
+    match = re.search(r"tradingview\.com/x/([A-Za-z0-9]+)/?", url.strip())
     if not match:
         return None
     code = match.group(1)
-    folder = code[0].lower()
-    return f"https://s3.tradingview.com/snapshots/{folder}/{code}.png"
+    return f"https://s3.tradingview.com/snapshots/{code[0].lower()}/{code}.png"
 
 
-def build_chart_image_column(df: pd.DataFrame) -> pd.Series:
-    if "chart_image" in df.columns:
-        images = df["chart_image"].astype(str).replace({"nan": "", "None": ""}).str.strip()
-        converted = images.where(images != "", None)
-    else:
-        converted = pd.Series([None] * len(df), index=df.index)
-
-    if "chart_link" in df.columns:
-        from_links = df["chart_link"].apply(tradingview_snapshot_to_image)
-        converted = converted.where(converted.notna(), from_links)
-    return converted
+def find_link_column(raw: pd.DataFrame, mapped_link: Optional[str]) -> Optional[str]:
+    if mapped_link in raw.columns:
+        return mapped_link
+    for col in raw.columns:
+        if normalize(col) in {"link", "chartlink", "tradingviewlink", "url"}:
+            return col
+    for col in raw.columns:
+        sample = raw[col].dropna().astype(str).head(25)
+        if sample.str.contains(r"tradingview\.com/x/", case=False, regex=True).any():
+            return col
+    return None
 
 
 def fmt_money(value: float) -> str:
@@ -173,18 +144,15 @@ def render_chart_card(trade: pd.Series) -> None:
         st.image(img, use_container_width=True)
     else:
         st.caption("No image")
-
     meta = []
-    if "asset" in trade:
-        meta.append(str(trade.get("asset", "")))
-    if "side" in trade:
-        meta.append(str(trade.get("side", "")))
+    for field in ["asset", "side"]:
+        if field in trade and str(trade.get(field, "")).strip() not in {"", "nan"}:
+            meta.append(str(trade.get(field)).strip())
     if "pnl" in trade:
         meta.append(fmt_money(trade.get("pnl")))
     if "r_multiple" in trade and pd.notna(trade.get("r_multiple")):
         meta.append(f"{trade.get('r_multiple'):.2f}R")
-    st.caption(" | ".join([m for m in meta if m and m != "nan"]))
-
+    st.caption(" | ".join(meta))
     link = trade.get("chart_link")
     if isinstance(link, str) and link.startswith("http"):
         st.markdown(f"[Open TradingView]({link})")
@@ -199,17 +167,14 @@ def render_grid(df: pd.DataFrame, cols: int) -> None:
                 render_chart_card(trade)
 
 
-st.markdown(
-    """
+st.markdown("""
 <style>
 .visual-hero { border: 1px solid rgba(44, 88, 62, 0.15); border-radius: 20px; background: linear-gradient(135deg, rgba(255,255,255,.92), rgba(235,247,239,.88)); padding: 1rem 1.2rem; margin-bottom: .8rem; box-shadow: 0 16px 40px rgba(42, 83, 58, 0.10); }
 .visual-hero h1 { margin: 0; font-size: 2rem; }
 .visual-hero p { margin: .35rem 0 0 0; color: #395443; font-weight: 500; }
 </style>
 <div class="visual-hero"><h1>Visual Replay</h1><p>Filter your trade log and review TradingView snapshots as a grid or large vertical replay.</p></div>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 uploaded = st.sidebar.file_uploader("Upload trade log", type=["csv", "xlsx", "xls"])
 if not uploaded:
@@ -227,7 +192,11 @@ raw.columns = [str(c).strip() for c in raw.columns]
 raw = raw.loc[:, [not str(c).startswith("Unnamed") for c in raw.columns]]
 
 matches = auto_match_columns(raw.columns)
-with st.sidebar.expander("Column mapping", expanded=False):
+link_col_guess = find_link_column(raw, matches.get("chart_link"))
+if link_col_guess:
+    matches["chart_link"] = link_col_guess
+
+with st.sidebar.expander("Column mapping", expanded=True):
     mapping: Dict[str, Optional[str]] = {}
     options = [None] + list(raw.columns)
     for field in STANDARD_FIELDS:
@@ -241,16 +210,21 @@ if trades.empty:
     st.write("Detected columns:", list(raw.columns))
     st.stop()
 
+link_col = find_link_column(raw, mapping.get("chart_link"))
+if link_col:
+    trades["chart_link"] = raw.loc[trades.index, link_col].astype(str).replace({"nan": "", "None": ""}).str.strip()
+else:
+    trades["chart_link"] = ""
+trades["_chart_img"] = trades["chart_link"].apply(tradingview_snapshot_to_image)
+
 filter_cols = candidate_filter_columns(raw, mapping.values())
 default_filters = [c for c in filter_cols if normalize(c) in {"grade", "trend", "freshness", "coverage", "cot", "valuation", "seasonality", "mistake"}]
 selected_filter_cols = st.sidebar.multiselect("Filter columns", filter_cols, default=default_filters[:8])
 trades = attach_columns(trades, raw, selected_filter_cols)
-trades["_chart_img"] = build_chart_image_column(trades)
 
 filtered = trades.copy()
-
 st.sidebar.markdown("---")
-outcome = st.sidebar.radio("Outcome", ["All", "Winners", "Losers", "Breakeven"], horizontal=False)
+outcome = st.sidebar.radio("Outcome", ["All", "Winners", "Losers", "Breakeven"])
 if outcome == "Winners":
     filtered = filtered[filtered["pnl"] > 0]
 elif outcome == "Losers":
@@ -276,16 +250,32 @@ only_with_images = st.sidebar.checkbox("Only rows with images", value=True)
 if only_with_images:
     filtered = filtered[filtered["_chart_img"].notna()]
 
-sort_by = st.sidebar.selectbox("Sort by", [c for c in ["close_date", "pnl", "r_multiple", "risk", "asset"] if c in filtered.columns], index=0 if "close_date" in filtered.columns else 0)
+sort_options = [c for c in ["close_date", "pnl", "r_multiple", "risk", "asset"] if c in filtered.columns]
+sort_by = st.sidebar.selectbox("Sort by", sort_options, index=0) if sort_options else None
 sort_ascending = st.sidebar.checkbox("Sort ascending", value=False)
-if sort_by in filtered.columns:
+if sort_by:
     filtered = filtered.sort_values(sort_by, ascending=sort_ascending)
 
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Charts", len(filtered))
-c2.metric("Total P&L", fmt_money(filtered["pnl"].sum()) if not filtered.empty else "$0")
-c3.metric("Avg R", fmt_num(filtered["r_multiple"].mean()) if "r_multiple" in filtered.columns and not filtered.empty else "-")
-c4.metric("Win Rate", f"{(filtered['pnl'] > 0).mean() * 100:.1f}%" if not filtered.empty else "-")
+raw_link_count = int(raw[link_col].astype(str).str.contains(r"tradingview\.com/x/", case=False, regex=True, na=False).sum()) if link_col else 0
+converted_count = int(trades["_chart_img"].notna().sum())
+filtered_with_images = int(filtered["_chart_img"].notna().sum()) if "_chart_img" in filtered.columns else 0
+
+c1, c2, c3, c4, c5 = st.columns(5)
+c1.metric("Loaded trades", len(trades))
+c2.metric("Raw TV links", raw_link_count)
+c3.metric("Converted images", converted_count)
+c4.metric("Showing", len(filtered))
+c5.metric("Showing w/images", filtered_with_images)
+
+with st.expander("Diagnostics", expanded=False):
+    st.write("Mapped chart_link column:", link_col or "None")
+    st.write("Rows in raw file:", len(raw))
+    st.write("Rows prepared as trades:", len(trades))
+    st.write("Rows after filters:", len(filtered))
+    if link_col:
+        failed = trades[(trades["chart_link"].astype(str).str.contains("tradingview", case=False, na=False)) & (trades["_chart_img"].isna())]
+        st.write("TradingView links that failed conversion:", len(failed))
+        st.dataframe(failed[[c for c in ["asset", "pnl", "chart_link"] if c in failed.columns]].head(25), use_container_width=True, hide_index=True)
 
 if filtered.empty:
     st.warning("No charts match the current filters.")
@@ -301,5 +291,5 @@ else:
         st.divider()
 
 with st.expander("Filtered trade rows"):
-    visible_cols = [c for c in ["close_date", "entry_date", "asset", "side", "pnl", "r_multiple", "risk", "chart_link"] + selected_filter_cols if c in filtered.columns]
+    visible_cols = [c for c in ["close_date", "entry_date", "asset", "side", "pnl", "r_multiple", "risk", "chart_link", "_chart_img"] + selected_filter_cols if c in filtered.columns]
     st.dataframe(filtered[visible_cols], use_container_width=True, hide_index=True)
