@@ -1412,6 +1412,74 @@ def format_deviation_table(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def period_labels(series: pd.Series, frequency: str) -> pd.Series:
+    if frequency == "H":
+        return series.dt.year.astype(str) + "-H" + np.where(series.dt.month <= 6, "1", "2")
+
+    return series.dt.to_period(frequency).astype(str)
+
+
+def trades_for_period(df: pd.DataFrame, frequency: str, period_name: str) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    out = df.copy()
+    out["__period"] = period_labels(out["close_date"], frequency)
+    out = out[out["__period"] == period_name].copy()
+    return out.drop(columns="__period")
+
+
+def period_trade_display(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    preferred = [
+        "close_date",
+        "entry_date",
+        "asset",
+        "side",
+        "pnl",
+        "r_multiple",
+        "risk",
+        "mistake_type_final",
+        "user_setup",
+        "notes",
+        "user_note",
+        "chart_link_final",
+        "__source_file",
+    ]
+    keep = [col for col in preferred if col in df.columns]
+    out = df[keep].copy()
+
+    if "close_date" in out.columns:
+        out["close_date"] = pd.to_datetime(out["close_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if "entry_date" in out.columns:
+        out["entry_date"] = pd.to_datetime(out["entry_date"], errors="coerce").dt.strftime("%Y-%m-%d")
+    if "pnl" in out.columns:
+        out["pnl"] = out["pnl"].map(fmt_money)
+    if "risk" in out.columns:
+        out["risk"] = out["risk"].map(fmt_money)
+    if "r_multiple" in out.columns:
+        out["r_multiple"] = out["r_multiple"].map(fmt_num)
+
+    rename_map = {
+        "close_date": "Close Date",
+        "entry_date": "Entry Date",
+        "asset": "Asset",
+        "side": "Side",
+        "pnl": "P&L",
+        "r_multiple": "R Multiple",
+        "risk": "Risk $",
+        "mistake_type_final": "Mistake Type",
+        "user_setup": "Setup",
+        "notes": "Imported Notes",
+        "user_note": "Review Note",
+        "chart_link_final": "Chart Link",
+        "__source_file": "Source File",
+    }
+    return out.rename(columns=rename_map)
+
+
 def flatten_columns(columns: pd.Index) -> List[str]:
     names: List[str] = []
     seen: Dict[str, int] = {}
@@ -1971,6 +2039,47 @@ with viz_tab2:
         )
         style_figure(bar)
         st.plotly_chart(bar, use_container_width=True)
+
+        period_options = choice["Period"].astype(str).tolist()
+        period_options = sorted(period_options, reverse=True)
+        selected_period_name = st.selectbox(
+            "Selected period",
+            options=period_options,
+            index=0,
+            key=f"period_detail_{freq_choice[1]}",
+        )
+        selected_period_trades = trades_for_period(trades, freq_choice[1], selected_period_name)
+
+        st.markdown(f"**Trades In {selected_period_name}**")
+        if selected_period_trades.empty:
+            st.caption("No trades found for the selected period.")
+        else:
+            selected_period_kpi = compute_kpis(selected_period_trades)
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric("Trades", f"{int(selected_period_kpi['Trades'])}")
+            p2.metric("Net P&L", fmt_money(selected_period_kpi["Net P&L"]))
+            p3.metric("Win Rate", fmt_pct(selected_period_kpi["Win Rate"]))
+            p4.metric("Expectancy (R)", fmt_num(selected_period_kpi["Expectancy (R)"]))
+
+            period_view = period_trade_display(
+                selected_period_trades.sort_values("close_date", ascending=False)
+            )
+            st.dataframe(
+                period_view,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Chart Link": st.column_config.LinkColumn("Chart Link"),
+                } if "Chart Link" in period_view.columns else None,
+            )
+            period_csv = selected_period_trades.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                f"Download {selected_period_name} trades as CSV",
+                data=period_csv,
+                file_name=f"trades_{selected_period_name}.csv",
+                mime="text/csv",
+                key=f"download_period_{freq_choice[1]}_{selected_period_name}",
+            )
 
 with viz_tab3:
     d1, d2, d3 = st.columns(3)

@@ -1,0 +1,719 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Trade Journal</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <h1>Trade Journal</h1>
+      <img class="brand-logo" src="logo.png" alt="Trade Journal logo" />
+      <div class="quote-card" title="Quote of the Day">
+        <div class="quote-label">Quote of the Day</div>
+        <div id="dailyQuote" class="daily-quote">Loading quote...</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="navBtn active" data-view="dashboardView">Dashboard</button>
+      <button class="navBtn" data-view="tradeLogView">Trade Log</button>
+      <button class="navBtn" data-view="watchlistView">Watchlist</button>
+      <button class="navBtn" data-view="setupBuilderView">Setup Builder</button>
+      <button class="navBtn" data-view="setupComparisonView">Setup Comparison</button>
+      <button class="navBtn" data-view="monthlyReviewView">Monthly Review</button>
+      <button class="navBtn" data-view="playbookView">Playbook</button>
+      <button class="navBtn" data-view="dataHealthView">Data Health</button>
+      <button class="navBtn" data-view="tagsView">Tags</button>
+      <button class="navBtn" data-view="portfolioView">Portfolios</button>
+      <button class="navBtn" data-view="settingsView">Settings</button>
+    </nav>
+    <div class="sidebar-actions">
+      <label class="importLabel">Import Broker CSV<input type="file" id="importInput" accept=".csv" /></label>
+      <button id="exportBtn">Export Journal CSV</button>
+    </div>
+  </aside>
+
+  <main class="content">
+    <section id="dashboardView" class="view active">
+      <header class="page-head">
+        <div>
+          <h2>Dashboard</h2>
+          <p>Your Report Hub For Reviewing Performance By Setup, Ticker, Grade, And Result</p>
+        </div>
+      </header>
+
+      <div id="importStatus" class="card import-status hidden"></div>
+
+      <section class="card report-filters-card">
+        <div class="section-head">
+          <div>
+            <h2>Report Filters</h2>
+            <p class="tight">Every report card below updates from these filters.</p>
+          </div>
+          <button id="resetReportFilters" type="button">Reset Filters</button>
+        </div>
+        <div class="grid filters-grid">
+          <label>Start Date
+            <div class="date-filter-wrap">
+              <input type="hidden" id="reportStartDate" />
+              <button type="button" class="datePickerBtn" data-date-target="reportStartDate">All start dates</button>
+            </div>
+          </label>
+          <label>End Date
+            <div class="date-filter-wrap">
+              <input type="hidden" id="reportEndDate" />
+              <button type="button" class="datePickerBtn" data-date-target="reportEndDate">All end dates</button>
+            </div>
+          </label>
+          <label>Ticker<select id="reportTicker" multiple size="4"><option value="">All tickers</option></select></label>
+          <label>Setup Tag<select id="reportSetup" multiple size="4"><option value="">All setups</option></select></label>
+          <label>Portfolio<select id="reportPortfolio" multiple size="4"><option value="">All portfolios</option></select></label>
+          <label>Long or Short
+            <select id="reportDirection"><option value="">All</option><option>Long</option><option>Short</option></select>
+          </label>
+          <label>Win or Loss
+            <select id="reportResult" multiple size="4"><option value="">All results</option><option>Win</option><option>Loss</option><option value="BE">BE</option><option>Open</option></select>
+          </label>
+          <label>Trade Grade
+            <select id="reportGrade" multiple size="4"><option value="">All grades</option><option>A+</option><option>A</option><option>A-</option><option>B+</option><option>B</option><option>B-</option><option>C+</option><option>C</option><option value="Ungraded">Ungraded</option></select>
+          </label>
+          <label>Secondary Tag<select id="reportSecondaryTag" multiple size="4"><option value="">All secondary tags</option></select></label>
+          <label>Mistake Tag<select id="reportMistakeTag" multiple size="4"><option value="">All mistake tags</option></select></label>
+        </div>
+      </section>
+
+      <div class="dashboard-chart-grid">
+        <div class="chart-stat card"><div class="chart-label">Total PnL</div><div class="chart-value" id="reportTotalPL">$0.00</div><svg id="chartTotalPL" viewBox="0 0 360 130" preserveAspectRatio="none"></svg></div>
+        <div class="chart-stat card"><div class="chart-label">Win %</div><div class="chart-value" id="reportWinRate">0%</div><svg id="chartWinRate" viewBox="0 0 360 130" preserveAspectRatio="none"></svg></div>
+        <div class="chart-stat card"><div class="chart-label">R Return</div><div class="chart-value" id="reportTotalR">0.00R</div><svg id="chartTotalR" viewBox="0 0 360 130" preserveAspectRatio="none"></svg></div>
+        <div class="chart-stat card"><div class="chart-label">Average R Winner</div><div class="chart-value" id="reportAvgRWin">0.00R</div><svg id="chartAvgRWin" viewBox="0 0 360 130" preserveAspectRatio="none"></svg></div>
+        <div class="chart-stat card"><div class="chart-label">Average R Loser</div><div class="chart-value" id="reportAvgRLoss">0.00R</div><svg id="chartAvgRLoss" viewBox="0 0 360 130" preserveAspectRatio="none"></svg></div>
+        <div class="chart-stat card"><div class="chart-label">Trades by Month</div><div class="chart-value" id="reportTradeCount">0</div><svg id="chartTradesByMonth" viewBox="0 0 360 130" preserveAspectRatio="none"></svg></div>
+        <div class="chart-stat card"><div class="chart-label">Winner ÷ |Loser|</div><div class="chart-value" id="reportWinLossRatio">0.00</div><svg id="chartWinLossRatio" viewBox="0 0 360 130" preserveAspectRatio="none"></svg></div>
+        <div class="card streak-card">
+          <div class="streak-grid">
+            <div><div class="chart-label">Max Consecutive Wins</div><div class="chart-value compact" id="reportMaxWins">0</div></div>
+            <div><div class="chart-label">Max Consecutive Losses</div><div class="chart-value compact" id="reportMaxLosses">0</div></div>
+            <div><div class="chart-label">Average Time In Winners</div><div class="chart-value compact time" id="reportAvgTimeWins">0 hours 0 minutes</div></div>
+            <div><div class="chart-label">Average Time In Losers</div><div class="chart-value compact time" id="reportAvgTimeLosses">0 hours 0 minutes</div></div>
+          </div>
+        </div>
+      </div>
+
+      <section class="card monthly-card">
+        <div class="section-head">
+          <div>
+            <h2>Filtered R by Month</h2>
+            <p class="tight">Monthly bar chart based on the same dashboard filters. Hover over a bar for the total R.</p>
+          </div>
+        </div>
+        <svg id="chartMonthlyGrades" class="wide-chart" viewBox="0 0 720 230" preserveAspectRatio="none"></svg>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <div>
+            <h2>Average R by Trade Grade</h2>
+            <p class="tight">Only grades currently available in the filtered trade log are shown.</p>
+          </div>
+        </div>
+        <div class="grade-table-wrap">
+          <table class="trade-table grade-table">
+            <thead><tr><th>Grade</th><th>Trades</th><th>Average R</th><th>Total R</th><th>Win %</th></tr></thead>
+            <tbody id="gradeReportBody"></tbody>
+          </table>
+        </div>
+      </section>    </section>
+
+    <section id="tradeLogView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Trade Log <span class="version-inline">Updated Table</span></h2>
+          <p>Trade Details - Review Screenshots, Setups, & PnL</p>
+        </div>
+      </header>
+      <section class="card report-filters-card trade-log-filters-card">
+        <div class="section-head">
+          <div>
+            <h2>Shared Report Filters</h2>
+            <p class="tight">These are the same filters used on the Dashboard. Changing them here updates both the Dashboard and Trade Log.</p>
+          </div>
+          <button id="resetLogReportFilters" type="button">Reset Filters</button>
+        </div>
+        <div class="grid filters-grid">
+          <label>Start Date<div class="date-filter-wrap"><input type="hidden" id="logReportStartDate" /><button type="button" class="datePickerBtn" data-date-target="logReportStartDate">All start dates</button></div></label>
+          <label>End Date<div class="date-filter-wrap"><input type="hidden" id="logReportEndDate" /><button type="button" class="datePickerBtn" data-date-target="logReportEndDate">All end dates</button></div></label>
+          <label>Ticker<select id="logReportTicker" multiple size="4"><option value="">All tickers</option></select></label>
+          <label>Setup Tag<select id="logReportSetup" multiple size="4"><option value="">All setups</option></select></label>
+          <label>Portfolio<select id="logReportPortfolio" multiple size="4"><option value="">All portfolios</option></select></label>
+          <label>Long or Short<select id="logReportDirection"><option value="">All</option><option>Long</option><option>Short</option></select></label>
+          <label>Win or Loss<select id="logReportResult" multiple size="4"><option value="">All results</option><option>Win</option><option>Loss</option><option value="BE">BE</option><option>Open</option></select></label>
+          <label>Trade Grade<select id="logReportGrade" multiple size="4"><option value="">All grades</option></select></label>
+          <label>Secondary Tag<select id="logReportSecondaryTag" multiple size="4"><option value="">All secondary tags</option></select></label>
+          <label>Mistake Tag<select id="logReportMistakeTag" multiple size="4"><option value="">All mistake tags</option></select></label>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-head">
+          <h2>Trades</h2>
+          <div class="filters">
+            <input type="search" id="search" placeholder="Search ticker/setup..." />
+            <select id="setupFilter"><option value="">All setups</option><option>BBC</option><option>ILEL</option><option>Iron Condor</option><option>Other</option></select>
+          </div>
+        </div>
+        <div class="bulk-actions card subcard">
+          <div class="bulk-count-wrap"><strong id="selectedTradeCount">0 selected</strong><p class="tight">Select trades, choose an action, then submit.</p></div>
+          <select id="bulkActionType" class="bulk-wide">
+            <option value="">Bulk action...</option>
+            <option value="setup">Assign Setup</option>
+            <option value="portfolioTag">Assign Portfolio</option>
+            <option value="merge">Merge Trades</option>
+            <option value="delete">Delete Trades</option>
+          </select>
+          <select id="bulkActionValue" class="bulk-wide" disabled>
+            <option value="">Select an action first...</option>
+          </select>
+          <button type="button" id="bulkSubmit">Submit</button>
+          <button type="button" id="clearSelectedTrades" class="ghost-button">Clear Selection</button>
+        </div>
+        <div class="trade-table-wrap">
+          <table class="trade-table">
+            <thead>
+              <tr>
+                <th><input type="checkbox" id="selectAllTrades" title="Select all visible trades" /></th>
+                <th>Win/Loss</th>
+                <th>Status</th>
+                <th>Open Date</th>
+                <th>Ticker</th>
+                <th>Entry</th>
+                <th>Exit</th>
+                <th>R Multiple</th>
+                <th>$ Risk</th>
+                <th>PnL</th>
+                <th>Long/Short</th>
+                <th>Setup Tag</th>
+                <th>Grade</th>
+                <th>Close Date</th>
+                <th>Portfolio Tag</th>
+              </tr>
+            </thead>
+            <tbody id="tradeList"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+
+    <section id="setupBuilderView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Setup Builder</h2>
+          <p>Create Trade Setups With Weighted Criteria For Scanning, Monitoring, And Optional Execution Time Frames.</p>
+        </div>
+      </header>
+      <section class="card form-card">
+        <div class="section-head"><h2>Create / Edit Setup</h2><button type="button" id="newSetupBtn">New Setup</button></div>
+        <form id="setupForm">
+          <input type="hidden" id="setupId" />
+          <input type="hidden" id="setupSaveMode" value="edit" />
+          <div class="grid">
+            <label>Setup Name<input type="text" id="setupName" placeholder="Name" required /></label>
+          </div>
+          <label>Description<textarea id="setupDescription" placeholder="What this setup is designed to capture..."></textarea></label>
+          <div class="grade-rules-box">
+            <div class="section-head"><h3>Grade Rules</h3><span class="small">Grade is based on total score ÷ max possible score.</span></div>
+            <div class="grade-rule-grid head"><span>Grade</span><span>Greater than or equal to %</span><span>Less than %</span></div>
+            <div id="gradeRulesArea"></div>
+          </div>
+
+          <div class="setup-section" data-section="stf">
+            <div class="section-head"><h3>Scanning Time Frame Criteria</h3><button type="button" class="addCriteriaBtn" data-section="stf">+ Add Criteria</button></div>
+            <div id="criteria-stf" class="criteria-list"></div>
+          </div>
+          <div class="setup-section" data-section="mtf">
+            <div class="section-head"><h3>Monitoring Time Frame Criteria</h3><button type="button" class="addCriteriaBtn" data-section="mtf">+ Add Criteria</button></div>
+            <div id="criteria-mtf" class="criteria-list"></div>
+          </div>
+          <div class="setup-section" data-section="etf">
+            <div class="section-head"><h3>Execution Time Frame Criteria</h3><label class="inline-check"><input type="checkbox" id="enableEtf" checked /> Show ETF criteria</label><button type="button" class="addCriteriaBtn" data-section="etf">+ Add Criteria</button></div>
+            <div id="criteria-etf" class="criteria-list"></div>
+          </div>
+          <p class="small">Use ⭐ for must-have criteria. Starred criteria automatically receive 2 max points. Normal criteria receive 1 max point.</p>
+
+          <section class="screenshot-section">
+            <div class="section-head">
+              <div><h3>Setup Example Screenshots</h3><p class="tight">Upload example charts for this setup. Click a thumbnail to view it larger.</p></div>
+              <label class="importLabel smallUpload">Add Setup Screenshots<input type="file" id="setupScreenshotInput" accept="image/*" multiple /></label>
+            </div>
+            <div id="setupScreenshotGallery" class="screenshot-gallery"></div>
+          </section>
+
+          <div class="setup-form-actions">
+            <button type="submit" class="primary">Save Setup</button>
+            <button type="button" id="cancelSetupBtn" class="ghost-button">Cancel</button>
+          </div>
+        </form>
+      </section>
+      <section class="card" style="margin-top:18px">
+        <h2>Saved Setups</h2>
+        <div id="setupList" class="setup-list"></div>
+      </section>
+    </section>
+
+
+
+    <section id="tagsView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Tags</h2>
+          <p>Create Reusable Secondary Tags And Mistake Tags For Your Trade Details.</p>
+        </div>
+      </header>
+      <div class="comparison-grid">
+        <section class="card form-card">
+          <div class="section-head"><h2>Secondary Tags</h2></div>
+          <form id="secondaryTagForm" class="tag-form">
+            <label>Tag Name<input type="text" id="secondaryTagName" placeholder="Example: Gap Fill, Low Float, News Catalyst" required /></label>
+            <button type="submit" class="primary">Save Secondary Tag</button>
+          </form>
+          <div id="secondaryTagList" class="tag-list"></div>
+        </section>
+        <section class="card form-card">
+          <div class="section-head"><h2>Mistake Tags</h2></div>
+          <form id="mistakeTagForm" class="tag-form">
+            <label>Tag Name<input type="text" id="mistakeTagName" placeholder="Example: Chased, Early Exit, No Checklist" required /></label>
+            <button type="submit" class="primary">Save Mistake Tag</button>
+          </form>
+          <div id="mistakeTagList" class="tag-list"></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="portfolioView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Portfolios</h2>
+          <p>Create Portfolio Buckets Like Main, IRA, Cash Account, Or Challenge Account. Dashboard Filters Will Use This List.</p>
+        </div>
+      </header>
+      <section class="card form-card">
+        <div class="section-head"><h2>Create / Edit Portfolio</h2><button type="button" id="newPortfolioBtn">New Portfolio</button></div>
+        <form id="portfolioForm">
+          <input type="hidden" id="portfolioId" />
+          <div class="grid">
+            <label>Portfolio Name<input type="text" id="portfolioName" placeholder="Main" required /></label>
+          </div>
+          <label>Description<textarea id="portfolioDescription" placeholder="What account or strategy group does this portfolio represent?"></textarea></label>
+          <button type="submit" class="primary">Save Portfolio</button>
+        </form>
+      </section>
+      <section class="card" style="margin-top:18px">
+        <h2>Saved Portfolios</h2>
+        <div id="portfolioList" class="setup-list"></div>
+      </section>
+    </section>
+
+
+    <section id="setupComparisonView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Setup Comparison</h2>
+          <p>Compare One Setup Across Different Trade Grades So You Can See Which Grade Actually Performs Best.</p>
+        </div>
+      </header>
+      <section class="card report-filters-card">
+        <div class="section-head"><h2>Comparison Filters</h2><button type="button" id="resetComparisonFilters">Reset</button></div>
+        <div class="grid compare-filter-grid">
+          <label>Setup 1<select id="compareSetupA"><option value="">All setups</option></select></label>
+          <label>Version 1<select id="compareVersionA"><option value="current">Current Version</option></select></label>
+          <label>Grade 1<select id="compareGradeA" multiple size="4"><option value="">All grades</option></select></label>
+          <label>Setup 2<select id="compareSetupB"><option value="">All setups</option></select></label>
+          <label>Version 2<select id="compareVersionB"><option value="current">Current Version</option></select></label>
+          <label>Grade 2<select id="compareGradeB" multiple size="4"><option value="">All grades</option></select></label>
+        </div>
+      </section>
+      <div class="comparison-grid">
+        <section class="card">
+          <h2 id="compareTitleA">Grade 1</h2>
+          <div class="comparison-stats" id="compareStatsA"></div><div class="comparison-small-charts"><div><h4>Total PnL</h4><svg id="chartCompareAPL"></svg></div><div><h4>Total R</h4><svg id="chartCompareAR"></svg></div><div><h4>Average R</h4><svg id="chartCompareAAvgR"></svg></div><div><h4>Win %</h4><svg id="chartCompareAWin"></svg></div></div>
+        </section>
+        <section class="card">
+          <h2 id="compareTitleB">Grade 2</h2>
+          <div class="comparison-stats" id="compareStatsB"></div><div class="comparison-small-charts"><div><h4>Total PnL</h4><svg id="chartCompareBPL"></svg></div><div><h4>Total R</h4><svg id="chartCompareBR"></svg></div><div><h4>Average R</h4><svg id="chartCompareBAvgR"></svg></div><div><h4>Win %</h4><svg id="chartCompareBWin"></svg></div></div>
+        </section>
+      </div>
+      <div class="comparison-grid">
+        <section class="card monthly-card">
+          <div class="section-head"><div><h2>Average R by Grade · Setup 1</h2><p class="tight">This ignores the comparison grade filter and shows all grades for Setup 1.</p></div></div>
+          <svg id="chartSetupCompareGradesA" class="wide-chart comparison-grade-chart" viewBox="0 0 720 230" preserveAspectRatio="none"></svg>
+        </section>
+        <section class="card monthly-card">
+          <div class="section-head"><div><h2>Average R by Grade · Setup 2</h2><p class="tight">This ignores the comparison grade filter and shows all grades for Setup 2.</p></div></div>
+          <svg id="chartSetupCompareGradesB" class="wide-chart comparison-grade-chart" viewBox="0 0 720 230" preserveAspectRatio="none"></svg>
+        </section>
+      </div>
+      <section class="card">
+        <div class="section-head">
+          <div><h2>Setup / Grade Breakdown</h2><p class="tight">Filter this table to one setup, or show all setups.</p></div>
+          <label class="inline-filter">Breakdown Setup<select id="breakdownSetupFilter"><option value="">All setups</option></select></label>
+        </div>
+        <div class="grade-table-wrap">
+          <table id="setupCompareBreakdownTable" class="trade-table grade-table">
+            <thead><tr><th>Setup</th><th>Grade</th><th>Trades</th><th>Total PnL</th><th>Total R</th><th>Avg R</th><th>Win %</th></tr></thead>
+            <tbody id="setupCompareBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="watchlistView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Watchlist</h2>
+          <p>Plan Daily Trade Ideas By Date, Ticker, Setup Context, And Entry Trigger.</p>
+        </div>
+      </header>
+      <section class="card form-card">
+        <div class="section-head">
+          <div>
+            <h2>Daily Watchlist</h2>
+            <p class="tight">Defaults To Today. Pick A Previous Date To Review What You Were Watching.</p>
+          </div>
+          <div class="watchlist-controls">
+            <label>Date<div class="date-filter-wrap"><input type="hidden" id="watchlistDate" /><button type="button" class="datePickerBtn" data-date-target="watchlistDate">Today</button></div></label>
+            <label>View<select id="watchlistRange"><option value="day">Selected Date</option><option value="week">Week</option><option value="month">Month</option><option value="all">All Dates</option></select></label>
+            <label>Sort<select id="watchlistSort"><option value="dateDesc">Newest First</option><option value="dateAsc">Oldest First</option><option value="tickerAsc">Ticker A-Z</option><option value="tickerDesc">Ticker Z-A</option></select></label>
+          </div>
+        </div>
+        <form id="watchlistForm" class="watchlist-form">
+          <input type="text" id="watchlistTicker" placeholder="Ticker" required />
+          <input type="text" id="watchlistNote" placeholder="Setup / trigger needed before entry" />
+          <button type="submit" class="primary">Add To Watchlist</button>
+        </form>
+      </section>
+      <section class="card">
+        <div class="section-head"><div><h2>Watchlist Ideas</h2><p class="tight" id="watchlistSummary">Showing watchlist ideas.</p></div></div>
+        <div class="grade-table-wrap">
+          <table class="trade-table">
+            <thead><tr><th>Date</th><th>Ticker</th><th>Setup / Trigger Notes</th><th>Added</th><th></th></tr></thead>
+            <tbody id="watchlistBody"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+
+    <section id="monthlyReviewView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Monthly Review</h2>
+          <p>Review The Month By Setup, Grade, Mistakes, Expectancy, And Improvement Focus.</p>
+        </div>
+      </header>
+      <section class="card report-filters-card">
+        <div class="section-head">
+          <div><h2>Review Month</h2><p class="tight">Pick A Month To Generate A Quick Trading Review.</p></div>
+          <input type="month" id="monthlyReviewMonth" />
+        </div>
+      </section>
+      <div class="dashboard-chart-grid monthly-review-grid">
+        <div class="chart-stat card"><div class="chart-label">Monthly PnL</div><div class="chart-value" id="monthlyPnL">$0.00</div></div>
+        <div class="chart-stat card"><div class="chart-label">Monthly R</div><div class="chart-value" id="monthlyR">0.00R</div></div>
+        <div class="chart-stat card"><div class="chart-label">Win %</div><div class="chart-value" id="monthlyWinRate">0%</div></div>
+        <div class="chart-stat card"><div class="chart-label">Best Setup</div><div class="chart-value compact" id="monthlyBestSetup">—</div></div>
+        <div class="chart-stat card"><div class="chart-label">Biggest Leak</div><div class="chart-value compact" id="monthlyWorstMistake">—</div></div>
+        <div class="chart-stat card"><div class="chart-label">Focus For Next Month</div><div class="chart-value compact" id="monthlyFocus">—</div></div>
+      </div>
+      <section class="card">
+        <div class="section-head"><div><h2>Expectancy By Setup / Version / Grade</h2><p class="tight">Average R And Average PnL Grouped By Setup, Frozen Setup Version, And Trade Grade.</p></div></div>
+        <div class="grade-table-wrap"><table class="trade-table grade-table"><thead><tr><th>Setup</th><th>Version</th><th>Grade</th><th>Trades</th><th>Expectancy R</th><th>Expectancy $</th><th>Win %</th><th>Total R</th></tr></thead><tbody id="expectancyBody"></tbody></table></div>
+      </section>
+      <section class="card">
+        <div class="section-head"><div><h2>Monthly Notes</h2><p class="tight">Use This Space For A Manual End-Of-Month Review.</p></div></div>
+        <textarea id="monthlyReviewNotes" placeholder="What worked? What cost me money? What rule gets tightened next month?"></textarea>
+        <button type="button" id="saveMonthlyReviewNotes" class="primary">Save Monthly Notes</button>
+      </section>
+    </section>
+
+    <section id="playbookView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Playbook</h2>
+          <p>Build A Visual Library Of Your Best Setup Examples And Reference Screenshots.</p>
+        </div>
+      </header>
+      <section class="card report-filters-card">
+        <div class="section-head"><div><h2>Playbook Filters</h2><p class="tight">Filter To A Setup Or Grade To Review Your Best Examples.</p></div></div>
+        <div class="grid filters-grid">
+          <label>Setup<select id="playbookSetup" multiple><option value="">All setups</option></select></label>
+          <label>Grade<select id="playbookGrade" multiple><option value="">All grades</option></select></label>
+          <label>Portfolio<select id="playbookPortfolio" multiple><option value="">All portfolios</option></select></label>
+          <label>Mistake<select id="playbookMistake" multiple><option value="">All mistake tags</option></select></label>
+          <label>Only Trades With Screenshots<select id="playbookScreenshots"><option value="">All trades</option><option value="yes">With screenshots only</option></select></label>
+        </div>
+      </section>
+      <section class="card"><div class="section-head"><div><h2>Setup Examples</h2><p class="tight">Cards Are Sorted Newest To Oldest. Use The Page Buttons To Review Older Trades.</p></div></div><div class="playbook-pager-row playbook-pager-row-top"><span id="playbookPageSummaryTop" class="pager-summary"></span><div id="playbookPaginationTop" class="pagination"></div></div><div id="playbookCards" class="playbook-grid"></div><div class="playbook-pager-row"><span id="playbookPageSummary" class="pager-summary"></span><div id="playbookPagination" class="pagination"></div></div></section>
+    </section>
+
+    <section id="dataHealthView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Data Health</h2>
+          <p>Find Missing Risk, Grades, Screenshots, Tags, And Other Data Gaps Before Reviewing Performance.</p>
+        </div>
+      </header>
+      <div class="dashboard-chart-grid data-health-grid">
+        <div class="chart-stat card"><div class="chart-label">Missing Risk</div><div class="chart-value compact" id="healthMissingRisk">0</div></div>
+        <div class="chart-stat card"><div class="chart-label">Missing Setup</div><div class="chart-value compact" id="healthMissingSetup">0</div></div>
+        <div class="chart-stat card"><div class="chart-label">Ungraded Trades</div><div class="chart-value compact" id="healthUngraded">0</div></div>
+        <div class="chart-stat card"><div class="chart-label">No Screenshots</div><div class="chart-value compact" id="healthNoScreenshots">0</div></div>
+        <div class="chart-stat card"><div class="chart-label">Missing Stop</div><div class="chart-value compact" id="healthMissingStop">0</div></div>
+        <div class="chart-stat card"><div class="chart-label">Missing Notes</div><div class="chart-value compact" id="healthMissingNotes">0</div></div>
+      </div>
+      <section class="card"><div class="section-head"><div><h2>Trades Needing Attention</h2><p class="tight">Click Open To Fix The Trade Details.</p></div></div><div class="grade-table-wrap"><table class="trade-table"><thead><tr><th>Date</th><th>Ticker</th><th>Issue</th><th>Setup</th><th>Grade</th><th></th></tr></thead><tbody id="healthIssueBody"></tbody></table></div></section>
+    </section>
+
+    <section id="settingsView" class="view">
+      <header class="page-head">
+        <div>
+          <h2>Settings</h2>
+          <p>Manage Backups, Imports, Exports, And Data Controls.</p>
+        </div>
+      </header>
+
+      <section class="card settings-card">
+        <div class="section-head">
+          <div>
+            <h2>Data Management</h2>
+            <p class="tight">Keep Imports, Exports, And Full Backups Here So Your Main Workflow Stays Focused On Reviewing Trades.</p>
+          </div>
+        </div>
+        <div class="settings-actions">
+          <label class="importLabel">Import Broker CSV<input type="file" id="settingsImportInput" accept=".csv" /></label>
+          <button id="settingsExportBtn" type="button">Export Trades CSV</button>
+          <button id="backupExportBtn" type="button" class="primary">Export Full Backup</button>
+          <label class="importLabel">Import Full Backup<input type="file" id="backupImportInput" accept=".json,application/json" /></label>
+        </div>
+      </section>
+
+      <section class="card danger-zone">
+        <div class="section-head">
+          <div>
+            <h2>Danger Zone</h2>
+            <p class="tight">Clear All Data Removes Every Saved Trade, Setup, Version, Portfolio, Tag, And Screenshot From This Browser. This Cannot Be Undone.</p>
+          </div>
+        </div>
+        <button id="clearBtn" class="danger" type="button">Clear All Data</button>
+      </section>
+    </section>
+
+  </main>
+
+  <dialog id="tradeDialog" class="trade-dialog">
+    <form id="editForm" method="dialog">
+      <div class="dialog-head">
+        <div>
+          <h2 id="editTitle">Edit Trade</h2>
+          <p>Imported Broker Data Can Be Reviewed Here. Your Manual Tags And Risk/R Data Are Saved To The Trade.</p>
+        </div>
+      </div>
+      <input type="hidden" id="editId" />
+      <div class="dialog-actions top-actions">
+        <button type="button" id="deleteFromDialogTop" class="danger">Delete</button>
+        <button type="submit" class="primary">Save Changes</button>
+        <button type="button" id="closeDialog" class="dialog-close-inline">×</button>
+      </div>
+      <div class="trade-detail-actions">
+        <label>Setup Tag<select id="editSetup"><option>Other</option></select></label>
+        <label>Setup Score<button type="button" id="gradeFromSetupBtn">Grade From Setup</button></label>
+      </div>
+      <div class="readonly-trade-grid">
+        <div><span>Open Date</span><strong id="viewDate">—</strong></div>
+        <div><span>Open Time</span><strong id="viewEntryTime">—</strong></div>
+        <div><span>Close Date</span><strong id="viewExitDate">—</strong></div>
+        <div><span>Close Time</span><strong id="viewExitTime">—</strong></div>
+        <div><span>Ticker</span><strong id="viewTicker">—</strong></div>
+        <div><span>Long / Short</span><strong id="viewDirection">—</strong></div>
+        <div><span>Shares</span><strong id="viewSize">—</strong></div>
+        <div><span>PnL</span><strong id="viewPl">—</strong></div>
+        <div><span>R Multiple</span><strong id="viewRMultiple">—</strong></div>
+      </div>
+      <div class="trade-edit-grid">
+        <label>Entry<input type="number" step="0.0001" id="editEntry" readonly /></label>
+        <label>Exit<input type="number" step="0.0001" id="editExit" readonly /></label>
+        <label>Stop<input type="number" step="0.0001" id="editStop" /></label>
+        <label>Target<input type="number" step="0.0001" id="editTarget" placeholder="Planned target" /></label>
+        <label>$ Risk<input type="number" step="0.01" id="editRisk" /></label>
+        <label>STF ATR at Entry<input type="number" step="0.0001" id="editStfAtr" placeholder="Example: 2.35" /></label>
+        <label>Stop Distance vs ATR<div class="readonly-mini" id="atrStopPct">—</div></label>
+        <label>Target Distance vs ATR<div class="readonly-mini" id="atrTargetPct">—</div></label>
+        <label>Calculate Stop<button type="button" id="calcStopBtn">Calculate Stop From Risk</button></label>
+        <label>Portfolio<select id="editPortfolioTag"><option value="">No portfolio</option></select></label>
+        <label>Grade<select id="editGrade"><option value="">Ungraded</option><option>A+</option><option>A</option><option>A-</option><option>B+</option><option>B</option><option>B-</option><option>C+</option><option>C</option></select></label>
+        <label>Emotion<select id="editEmotion"><option value="">Not entered</option><option>Calm</option><option>FOMO</option><option>Fearful</option><option>Greedy</option><option>Revenge</option><option>Patient</option></select></label>
+        <label>Secondary Tag<select id="editSecondaryTag"><option value="">No secondary tag</option></select></label>
+        <label>Mistake Tag<select id="editMistakeTag"><option value="">No mistake tag</option></select></label>
+      </div>
+      <label>Checklist / Trade Quality<textarea id="editChecklist"></textarea></label>
+      <section class="execution-section card">
+        <div class="section-head">
+          <div>
+            <h3>Executions</h3>
+            <p class="tight">Every Buy, Add, Partial Exit, And Final Exit Included In This Trade.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="execution-table">
+            <thead><tr><th>Action</th><th>Date / Time</th><th>Size</th><th>Price</th><th>Position</th><th>Value</th></tr></thead>
+            <tbody id="executionTableBody"></tbody>
+          </table>
+        </div>
+        <p id="executionEmpty" class="small hidden">No execution details are available for this trade.</p>
+      </section>
+      <section class="screenshot-section">
+        <div class="section-head">
+          <div><h3>Trade Screenshots</h3><p class="tight">Upload chart screenshots here. Click a thumbnail to view it larger.</p></div>
+          <label class="importLabel smallUpload">Add Screenshots<input type="file" id="screenshotInput" accept="image/*" multiple /></label>
+        </div>
+        <div id="screenshotGallery" class="screenshot-gallery"></div>
+      </section>
+      <label>Trade Notes<textarea id="editNotes" placeholder="Type your trade notes here..."></textarea></label>
+      <div class="dialog-actions">
+        <button type="button" id="deleteFromDialog" class="danger">Delete</button>
+        <button type="submit" class="primary">Save Changes</button>
+      </div>
+    </form>
+  </dialog>
+
+
+
+  <dialog id="versionDialog" class="trade-dialog version-dialog">
+    <div class="dialog-head">
+      <div><h2 id="versionDialogTitle">Setup Versions</h2><p>Review Prior Criteria, Grade Rules, And Version Changes.</p></div>
+      <button type="button" id="closeVersionDialog">×</button>
+    </div>
+    <div id="versionDialogContent" class="version-dialog-content"></div>
+  </dialog>
+
+  <dialog id="imageDialog" class="image-dialog">
+    <button type="button" id="closeImageDialog" class="image-close">×</button>
+    <img id="largeScreenshot" alt="Trade screenshot enlarged" />
+  </dialog>
+
+
+  <dialog id="gradeDialog" class="trade-dialog">
+    <form id="gradeForm" method="dialog">
+      <div class="dialog-head">
+        <div><h2 id="gradeDialogTitle">Grade Trade</h2><p>Enter The Points Earned For Each Criteria. The App Will Total The Score And Assign The Grade.</p></div>
+        <button type="button" id="closeGradeDialog">×</button>
+      </div>
+      <input type="hidden" id="gradeTradeId" />
+      <div id="gradeCriteriaArea"></div>
+      <div class="score-summary card"><strong>Total: <span id="gradeTotalScore">0</span>/<span id="gradeMaxScore">0</span></strong><strong>Grade: <span id="gradeResult">Ungraded</span></strong></div>
+      <div class="dialog-actions"><button type="button" id="cancelGradeBtn">Cancel</button><button type="submit" class="primary">Apply Grade</button></div>
+    </form>
+  </dialog>
+
+  <button id="feedbackLauncher" class="feedback-launcher" type="button" aria-label="Open support chat">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M7 10.5h10M7 14h6m-7.5 6 2.2-3H18a3 3 0 0 0 3-3V8a3 3 0 0 0-3-3H6A3 3 0 0 0 3 8v6a3 3 0 0 0 3 3h.5V20Z" />
+    </svg>
+  </button>
+
+  <dialog id="feedbackDialog" class="trade-dialog feedback-dialog">
+    <form id="feedbackForm" method="dialog">
+      <div class="dialog-head">
+        <div>
+          <h2>Support Chat</h2>
+          <p>Open a bug or feature thread, then keep talking in the same conversation while it gets worked.</p>
+        </div>
+        <button type="button" id="closeFeedbackDialog">×</button>
+      </div>
+
+      <div class="feedback-layout">
+        <aside class="feedback-sidebar">
+          <div class="feedback-sidebar-head">
+            <strong>Your Threads</strong>
+            <button type="button" id="newFeedbackThreadBtn">New</button>
+          </div>
+          <div id="feedbackThreadList" class="feedback-thread-list"></div>
+        </aside>
+
+        <section class="feedback-main">
+          <div id="feedbackThreadEmpty" class="feedback-empty-state hidden">
+            Start a new bug or feature thread.
+          </div>
+
+          <div id="feedbackNewTicketPanel">
+            <div class="feedback-kind-toggle">
+              <button type="button" class="feedbackKindBtn active" data-kind="BUG">Bug</button>
+              <button type="button" class="feedbackKindBtn" data-kind="FEATURE">New Feature</button>
+            </div>
+
+            <input type="hidden" id="feedbackKind" value="BUG" />
+
+            <div class="grid">
+              <label>Title<input type="text" id="feedbackTitle" placeholder="Short ticket name" required /></label>
+              <label>Summary<input type="text" id="feedbackSummary" placeholder="One-line summary" required /></label>
+            </div>
+
+            <div id="bugFields" class="feedback-fields">
+              <label>What happened?<textarea id="feedbackDetails" placeholder="Describe the bug."></textarea></label>
+              <label>What should have happened?<textarea id="feedbackExpected" placeholder="Expected behavior."></textarea></label>
+              <label>How do you reproduce it?<textarea id="feedbackSteps" placeholder="Steps, pages, clicks, filters, etc."></textarea></label>
+            </div>
+
+            <div id="featureFields" class="feedback-fields hidden">
+              <label>What do you want to add?<textarea id="feedbackFeatureDetails" placeholder="Describe the feature."></textarea></label>
+              <label>Why do you want it?<textarea id="feedbackBusinessValue" placeholder="What problem does it solve?"></textarea></label>
+            </div>
+
+            <section class="screenshot-section">
+              <div class="section-head">
+                <div><h3>Attachments</h3><p class="tight">Screenshots only. They are stored with the ticket.</p></div>
+                <label class="importLabel smallUpload">Add Screenshots<input type="file" id="feedbackScreenshotInput" accept="image/*" multiple /></label>
+              </div>
+              <div id="feedbackScreenshotGallery" class="screenshot-gallery"></div>
+            </section>
+
+            <div class="dialog-actions">
+              <button type="button" id="cancelFeedbackBtn">Close</button>
+              <button type="submit" class="primary">Start Thread</button>
+            </div>
+          </div>
+
+          <div id="feedbackThreadPanel" class="hidden">
+            <div class="feedback-thread-head">
+              <div>
+                <p class="tight small" id="feedbackActiveMeta"></p>
+                <h3 id="feedbackActiveTitle">Conversation</h3>
+              </div>
+              <span id="feedbackActiveStatus" class="feedback-status-pill">Open</span>
+            </div>
+
+            <div id="feedbackMessageList" class="feedback-message-list"></div>
+
+            <section class="screenshot-section">
+              <div class="section-head">
+                <div><h3>Reply</h3><p class="tight">Send more detail or screenshots back into this thread.</p></div>
+                <label class="importLabel smallUpload">Add Screenshots<input type="file" id="feedbackReplyScreenshotInput" accept="image/*" multiple /></label>
+              </div>
+              <textarea id="feedbackReplyBody" placeholder="Type your message here..."></textarea>
+              <div id="feedbackReplyScreenshotGallery" class="screenshot-gallery"></div>
+            </section>
+
+            <div class="dialog-actions">
+              <button type="button" id="backToFeedbackNewBtn">New Thread</button>
+              <button type="button" id="sendFeedbackReplyBtn" class="primary">Send Reply</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

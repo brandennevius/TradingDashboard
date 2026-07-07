@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/cam-journal-backup",
+      "schedule": "15 5 * * *"
+    }
+  ]
+}
