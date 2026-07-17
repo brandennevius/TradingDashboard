@@ -99,6 +99,14 @@ test("a prior broker statement is stale for the requested session", () => {
   assert.equal(snapshot.metadata.broker_import_complete, false);
 });
 
+test("a newer broker statement cannot be used as historical point-in-time portfolio state", () => {
+  const value = input([trade()]);
+  value.portfolioMeta.equityStatementDate = "2026-07-17";
+  const snapshot = buildDailyPortfolioSnapshot(value);
+  assert(snapshot.warnings.some((item) => item.code === "BROKER_IMPORT_INCOMPLETE" && item.message.includes("newer than requested session")));
+  assert.equal(snapshot.metadata.broker_import_complete, false);
+});
+
 test("trade-log review tags and missing executions remain per-trade warnings instead of invalidating fresh broker metadata", () => {
   const reviewedInTradeLog = trade({ customTags: ["Needs review"], executions: [] });
   const snapshot = buildDailyPortfolioSnapshot(input([reviewedInTradeLog]));

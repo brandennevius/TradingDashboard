@@ -112,9 +112,13 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
     snapshot.snapshot_status = snapshot.snapshot_status === "COMPLETE" ? "COMPLETE_WITH_WARNINGS" : snapshot.snapshot_status;
   }
   if (!snapshot.metadata.broker_import_complete) {
+    const brokerReasons = snapshot.warnings
+      .filter((item) => item.code === "BROKER_IMPORT_MISSING" || item.code === "BROKER_IMPORT_STALE" || item.code === "BROKER_IMPORT_INCOMPLETE")
+      .map((item) => item.message)
+      .join(" ");
     throw new SnapshotValidationError(
       "BROKER_IMPORT_INCOMPLETE",
-      `Snapshot not generated: the broker import for ${accountName} is missing, stale, or incomplete for ${session.resolved}. Import and review the current statement first.`
+      `Snapshot not generated: ${brokerReasons || `the broker import for ${accountName} is missing, stale, or incomplete for ${session.resolved}.`}`
     );
   }
   const invalidPrices = snapshot.open_positions
