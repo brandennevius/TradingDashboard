@@ -139,19 +139,35 @@ test("server orchestration writes JSON and Markdown while data loaders remain re
   assert.equal(await readFile(result.markdownPath, "utf8"), result.markdown);
 });
 
-test("missing broker metadata warns but does not block a trade-log snapshot", async () => {
-  const result = await generateDailyPortfolioSnapshot({
-    session: "2026-07-16", accountName: "Main", writeExports: false,
-    dependencies: {
-      now: () => new Date("2026-07-17T00:00:00Z"),
-      loadTrades: async () => [trade({ importSource: "manual" })],
-      loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: {} }),
-      loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
-    }
-  });
-  assert.equal(result.snapshot.metadata.broker_import_complete, false);
-  assert(result.snapshot.warnings.some((item) => item.code === "BROKER_IMPORT_MISSING"));
-  assert.equal(result.snapshot.open_positions.length, 1);
+test("broker-import validation returns distinct safe codes and writes no exports", async () => {
+  const cases = [
+    { name: "not found", code: "BROKER_IMPORT_NOT_FOUND", trades: [trade({ importSource: "manual" })], meta: input([]).portfolioMeta },
+    { name: "stale", code: "BROKER_IMPORT_STALE", trades: [trade()], meta: { ...input([]).portfolioMeta, equityStatementDate: "2026-07-15" } },
+    { name: "needs review", code: "BROKER_IMPORT_NEEDS_REVIEW", trades: [trade({ customTags: ["Needs review"] })], meta: input([]).portfolioMeta },
+    { name: "missing executions", code: "BROKER_IMPORT_MISSING_EXECUTIONS", trades: [trade({ executions: [] })], meta: input([]).portfolioMeta },
+    { name: "portfolio mismatch", code: "BROKER_IMPORT_PORTFOLIO_MISMATCH", trades: [trade({ portfolioTag: "Other" })], meta: input([]).portfolioMeta },
+    { name: "date coverage", code: "BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT", trades: [trade()], meta: { ...input([]).portfolioMeta, equityStatementDate: "2026-07-17" } }
+  ] as const;
+  for (const item of cases) {
+    const outputDirectory = await mkdtemp(path.join(os.tmpdir(), `snapshot-broker-${item.name.replace(/ /g, "-")}-`));
+    await assert.rejects(
+      generateDailyPortfolioSnapshot({
+        session: "2026-07-16", accountName: "Main", outputDirectory,
+        dependencies: {
+          now: () => new Date("2026-07-17T22:00:00Z"),
+          loadTrades: async () => [...item.trades],
+          loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: item.meta } }),
+          loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
+        }
+      }),
+      (error) => error instanceof SnapshotValidationError
+        && error.code === item.code
+        && error.diagnostic?.validationCodes.includes(item.code)
+        && error.diagnostic?.requestedSession === "2026-07-16"
+        && error.diagnostic?.portfolio === "Main"
+    );
+    assert.deepEqual(await readdir(outputDirectory), []);
+  }
 });
 
 test("post-session trade-log activity blocks a historical snapshot", async () => {
@@ -172,20 +188,6 @@ test("post-session trade-log activity blocks a historical snapshot", async () =>
   assert.deepEqual(await readdir(outputDirectory), []);
 });
 
-test("stale account metadata is excluded while unchanged trade-log positions still generate", async () => {
-  const result = await generateDailyPortfolioSnapshot({
-    session: "2026-07-16", accountName: "Main", writeExports: false,
-    dependencies: {
-      now: () => new Date("2026-07-17T22:00:00Z"),
-      loadTrades: async () => [trade()],
-      loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: { ...input([]).portfolioMeta, equityStatementDate: "2026-07-15" } } }),
-      loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
-    }
-  });
-  assert.equal(result.snapshot.metadata.account_value, null);
-  assert.equal(result.snapshot.portfolio_summary.gross_exposure_dollars, 1100);
-  assert.equal(result.snapshot.portfolio_summary.gross_exposure_pct, null);
-});
 
 test("server does not write exports when a current price is stale", async () => {
   const outputDirectory = await mkdtemp(path.join(os.tmpdir(), "snapshot-stale-test-"));

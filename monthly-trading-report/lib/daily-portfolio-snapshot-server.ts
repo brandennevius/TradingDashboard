@@ -27,10 +27,110 @@ export type GenerateDailyPortfolioSnapshotOptions = {
 };
 
 export class SnapshotValidationError extends Error {
-  constructor(public readonly code: "PORTFOLIO_UNRESOLVED" | "POINT_IN_TIME_UNAVAILABLE" | "CURRENT_PRICES_INVALID", message: string) {
+  constructor(
+    public readonly code: SnapshotValidationCode,
+    message: string,
+    public readonly diagnostic?: SnapshotValidationDiagnostic
+  ) {
     super(message);
     this.name = "SnapshotValidationError";
   }
+}
+
+export type BrokerImportValidationCode =
+  | "BROKER_IMPORT_NOT_FOUND"
+  | "BROKER_IMPORT_STALE"
+  | "BROKER_IMPORT_NEEDS_REVIEW"
+  | "BROKER_IMPORT_MISSING_EXECUTIONS"
+  | "BROKER_IMPORT_PORTFOLIO_MISMATCH"
+  | "BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT";
+
+export type SnapshotValidationCode =
+  | "PORTFOLIO_UNRESOLVED"
+  | "POINT_IN_TIME_UNAVAILABLE"
+  | "CURRENT_PRICES_INVALID"
+  | BrokerImportValidationCode;
+
+export type SnapshotValidationDiagnostic = {
+  requestedSession: string;
+  portfolio: string;
+  latestBrokerImportTimestamp: string | null;
+  latestStatementCoverageDate: string | null;
+  totalImportedTradeCount: number;
+  needsReviewCount: number;
+  missingExecutionsCount: number;
+  validationCodes: BrokerImportValidationCode[];
+  samples: Partial<Record<BrokerImportValidationCode, Array<{ ticker: string; tradeId: string }>>>;
+};
+
+type BrokerPortfolioMeta = {
+  currentEquity?: number;
+  statementEquity?: number;
+  floatingPnl?: number;
+  equitySource?: string;
+  equityUpdatedAt?: string;
+  equityStatementDate?: string;
+};
+
+const BROKER_IMPORT_SOURCE = "cf-statement-pdf";
+const DIAGNOSTIC_SAMPLE_LIMIT = 5;
+
+function diagnosticSample(trades: TradeLogEntry[]) {
+  return trades.slice(0, DIAGNOSTIC_SAMPLE_LIMIT).map((trade) => ({ ticker: trade.symbol, tradeId: trade.id }));
+}
+
+function brokerImportDiagnostic(trades: TradeLogEntry[], portfolio: string, session: string, portfolioMeta: BrokerPortfolioMeta | undefined): SnapshotValidationDiagnostic | null {
+  const importedTrades = trades.filter((trade) => !trade.hidden && trade.importSource === BROKER_IMPORT_SOURCE);
+  const accountImportedTrades = importedTrades.filter((trade) => trade.portfolioTag === portfolio);
+  const needsReview = accountImportedTrades.filter((trade) => trade.customTags.some((tag) => tag.trim().toLowerCase() === "needs review"));
+  const missingExecutions = accountImportedTrades.filter((trade) => !trade.executions.length);
+  const coverageDate = portfolioMeta?.equityStatementDate || null;
+  const validationCodes: BrokerImportValidationCode[] = [];
+  const samples: SnapshotValidationDiagnostic["samples"] = {};
+
+  if (!accountImportedTrades.length) {
+    if (importedTrades.length) {
+      validationCodes.push("BROKER_IMPORT_PORTFOLIO_MISMATCH");
+      samples.BROKER_IMPORT_PORTFOLIO_MISMATCH = diagnosticSample(importedTrades);
+    } else {
+      validationCodes.push("BROKER_IMPORT_NOT_FOUND");
+    }
+  }
+  if (coverageDate && coverageDate < session) validationCodes.push("BROKER_IMPORT_STALE");
+  if (!coverageDate || coverageDate > session) validationCodes.push("BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT");
+  if (needsReview.length) {
+    validationCodes.push("BROKER_IMPORT_NEEDS_REVIEW");
+    samples.BROKER_IMPORT_NEEDS_REVIEW = diagnosticSample(needsReview);
+  }
+  if (missingExecutions.length) {
+    validationCodes.push("BROKER_IMPORT_MISSING_EXECUTIONS");
+    samples.BROKER_IMPORT_MISSING_EXECUTIONS = diagnosticSample(missingExecutions);
+  }
+
+  if (!validationCodes.length) return null;
+  return {
+    requestedSession: session,
+    portfolio,
+    latestBrokerImportTimestamp: accountImportedTrades.map((trade) => trade.updatedAt).filter(Boolean).sort().at(-1) || null,
+    latestStatementCoverageDate: coverageDate,
+    totalImportedTradeCount: accountImportedTrades.length,
+    needsReviewCount: needsReview.length,
+    missingExecutionsCount: missingExecutions.length,
+    validationCodes,
+    samples
+  };
+}
+
+function brokerValidationMessage(diagnostic: SnapshotValidationDiagnostic) {
+  const details = diagnostic.validationCodes.map((code) => {
+    if (code === "BROKER_IMPORT_NOT_FOUND") return "No CF broker-import trades were found for this portfolio.";
+    if (code === "BROKER_IMPORT_STALE") return `Latest statement coverage is ${diagnostic.latestStatementCoverageDate}; it does not cover ${diagnostic.requestedSession}.`;
+    if (code === "BROKER_IMPORT_NEEDS_REVIEW") return `${diagnostic.needsReviewCount} imported row${diagnostic.needsReviewCount === 1 ? "" : "s"} still require review.`;
+    if (code === "BROKER_IMPORT_MISSING_EXECUTIONS") return `${diagnostic.missingExecutionsCount} imported trade${diagnostic.missingExecutionsCount === 1 ? "" : "s"} have no execution records.`;
+    if (code === "BROKER_IMPORT_PORTFOLIO_MISMATCH") return "CF broker-import trades exist, but not for the selected portfolio.";
+    return `Statement coverage is unavailable or does not match ${diagnostic.requestedSession}.`;
+  });
+  return `Snapshot not generated. ${details.join(" ")}`;
 }
 
 async function loadSessionPrice(symbol: string, session: string): Promise<SnapshotPrice> {
@@ -85,6 +185,15 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
     throw new SnapshotValidationError("PORTFOLIO_UNRESOLVED", `Portfolio ${accountName} could not be resolved.`);
   }
   const accountTrades = trades.filter((trade) => !trade.hidden && trade.portfolioTag === accountName);
+  const portfolioMeta = portfolioSettings.portfolioMeta?.[accountName];
+  const brokerDiagnostic = brokerImportDiagnostic(trades, accountName, session.resolved, portfolioMeta);
+  if (brokerDiagnostic) {
+    throw new SnapshotValidationError(
+      brokerDiagnostic.validationCodes[0],
+      brokerValidationMessage(brokerDiagnostic),
+      brokerDiagnostic
+    );
+  }
   const laterActivity = accountTrades.filter((trade) =>
     trade.entryDate > session.resolved || trade.executions.some((execution) => execution.date > session.resolved)
   );
@@ -98,7 +207,6 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
   const openSymbols = Array.from(new Set(accountTrades.filter((trade) => trade.status === "OPEN").map((trade) => trade.symbol))).sort();
   const loadedPrices = await mapWithConcurrency(openSymbols, 4, (symbol) => dependencies.loadPrice(symbol, session.resolved));
   const prices = new Map(loadedPrices.map((price) => [price.symbol, price]));
-  const portfolioMeta = portfolioSettings.portfolioMeta?.[accountName];
   const sessionPortfolioMeta = portfolioMeta?.equityStatementDate === session.resolved
     ? portfolioMeta
     : portfolioMeta

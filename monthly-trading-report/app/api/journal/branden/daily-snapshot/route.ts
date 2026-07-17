@@ -28,7 +28,12 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     if (error instanceof SnapshotValidationError) {
-      return NextResponse.json({ error: error.message, code: error.code }, { status: 422 });
+      return NextResponse.json({
+        error: error.message,
+        code: error.code,
+        codes: error.diagnostic?.validationCodes || [error.code],
+        diagnostic: error.diagnostic
+      }, { status: 422 });
     }
     return NextResponse.json({ error: error instanceof Error ? error.message : "Database query failed while generating the daily snapshot." }, { status: 500 });
   }

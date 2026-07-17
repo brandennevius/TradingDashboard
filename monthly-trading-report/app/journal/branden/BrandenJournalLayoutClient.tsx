@@ -9,6 +9,41 @@ type PortfolioSettingsResponse = {
   defaultPortfolio?: string;
 };
 
+type SnapshotValidationDiagnostic = {
+  requestedSession: string;
+  portfolio: string;
+  latestBrokerImportTimestamp: string | null;
+  latestStatementCoverageDate: string | null;
+  totalImportedTradeCount: number;
+  needsReviewCount: number;
+  missingExecutionsCount: number;
+  validationCodes: string[];
+  samples: Record<string, Array<{ ticker: string; tradeId: string }> | undefined>;
+};
+
+function formatSnapshotValidationError(data: { error?: string; codes?: string[]; diagnostic?: SnapshotValidationDiagnostic }) {
+  const diagnostic = data.diagnostic;
+  if (!diagnostic) return data.error || "Could not generate daily snapshot.";
+  const lines = [
+    "Snapshot not generated.",
+    "",
+    `Portfolio: ${diagnostic.portfolio}`,
+    `Requested session: ${diagnostic.requestedSession}`,
+    "",
+    "Blocking validation:",
+    ...diagnostic.validationCodes
+  ];
+  for (const code of diagnostic.validationCodes) {
+    const samples = diagnostic.samples[code] || [];
+    if (code === "BROKER_IMPORT_NEEDS_REVIEW") lines.push("", `${diagnostic.needsReviewCount} imported rows still require review:`);
+    if (code === "BROKER_IMPORT_MISSING_EXECUTIONS") lines.push("", `${diagnostic.missingExecutionsCount} imported trades have no execution records:`);
+    if (samples.length) lines.push(...samples.map((sample) => `- ${sample.ticker} (${sample.tradeId})`));
+  }
+  if (diagnostic.latestBrokerImportTimestamp) lines.push("", `Latest broker import: ${diagnostic.latestBrokerImportTimestamp}`);
+  if (diagnostic.latestStatementCoverageDate) lines.push(`Statement coverage date: ${diagnostic.latestStatementCoverageDate}`);
+  return lines.join("\n");
+}
+
 export default function BrandenJournalLayoutClient({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [user, setUser] = useState<TraderUser | null>(null);
@@ -74,7 +109,7 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         body: JSON.stringify({ session, accountName, sendEmail })
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.error || "Could not generate daily snapshot.");
+      if (!response.ok) throw new Error(formatSnapshotValidationError(data));
       const JSZip = (await import("jszip")).default;
       const archive = new JSZip();
       archive.file(data.filenames.json, `${JSON.stringify(data.snapshot, null, 2)}\n`);
