@@ -65,6 +65,10 @@ function money(value: number) {
   }).format(Number.isFinite(value) ? value : 0);
 }
 
+function percent(value: number) {
+  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
 function average(values: number[]) {
   return values.length ? values.reduce((total, value) => total + value, 0) / values.length : 0;
 }
@@ -90,6 +94,16 @@ function tradeHasRangeActivity(trade: TradeLogEntry, startDate: string, endDate:
   if (rangedExitExecutions(trade, startDate, endDate).length) return true;
   const activityDate = trade.exitDate || trade.entryDate;
   return inDateRange(activityDate, startDate, endDate);
+}
+
+function settledCostBasisForRange(trade: TradeLogEntry, startDate: string, endDate: string) {
+  const exits = rangedExitExecutions(trade, startDate, endDate);
+  const settledShares = exits.length
+    ? exits.reduce((total, execution) => total + Number(execution.shares || 0), 0)
+    : trade.status !== "OPEN"
+      ? Number(trade.shares || 0)
+      : 0;
+  return Math.abs(Number(trade.avgEntry || 0) * settledShares);
 }
 
 const BREAKEVEN_R_THRESHOLD = 0.1;
@@ -231,9 +245,12 @@ export default function BrandenDashboardPage() {
     const grossWin = wins.reduce((total, trade) => total + trade.pnl, 0);
     const grossLoss = Math.abs(losses.reduce((total, trade) => total + trade.pnl, 0));
     const orderedClosedTrades = [...closedTrades].sort((a, b) => tradePnlDate(a).localeCompare(tradePnlDate(b)));
+    const settledCostBasis = closedTrades.reduce((total, trade) => total + settledCostBasisForRange(trade, startDate, endDate), 0);
+    const netPnl = closedTrades.reduce((total, trade) => total + trade.pnl, 0);
 
     return {
-      netPnl: closedTrades.reduce((total, trade) => total + trade.pnl, 0),
+      netPnl,
+      percentReturn: settledCostBasis ? (netPnl / settledCostBasis) * 100 : 0,
       totalR: closedTrades.reduce((total, trade) => total + trade.rMultiple, 0),
       totalTrades: closedTrades.length,
       winRate: closedTrades.length ? (wins.length / closedTrades.length) * 100 : 0,
@@ -248,7 +265,7 @@ export default function BrandenDashboardPage() {
       longestLossStreak: longestTradeStreak(orderedClosedTrades, "LOSS"),
       needsReview: filteredTrades.filter((trade) => tradeNeedsReview(trade, setupTemplates)).length
     };
-  }, [closedTrades, filteredTrades, setupTemplates]);
+  }, [closedTrades, endDate, filteredTrades, setupTemplates, startDate]);
 
   const pnlChartData = useMemo(() => {
     let cumulativePnl = 0;
@@ -372,6 +389,7 @@ export default function BrandenDashboardPage() {
                 <article className="trade-chart-panel top-chart">
                   <div className="trade-chart-heading"><h3>Settled P&amp;L</h3><span>i</span></div>
                   <strong className={summary.netPnl >= 0 ? "trade-positive" : "trade-negative"}>{money(summary.netPnl)}</strong>
+                  <span className={summary.percentReturn >= 0 ? "trade-positive" : "trade-negative"}>{percent(summary.percentReturn)} return on settled cost basis</span>
                   <ResponsiveContainer width="100%" height={320}>
                     <AreaChart data={pnlChartData} margin={{ top: 18, right: 12, bottom: 8, left: 4 }}>
                       <defs>
