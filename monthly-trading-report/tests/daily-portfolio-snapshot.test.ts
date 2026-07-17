@@ -145,8 +145,7 @@ test("broker-import validation returns distinct safe codes and writes no exports
     { name: "stale", code: "BROKER_IMPORT_STALE", trades: [trade()], meta: { ...input([]).portfolioMeta, equityStatementDate: "2026-07-15" } },
     { name: "needs review", code: "BROKER_IMPORT_NEEDS_REVIEW", trades: [trade({ customTags: ["Needs review"] })], meta: input([]).portfolioMeta },
     { name: "missing executions", code: "BROKER_IMPORT_MISSING_EXECUTIONS", trades: [trade({ executions: [] })], meta: input([]).portfolioMeta },
-    { name: "portfolio mismatch", code: "BROKER_IMPORT_PORTFOLIO_MISMATCH", trades: [trade({ portfolioTag: "Other" })], meta: input([]).portfolioMeta },
-    { name: "date coverage", code: "BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT", trades: [trade()], meta: { ...input([]).portfolioMeta, equityStatementDate: "2026-07-17" } }
+    { name: "portfolio mismatch", code: "BROKER_IMPORT_PORTFOLIO_MISMATCH", trades: [trade({ portfolioTag: "Other" })], meta: input([]).portfolioMeta }
   ] as const;
   for (const item of cases) {
     const outputDirectory = await mkdtemp(path.join(os.tmpdir(), `snapshot-broker-${item.name.replace(/ /g, "-")}-`));
@@ -168,6 +167,44 @@ test("broker-import validation returns distinct safe codes and writes no exports
     );
     assert.deepEqual(await readdir(outputDirectory), []);
   }
+});
+
+test("statement coverage is inclusive and date-only values retain their U.S. market session", async () => {
+  const run = async (coverageDate: string) => generateDailyPortfolioSnapshot({
+    session: "2026-07-16", accountName: "Main", writeExports: false,
+    dependencies: {
+      now: () => new Date("2026-07-17T22:00:00Z"),
+      loadTrades: async () => [trade()],
+      loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: { ...input([]).portfolioMeta, equityStatementDate: coverageDate } } }),
+      loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
+    }
+  });
+  await assert.rejects(run("2026-07-15"), (error) => error instanceof SnapshotValidationError && error.diagnostic?.validationCodes.includes("BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT"));
+  assert.equal((await run("2026-07-16")).snapshot.open_positions.length, 1);
+  assert.equal((await run("2026-07-17")).snapshot.open_positions.length, 1);
+  // 00:30 UTC is still July 16 in New York; a date-only July 16 must also stay July 16.
+  assert.equal((await run("2026-07-17T00:30:00.000Z")).snapshot.open_positions.length, 1);
+  await assert.rejects(run("2026-07-16T00:30:00.000Z"), (error) => error instanceof SnapshotValidationError && error.diagnostic?.validationCodes.includes("BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT"));
+});
+
+test("unrelated Needs review rows warn without blocking a snapshot", async () => {
+  const unrelated = trade({
+    id: "old-review", status: "LOSS", entryDate: "2026-07-10", exitDate: "2026-07-15", customTags: ["Needs review"],
+    executions: [{ ...trade().executions[0], date: "2026-07-10" }, { ...trade().executions[0], id: "old-exit", type: "EXIT", date: "2026-07-15", shares: 10, price: 99 }]
+  });
+  const result = await generateDailyPortfolioSnapshot({
+    session: "2026-07-16", accountName: "Main", writeExports: false,
+    dependencies: {
+      now: () => new Date("2026-07-17T22:00:00Z"),
+      loadTrades: async () => [trade(), unrelated],
+      loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: input([]).portfolioMeta } }),
+      loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
+    }
+  });
+  assert(result.snapshot.warnings.some((warning) => warning.code === "BROKER_IMPORT_UNRELATED_ROWS_NEED_REVIEW"));
+  assert.deepEqual(result.brokerDiagnostic?.needsReviewRows, [{
+    ticker: "TEST", tradeId: "old-review", entryDate: "2026-07-10", exitDate: "2026-07-15", status: "CLOSED", affectsRequestedSnapshot: false, blockingReason: null
+  }]);
 });
 
 test("post-session trade-log activity blocks a historical snapshot", async () => {

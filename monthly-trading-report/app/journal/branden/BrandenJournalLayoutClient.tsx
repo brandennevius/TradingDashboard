@@ -19,6 +19,15 @@ type SnapshotValidationDiagnostic = {
   missingExecutionsCount: number;
   validationCodes: string[];
   samples: Record<string, Array<{ ticker: string; tradeId: string }> | undefined>;
+  needsReviewRows: Array<{
+    ticker: string;
+    tradeId: string;
+    entryDate: string;
+    exitDate: string | null;
+    status: "OPEN" | "CLOSED";
+    affectsRequestedSnapshot: boolean;
+    blockingReason: string | null;
+  }>;
 };
 
 function formatSnapshotValidationError(data: { error?: string; codes?: string[]; diagnostic?: SnapshotValidationDiagnostic }) {
@@ -117,7 +126,11 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
       const bundle = await archive.generateAsync({ type: "blob" });
       downloadBlob(data.filenames.json.replace(/\.json$/i, ".zip"), bundle);
       const emailMessage = sendEmail ? ` Email: ${data.email?.status || "unknown"}.` : "";
-      window.alert(`Daily snapshot generated with status ${data.snapshot.snapshot_status}.${emailMessage}`);
+      const unrelatedReviewRows = (data.brokerDiagnostic?.needsReviewRows || []).filter((row: SnapshotValidationDiagnostic["needsReviewRows"][number]) => !row.affectsRequestedSnapshot);
+      const reviewMessage = unrelatedReviewRows.length
+        ? ` ${unrelatedReviewRows.length} unrelated broker-import row${unrelatedReviewRows.length === 1 ? "" : "s"} still need review:\n${unrelatedReviewRows.map((row: SnapshotValidationDiagnostic["needsReviewRows"][number]) => `- ${row.ticker} (${row.tradeId}): ${row.status}, entry ${row.entryDate}, exit ${row.exitDate || "open"}; unrelated to this snapshot`).join("\n")}`
+        : "";
+      window.alert(`Daily snapshot generated with status ${data.snapshot.snapshot_status}.${reviewMessage}${emailMessage}`);
     } catch (error) {
       window.alert(error instanceof Error ? error.message : "Could not generate daily snapshot.");
     } finally {

@@ -5,7 +5,8 @@ import {
   buildDailyPortfolioSnapshot,
   renderDailyPortfolioSnapshotMarkdown,
   resolveSnapshotSession,
-  type SnapshotPrice
+  type SnapshotPrice,
+  type SnapshotWarning
 } from "./daily-portfolio-snapshot";
 import { getMarketCandlesWithProvider } from "./market-data";
 import { getBrandenPortfolioSettings, listBrandenVisibleTrades } from "./store";
@@ -61,6 +62,17 @@ export type SnapshotValidationDiagnostic = {
   missingExecutionsCount: number;
   validationCodes: BrokerImportValidationCode[];
   samples: Partial<Record<BrokerImportValidationCode, Array<{ ticker: string; tradeId: string }>>>;
+  needsReviewRows: NeedsReviewRowDiagnostic[];
+};
+
+export type NeedsReviewRowDiagnostic = {
+  ticker: string;
+  tradeId: string;
+  entryDate: string;
+  exitDate: string | null;
+  status: "OPEN" | "CLOSED";
+  affectsRequestedSnapshot: boolean;
+  blockingReason: string | null;
 };
 
 type BrokerPortfolioMeta = {
@@ -79,12 +91,51 @@ function diagnosticSample(trades: TradeLogEntry[]) {
   return trades.slice(0, DIAGNOSTIC_SAMPLE_LIMIT).map((trade) => ({ ticker: trade.symbol, tradeId: trade.id }));
 }
 
+function usMarketDate(value: string | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  // A statement date without a time is already a U.S. market calendar date.
+  // Parsing it as UTC would incorrectly shift it to the previous NY session.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const timestamp = new Date(raw);
+  if (!Number.isFinite(timestamp.getTime())) return null;
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit"
+  }).formatToParts(timestamp);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function needsReviewRelevance(trade: TradeLogEntry, session: string): NeedsReviewRowDiagnostic {
+  const executionsDuringSession = trade.executions.some((execution) => execution.date === session);
+  const closedDuringSession = trade.exitDate === session;
+  const openAtSnapshot = trade.status === "OPEN" && trade.entryDate <= session;
+  const blockingReason = openAtSnapshot
+    ? "Open position quantity or cost basis may affect the requested snapshot."
+    : closedDuringSession
+      ? "Trade closed during the requested session."
+      : executionsDuringSession
+        ? "Execution is included in the requested session."
+        : null;
+  return {
+    ticker: trade.symbol,
+    tradeId: trade.id,
+    entryDate: trade.entryDate,
+    exitDate: trade.exitDate || null,
+    status: trade.status === "OPEN" ? "OPEN" : "CLOSED",
+    affectsRequestedSnapshot: Boolean(blockingReason),
+    blockingReason
+  };
+}
+
 function brokerImportDiagnostic(trades: TradeLogEntry[], portfolio: string, session: string, portfolioMeta: BrokerPortfolioMeta | undefined): SnapshotValidationDiagnostic | null {
   const importedTrades = trades.filter((trade) => !trade.hidden && trade.importSource === BROKER_IMPORT_SOURCE);
   const accountImportedTrades = importedTrades.filter((trade) => trade.portfolioTag === portfolio);
   const needsReview = accountImportedTrades.filter((trade) => trade.customTags.some((tag) => tag.trim().toLowerCase() === "needs review"));
+  const needsReviewRows = needsReview.map((trade) => needsReviewRelevance(trade, session));
+  const relevantNeedsReview = needsReview.filter((trade) => needsReviewRelevance(trade, session).affectsRequestedSnapshot);
   const missingExecutions = accountImportedTrades.filter((trade) => !trade.executions.length);
-  const coverageDate = portfolioMeta?.equityStatementDate || null;
+  const coverageDate = usMarketDate(portfolioMeta?.equityStatementDate);
   const validationCodes: BrokerImportValidationCode[] = [];
   const samples: SnapshotValidationDiagnostic["samples"] = {};
 
@@ -96,18 +147,19 @@ function brokerImportDiagnostic(trades: TradeLogEntry[], portfolio: string, sess
       validationCodes.push("BROKER_IMPORT_NOT_FOUND");
     }
   }
-  if (coverageDate && coverageDate < session) validationCodes.push("BROKER_IMPORT_STALE");
-  if (!coverageDate || coverageDate > session) validationCodes.push("BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT");
-  if (needsReview.length) {
+  if (coverageDate && coverageDate < session) {
+    validationCodes.push("BROKER_IMPORT_STALE", "BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT");
+  }
+  if (relevantNeedsReview.length) {
     validationCodes.push("BROKER_IMPORT_NEEDS_REVIEW");
-    samples.BROKER_IMPORT_NEEDS_REVIEW = diagnosticSample(needsReview);
+    samples.BROKER_IMPORT_NEEDS_REVIEW = diagnosticSample(relevantNeedsReview);
   }
   if (missingExecutions.length) {
     validationCodes.push("BROKER_IMPORT_MISSING_EXECUTIONS");
     samples.BROKER_IMPORT_MISSING_EXECUTIONS = diagnosticSample(missingExecutions);
   }
 
-  if (!validationCodes.length) return null;
+  if (!validationCodes.length && !needsReviewRows.length) return null;
   return {
     requestedSession: session,
     portfolio,
@@ -117,7 +169,8 @@ function brokerImportDiagnostic(trades: TradeLogEntry[], portfolio: string, sess
     needsReviewCount: needsReview.length,
     missingExecutionsCount: missingExecutions.length,
     validationCodes,
-    samples
+    samples,
+    needsReviewRows
   };
 }
 
@@ -187,7 +240,7 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
   const accountTrades = trades.filter((trade) => !trade.hidden && trade.portfolioTag === accountName);
   const portfolioMeta = portfolioSettings.portfolioMeta?.[accountName];
   const brokerDiagnostic = brokerImportDiagnostic(trades, accountName, session.resolved, portfolioMeta);
-  if (brokerDiagnostic) {
+  if (brokerDiagnostic?.validationCodes.length) {
     throw new SnapshotValidationError(
       brokerDiagnostic.validationCodes[0],
       brokerValidationMessage(brokerDiagnostic),
@@ -227,6 +280,17 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
     sourceEnvironment: process.env.NODE_ENV || "development",
     applicationVersion: packageJson.version
   });
+  const unrelatedNeedsReview = brokerDiagnostic?.needsReviewRows.filter((row) => !row.affectsRequestedSnapshot) || [];
+  if (unrelatedNeedsReview.length) {
+    const sample = unrelatedNeedsReview.slice(0, DIAGNOSTIC_SAMPLE_LIMIT).map((row) => `${row.ticker} (${row.tradeId})`).join(", ");
+    const warning: SnapshotWarning = {
+      code: "BROKER_IMPORT_UNRELATED_ROWS_NEED_REVIEW",
+      severity: "warning",
+      message: `${unrelatedNeedsReview.length} imported row${unrelatedNeedsReview.length === 1 ? "" : "s"} still require review but do not affect ${session.resolved}: ${sample}.`
+    };
+    snapshot.warnings.unshift(warning);
+    snapshot.snapshot_status = snapshot.snapshot_status === "COMPLETE" ? "COMPLETE_WITH_WARNINGS" : snapshot.snapshot_status;
+  }
   if (session.adjusted) {
     snapshot.warnings.unshift({
       code: "REQUESTED_SESSION_ADJUSTED",
@@ -255,5 +319,5 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
       atomicWrite(markdownPath, markdown)
     ]);
   }
-  return { snapshot, markdown, jsonPath, markdownPath, baseName };
+  return { snapshot, markdown, jsonPath, markdownPath, baseName, brokerDiagnostic: brokerDiagnostic || undefined };
 }

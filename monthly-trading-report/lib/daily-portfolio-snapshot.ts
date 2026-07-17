@@ -27,7 +27,8 @@ export type SnapshotWarningCode =
   | "REQUESTED_SESSION_ADJUSTED"
   | "PRICE_DATA_UNAVAILABLE"
   | "INITIAL_STOP_UNAVAILABLE"
-  | "STOP_HISTORY_UNAVAILABLE";
+  | "STOP_HISTORY_UNAVAILABLE"
+  | "BROKER_IMPORT_UNRELATED_ROWS_NEED_REVIEW";
 
 export type SnapshotWarning = {
   code: SnapshotWarningCode;

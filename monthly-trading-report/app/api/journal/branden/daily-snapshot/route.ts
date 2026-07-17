@@ -24,6 +24,7 @@ export async function POST(request: Request) {
       snapshot: result.snapshot,
       markdown: result.markdown,
       filenames: { json: `${result.baseName}.json`, markdown: `${result.baseName}.md` },
+      brokerDiagnostic: result.brokerDiagnostic,
       email
     });
   } catch (error) {
