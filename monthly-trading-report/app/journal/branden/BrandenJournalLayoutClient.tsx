@@ -224,13 +224,6 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         icon: "S",
         disabled: isGeneratingSnapshot,
         onClick: () => generateSnapshot(false)
-      },
-      {
-        key: "generate-and-send-daily-snapshot",
-        label: isGeneratingSnapshot ? "Generating snapshot..." : "Generate and Send Daily Snapshot",
-        icon: "E",
-        disabled: isGeneratingSnapshot,
-        onClick: () => generateSnapshot(true)
       }
     ] : []),
     ...(canEditBrandenJournal ? [
