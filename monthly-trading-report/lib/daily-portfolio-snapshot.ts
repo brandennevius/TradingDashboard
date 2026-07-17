@@ -1,0 +1,377 @@
+import crypto from "node:crypto";
+import type { SetupChecklistTemplate, TradeChecklistItem, TradeExecution, TradeLogEntry } from "./types";
+
+export const DAILY_PORTFOLIO_SNAPSHOT_SCHEMA_VERSION = "daily-portfolio-snapshot-v1";
+
+export type SnapshotWarningCode =
+  | "BROKER_IMPORT_MISSING"
+  | "BROKER_IMPORT_STALE"
+  | "BROKER_IMPORT_INCOMPLETE"
+  | "PORTFOLIO_DATA_STALE"
+  | "CURRENT_PRICE_STALE"
+  | "MISSING_STOP"
+  | "MISSING_INITIAL_RISK"
+  | "MISSING_SETUP"
+  | "MISSING_GRADE"
+  | "MISSING_NOTES"
+  | "MISSING_CHART"
+  | "MISSING_SCREENSHOT"
+  | "MISSING_EXECUTIONS"
+  | "MISSING_EARNINGS_DATE"
+  | "GRADE_CRITERIA_CONFLICT"
+  | "R_MULTIPLE_UNAVAILABLE"
+  | "MFE_UNAVAILABLE"
+  | "MAE_UNAVAILABLE"
+  | "POSITION_CALCULATION_MISMATCH"
+  | "PARTIAL_EXIT_CALCULATION_MISMATCH"
+  | "REQUESTED_SESSION_ADJUSTED"
+  | "PRICE_DATA_UNAVAILABLE"
+  | "INITIAL_STOP_UNAVAILABLE"
+  | "STOP_HISTORY_UNAVAILABLE";
+
+export type SnapshotWarning = {
+  code: SnapshotWarningCode;
+  message: string;
+  severity: "critical" | "warning" | "info";
+  trade_id?: string;
+  ticker?: string;
+};
+
+export type SnapshotPrice = {
+  symbol: string;
+  price: number | null;
+  timestamp: string | null;
+  provider: string;
+};
+
+type PortfolioMeta = {
+  currentEquity?: number;
+  statementEquity?: number;
+  floatingPnl?: number;
+  equitySource?: string;
+  equityUpdatedAt?: string;
+  equityStatementDate?: string;
+};
+
+type SnapshotInput = {
+  requestedSession: string;
+  latestCompletedMarketSession: string;
+  generatedAt?: string;
+  accountName: string;
+  portfolioMeta?: PortfolioMeta;
+  trades: TradeLogEntry[];
+  setupTemplates: SetupChecklistTemplate[];
+  prices: Map<string, SnapshotPrice>;
+  sourceEnvironment: string;
+  applicationVersion: string;
+};
+
+function round(value: number | null, digits = 2) {
+  if (value === null || !Number.isFinite(value)) return null;
+  const factor = 10 ** digits;
+  return Math.round(value * factor) / factor;
+}
+
+function dateOnly(value: string | undefined) {
+  return String(value || "").slice(0, 10);
+}
+
+function nthWeekday(year: number, month: number, weekday: number, nth: number) {
+  const first = new Date(Date.UTC(year, month, 1));
+  return new Date(Date.UTC(year, month, 1 + ((7 + weekday - first.getUTCDay()) % 7) + (nth - 1) * 7));
+}
+
+function lastWeekday(year: number, month: number, weekday: number) {
+  const last = new Date(Date.UTC(year, month + 1, 0));
+  return new Date(Date.UTC(year, month, last.getUTCDate() - ((7 + last.getUTCDay() - weekday) % 7)));
+}
+
+function easterSunday(year: number) {
+  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d = Math.floor(b / 4), e = b % 4;
+  const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31) - 1, day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(Date.UTC(year, month, day));
+}
+
+function observed(date: Date) {
+  if (date.getUTCDay() === 6) date.setUTCDate(date.getUTCDate() - 1);
+  else if (date.getUTCDay() === 0) date.setUTCDate(date.getUTCDate() + 1);
+  return date;
+}
+
+export function isCompletedUsTradingSession(value: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T12:00:00Z`), day = date.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const year = date.getUTCFullYear();
+  const holidayDates = [
+    observed(new Date(Date.UTC(year, 0, 1))), nthWeekday(year, 0, 1, 3), nthWeekday(year, 1, 1, 3),
+    new Date(easterSunday(year).getTime() - 2 * 86400000), lastWeekday(year, 4, 1),
+    observed(new Date(Date.UTC(year, 5, 19))), observed(new Date(Date.UTC(year, 6, 4))),
+    nthWeekday(year, 8, 1, 1), nthWeekday(year, 10, 4, 4), observed(new Date(Date.UTC(year, 11, 25)))
+  ].map((holiday) => holiday.toISOString().slice(0, 10));
+  return !holidayDates.includes(value);
+}
+
+function previousTradingSession(value: string) {
+  const cursor = new Date(`${value}T12:00:00Z`);
+  do cursor.setUTCDate(cursor.getUTCDate() - 1); while (!isCompletedUsTradingSession(cursor.toISOString().slice(0, 10)));
+  return cursor.toISOString().slice(0, 10);
+}
+
+function newYorkParts(now: Date) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(now);
+  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+}
+
+export function latestCompletedMarketSession(now = new Date()) {
+  const parts = newYorkParts(now), today = `${parts.year}-${parts.month}-${parts.day}`;
+  const minutes = Number(parts.hour) * 60 + Number(parts.minute);
+  if (isCompletedUsTradingSession(today) && minutes >= 16 * 60 + 15) return today;
+  return previousTradingSession(today);
+}
+
+export function resolveSnapshotSession(requested: string, now = new Date()) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(requested)) throw new Error("Session must use YYYY-MM-DD.");
+  const latest = latestCompletedMarketSession(now);
+  let resolved = requested > latest ? latest : requested;
+  while (!isCompletedUsTradingSession(resolved)) resolved = previousTradingSession(resolved);
+  return { requested, resolved, latestCompleted: latest, adjusted: requested !== resolved };
+}
+
+function warning(code: SnapshotWarningCode, message: string, severity: SnapshotWarning["severity"], trade?: TradeLogEntry): SnapshotWarning {
+  return { code, message, severity, ...(trade ? { trade_id: trade.id, ticker: trade.symbol } : {}) };
+}
+
+function executionTimestamp(execution: TradeExecution) {
+  return `${execution.date || ""}T${execution.time || "00:00:00"}`;
+}
+
+function sortedExecutions(trade: TradeLogEntry) {
+  return [...(trade.executions || [])].sort((a, b) => executionTimestamp(a).localeCompare(executionTimestamp(b)));
+}
+
+function executionShares(trade: TradeLogEntry) {
+  return sortedExecutions(trade).reduce((shares, execution) => shares + (execution.type === "ENTRY" ? execution.shares : -execution.shares), 0);
+}
+
+function checklistScore(items: TradeChecklistItem[]) {
+  const maximum = items.reduce((sum, item) => sum + Math.max(0, Number(item.points || 0)), 0);
+  const score = items.reduce((sum, item) => {
+    const maximumForItem = Math.max(0, Number(item.points || 0));
+    return sum + ((item.inputType || "boolean") === "points" ? Math.max(0, Math.min(maximumForItem, Number(item.score || 0))) : item.met ? maximumForItem : 0);
+  }, 0);
+  return { score: round(score), maximum: round(maximum), percent: maximum ? round(score / maximum * 100) : null };
+}
+
+function gradeFor(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
+  if (trade.manualGrade.trim()) return trade.manualGrade.trim();
+  const setup = trade.setupTags[0] || "", template = templates.find((item) => item.setupName.trim().toLowerCase() === setup.trim().toLowerCase());
+  const result = checklistScore(trade.checklistItems);
+  if (!template || result.score === null || !result.maximum) return null;
+  return [...template.gradeBands].sort((a, b) => b.minScore - a.minScore).find((band) => result.score! >= band.minScore && (band.maxScore === null || result.score! <= band.maxScore))?.label || null;
+}
+
+function gradeWarnings(trade: TradeLogEntry, grade: string | null, setup: string | null, scorePercent: number | null, accountValue: number | null) {
+  const warnings: SnapshotWarning[] = [], upperGrade = String(grade || "").toUpperCase(), setupLower = String(setup || "").toLowerCase();
+  if ((upperGrade === "A" || upperGrade === "A+") && scorePercent !== null && scorePercent < 50) warnings.push(warning("GRADE_CRITERIA_CONFLICT", `${grade} grade conflicts with a ${scorePercent}% setup-criteria score.`, "warning", trade));
+  if ((upperGrade === "A" || upperGrade === "A+") && setupLower === "no trade setup") warnings.push(warning("GRADE_CRITERIA_CONFLICT", `${grade} grade conflicts with No Trade Setup.`, "warning", trade));
+  if ((upperGrade.startsWith("D") || setupLower.includes("research")) && accountValue && trade.risk / accountValue >= 0.01) warnings.push(warning("GRADE_CRITERIA_CONFLICT", "D-grade or research trade used at least 1% of account value as planned risk.", "warning", trade));
+  const claimsCompliance = /system.?compliant/i.test(trade.tradeQuality) || trade.customTags.some((tag) => /system.?compliant/i.test(tag));
+  if (claimsCompliance && (!setup || !trade.checklistItems.length)) warnings.push(warning("GRADE_CRITERIA_CONFLICT", "System-compliant label has no setup-criteria evidence.", "warning", trade));
+  return warnings;
+}
+
+function documentationWarnings(trade: TradeLogEntry, grade: string | null, setup: string | null, scorePercent: number | null, accountValue: number | null) {
+  const warnings: SnapshotWarning[] = [];
+  if (!trade.stopPrice) warnings.push(warning("MISSING_STOP", "No current stop is stored.", "critical", trade));
+  if (!trade.risk) warnings.push(warning("MISSING_INITIAL_RISK", "No planned risk is stored.", "critical", trade));
+  if (!setup) warnings.push(warning("MISSING_SETUP", "No setup is stored.", "warning", trade));
+  if (!grade) warnings.push(warning("MISSING_GRADE", "No grade is stored or derivable.", "warning", trade));
+  if (!trade.notes.trim()) warnings.push(warning("MISSING_NOTES", "No notes are stored.", "warning", trade));
+  if (!trade.chartLinks.length) warnings.push(warning("MISSING_CHART", "No chart link is stored.", "info", trade));
+  if (!trade.screenshots.length) warnings.push(warning("MISSING_SCREENSHOT", "No screenshot is stored.", "info", trade));
+  if (!trade.executions.length) warnings.push(warning("MISSING_EXECUTIONS", "No executions are stored.", "critical", trade));
+  warnings.push(...gradeWarnings(trade, grade, setup, scorePercent, accountValue));
+  return warnings;
+}
+
+function timeHeld(trade: TradeLogEntry, finalExit: TradeExecution | undefined) {
+  const firstEntry = sortedExecutions(trade).find((execution) => execution.type === "ENTRY");
+  const start = new Date(`${firstEntry?.date || trade.entryDate}T${firstEntry?.time || trade.openTime || "00:00:00"}Z`).getTime();
+  const end = new Date(`${finalExit?.date || trade.exitDate}T${finalExit?.time || trade.closeTime || "00:00:00"}Z`).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return null;
+  const minutes = Math.round((end - start) / 60000), days = Math.floor(minutes / 1440), hours = Math.floor((minutes % 1440) / 60);
+  return `${days}d ${hours}h ${minutes % 60}m`;
+}
+
+function brokerMetadata(trades: TradeLogEntry[], meta: PortfolioMeta | undefined, session: string) {
+  const imported = trades.filter((trade) => trade.importSource === "cf-statement-pdf");
+  const importedAt = [meta?.equityUpdatedAt || "", ...imported.map((trade) => trade.updatedAt)].filter(Boolean).sort().at(-1) || null;
+  const statementDate = meta?.equityStatementDate || null;
+  const warnings: SnapshotWarning[] = [];
+  if (!imported.length && !importedAt) warnings.push(warning("BROKER_IMPORT_MISSING", "No broker import was found for this account.", "critical"));
+  if (statementDate && statementDate < session) warnings.push(warning("BROKER_IMPORT_STALE", `Latest broker statement is ${statementDate}; requested session is ${session}.`, "critical"));
+  if (!statementDate && imported.length) warnings.push(warning("BROKER_IMPORT_INCOMPLETE", "Broker-import records exist without a stored statement date.", "critical"));
+  if (imported.some((trade) => trade.customTags.includes("Needs review") || !trade.executions.length)) warnings.push(warning("BROKER_IMPORT_INCOMPLETE", "One or more broker-import trades require review or lack executions.", "critical"));
+  const complete = Boolean(imported.length && statementDate && statementDate >= session && !warnings.some((item) => item.code === "BROKER_IMPORT_INCOMPLETE"));
+  return { importedAt, statementDate, complete, warnings };
+}
+
+export function buildDailyPortfolioSnapshot(input: SnapshotInput) {
+  const generatedAt = input.generatedAt || new Date().toISOString(), accountValue = input.portfolioMeta?.currentEquity || null;
+  const trades = input.trades.filter((trade) => !trade.hidden && (!input.accountName || trade.portfolioTag === input.accountName));
+  const broker = brokerMetadata(trades, input.portfolioMeta, input.requestedSession);
+  const topWarnings: SnapshotWarning[] = [...broker.warnings];
+  const openTrades = trades.filter((trade) => trade.status === "OPEN");
+
+  const openPositions = openTrades.map((trade) => {
+    const setup = trade.setupTags[0] || null, score = checklistScore(trade.checklistItems), grade = gradeFor(trade, input.setupTemplates);
+    const price = input.prices.get(trade.symbol), currentPrice = price?.timestamp === input.requestedSession ? price.price : null;
+    const warnings = documentationWarnings(trade, grade, setup, score.percent, accountValue);
+    warnings.push(warning("INITIAL_STOP_UNAVAILABLE", "The repository stores the current stop but not a distinct initial-stop history.", "info", trade));
+    warnings.push(warning("STOP_HISTORY_UNAVAILABLE", "Stop-change history is not stored.", "info", trade));
+    warnings.push(warning("MISSING_EARNINGS_DATE", "No reliably stored earnings date is available.", "info", trade));
+    if (!price?.price) warnings.push(warning("PRICE_DATA_UNAVAILABLE", "No price was available for the requested session.", "critical", trade));
+    else if (price.timestamp !== input.requestedSession) warnings.push(warning("CURRENT_PRICE_STALE", `Latest price is ${price.timestamp}; requested session is ${input.requestedSession}.`, "critical", trade));
+    if (trade.executions.length && Math.abs(executionShares(trade) - trade.shares) > 0.0001) warnings.push(warning("POSITION_CALCULATION_MISMATCH", `Execution-derived shares ${round(executionShares(trade), 4)} do not match stored shares ${round(trade.shares, 4)}.`, "critical", trade));
+    const direction = trade.side === "SHORT" ? -1 : 1, marketValue = currentPrice === null ? null : currentPrice * trade.shares * direction;
+    const unrealizedPnl = currentPrice === null ? null : (currentPrice - trade.avgEntry) * trade.shares * direction;
+    const currentReturn = currentPrice === null || !trade.avgEntry ? null : (currentPrice - trade.avgEntry) / trade.avgEntry * 100 * direction;
+    const currentR = unrealizedPnl === null || !trade.risk ? null : (unrealizedPnl + trade.pnl) / trade.risk;
+    if (currentR === null) warnings.push(warning("R_MULTIPLE_UNAVAILABLE", "Current R multiple requires both current price and planned risk.", "warning", trade));
+    let remainingRisk: number | null = null;
+    if (currentPrice !== null && trade.stopPrice) {
+      const perShare = direction === 1 ? currentPrice - trade.stopPrice : trade.stopPrice - currentPrice;
+      remainingRisk = perShare >= 0 ? perShare * trade.shares : null;
+      if (remainingRisk === null) warnings.push(warning("POSITION_CALCULATION_MISMATCH", "Stored stop is not on the protective side of the current price.", "critical", trade));
+    }
+    const exits = sortedExecutions(trade).filter((execution) => execution.type === "EXIT");
+    return {
+      trade_id: trade.id, position_id: trade.id, ticker: trade.symbol, asset_name: null, side: trade.side,
+      entry_date: trade.entryDate, average_entry: round(trade.avgEntry), current_price: round(currentPrice), current_price_timestamp: price?.timestamp || null,
+      shares: round(trade.shares, 4), cost_basis: round(trade.avgEntry * trade.shares), market_value: round(marketValue), position_weight_pct: marketValue !== null && accountValue ? round(Math.abs(marketValue) / accountValue * 100) : null,
+      current_pnl: round(unrealizedPnl), current_return_pct: round(currentReturn), current_r_multiple: round(currentR), planned_risk_dollars: trade.risk || null,
+      initial_stop: null, current_stop: trade.stopPrice || null, stop_last_updated_at: null, remaining_risk_to_stop_dollars: round(remainingRisk), remaining_risk_to_stop_pct: remainingRisk !== null && accountValue ? round(remainingRisk / accountValue * 100) : null,
+      take_profit: trade.takeProfitPrice || null, setup, grade, setup_criteria_score: score.score, setup_criteria_max: score.maximum,
+      setup_criteria_results: trade.checklistItems, mistake_tags: trade.mistakeTags, system: trade.tradeQuality || null, notes: trade.notes || null,
+      chart_links: trade.chartLinks, screenshot_references: trade.screenshots, partial_exits: exits, stop_change_history: null, earnings_date: null,
+      execution_count: trade.executions.length, executions: sortedExecutions(trade), data_warnings: warnings
+    };
+  });
+
+  const closedTrades = trades.filter((trade) => {
+    if (trade.status === "OPEN") return false;
+    const finalExit = sortedExecutions(trade).filter((execution) => execution.type === "EXIT").at(-1);
+    return (finalExit?.date || trade.exitDate) === input.requestedSession;
+  }).map((trade) => {
+    const executions = sortedExecutions(trade), exits = executions.filter((execution) => execution.type === "EXIT"), finalExit = exits.at(-1);
+    const setup = trade.setupTags[0] || null, score = checklistScore(trade.checklistItems), grade = gradeFor(trade, input.setupTemplates);
+    const warnings = documentationWarnings(trade, grade, setup, score.percent, accountValue);
+    warnings.push(warning("MFE_UNAVAILABLE", "Reliable intraday excursion data is unavailable; MFE was not calculated.", "info", trade));
+    warnings.push(warning("MAE_UNAVAILABLE", "Reliable intraday excursion data is unavailable; MAE was not calculated.", "info", trade));
+    const executionPnl = exits.length ? exits.reduce((sum, execution) => sum + execution.pnl, 0) : null;
+    if (executionPnl !== null && Math.abs(executionPnl - trade.pnl) > 0.01) warnings.push(warning("PARTIAL_EXIT_CALCULATION_MISMATCH", `Execution P&L ${round(executionPnl)} does not match stored P&L ${round(trade.pnl)}.`, "critical", trade));
+    const commission = executions.length ? executions.reduce((sum, execution) => sum + execution.commission, 0) : trade.commission;
+    const grossPnl = executionPnl ?? (Number.isFinite(trade.pnl) ? trade.pnl : null), netPnl = grossPnl === null ? null : grossPnl - commission;
+    const realizedR = trade.risk ? netPnl! / trade.risk : null;
+    if (realizedR === null) warnings.push(warning("R_MULTIPLE_UNAVAILABLE", "Realized R multiple requires planned risk.", "warning", trade));
+    const entryShares = executions.filter((execution) => execution.type === "ENTRY").reduce((sum, execution) => sum + execution.shares, 0) || trade.shares;
+    const averageExit = exits.length ? exits.reduce((sum, execution) => sum + execution.price * execution.shares, 0) / exits.reduce((sum, execution) => sum + execution.shares, 0) : trade.exitPrice || null;
+    return {
+      trade_id: trade.id, ticker: trade.symbol, asset_name: null, side: trade.side,
+      entry_timestamp: `${trade.entryDate}T${trade.openTime || "00:00:00"}`, exit_timestamp: `${finalExit?.date || trade.exitDate}T${finalExit?.time || trade.closeTime || "00:00:00"}`,
+      time_held: timeHeld(trade, finalExit), average_entry: round(trade.avgEntry), average_exit: round(averageExit), shares: round(entryShares, 4), executions,
+      partial_exits: exits.length > 1 ? exits : [], gross_pnl: round(grossPnl), commission: round(commission), net_pnl: round(netPnl),
+      position_return_pct: trade.returnPercent || (trade.avgEntry && averageExit ? round((averageExit - trade.avgEntry) / trade.avgEntry * 100 * (trade.side === "SHORT" ? -1 : 1)) : null),
+      planned_risk_dollars: trade.risk || null, realized_r_multiple: round(realizedR), initial_stop: null, final_stop: trade.stopPrice || null, take_profit: trade.takeProfitPrice || null,
+      mfe_dollars: null, mfe_r: null, mae_dollars: null, mae_r: null, setup, grade, setup_criteria_score: score.score, setup_criteria_max: score.maximum,
+      setup_criteria_results: trade.checklistItems, mistake_tags: trade.mistakeTags, system: trade.tradeQuality || null, notes: trade.notes || null,
+      chart_links: trade.chartLinks, screenshot_references: trade.screenshots, documentation_warnings: warnings
+    };
+  });
+
+  const allPriceCurrent = openPositions.every((position) => position.current_price !== null && position.current_price_timestamp === input.requestedSession);
+  const marketValues = openPositions.map((position) => position.market_value).filter((value): value is number => typeof value === "number");
+  const longValue = marketValues.filter((value) => value > 0).reduce((sum, value) => sum + value, 0), shortValue = Math.abs(marketValues.filter((value) => value < 0).reduce((sum, value) => sum + value, 0));
+  const openPnlValues = openPositions.map((position) => position.current_pnl).filter((value): value is number => typeof value === "number");
+  const riskValues = openPositions.map((position) => position.remaining_risk_to_stop_dollars).filter((value): value is number => typeof value === "number");
+  if (!allPriceCurrent && openPositions.length) topWarnings.push(warning("CURRENT_PRICE_STALE", "Portfolio aggregates requiring current prices are null because one or more positions lack a current-session price.", "critical"));
+  const portfolioDataAsOf = broker.importedAt || trades.map((trade) => trade.updatedAt).filter(Boolean).sort().at(-1) || null;
+  if (dateOnly(portfolioDataAsOf || "") < input.requestedSession) topWarnings.push(warning("PORTFOLIO_DATA_STALE", `Portfolio data is older than ${input.requestedSession}.`, "critical"));
+  const priceDates = openPositions.map((position) => position.current_price_timestamp).filter((value): value is string => Boolean(value)).sort();
+  const allWarnings = [...topWarnings, ...openPositions.flatMap((position) => position.data_warnings), ...closedTrades.flatMap((trade) => trade.documentation_warnings)];
+  const aggregatesComplete = broker.complete && allPriceCurrent;
+  const summary = {
+    gross_exposure_dollars: aggregatesComplete ? round(longValue + shortValue) : null, gross_exposure_pct: aggregatesComplete && accountValue ? round((longValue + shortValue) / accountValue * 100) : null,
+    net_exposure_dollars: aggregatesComplete ? round(longValue - shortValue) : null, net_exposure_pct: aggregatesComplete && accountValue ? round((longValue - shortValue) / accountValue * 100) : null,
+    long_exposure_dollars: aggregatesComplete ? round(longValue) : null, long_exposure_pct: aggregatesComplete && accountValue ? round(longValue / accountValue * 100) : null,
+    short_exposure_dollars: aggregatesComplete ? round(shortValue) : null, short_exposure_pct: aggregatesComplete && accountValue ? round(shortValue / accountValue * 100) : null,
+    total_market_value: aggregatesComplete ? round(longValue - shortValue) : null, total_open_pnl: aggregatesComplete ? round(openPnlValues.reduce((sum, value) => sum + value, 0)) : null,
+    total_initial_risk: broker.complete && openPositions.every((position) => position.planned_risk_dollars !== null) ? round(openPositions.reduce((sum, position) => sum + Number(position.planned_risk_dollars), 0)) : null,
+    total_remaining_risk_to_stops: broker.complete && riskValues.length === openPositions.length ? round(riskValues.reduce((sum, value) => sum + value, 0)) : null,
+    total_remaining_risk_pct: broker.complete && riskValues.length === openPositions.length && accountValue ? round(riskValues.reduce((sum, value) => sum + value, 0) / accountValue * 100) : null,
+    open_position_count: openPositions.length, long_position_count: openPositions.filter((position) => position.side === "LONG").length, short_position_count: openPositions.filter((position) => position.side === "SHORT").length,
+    positions_missing_stops: openPositions.filter((position) => position.current_stop === null).length, positions_with_upcoming_earnings: null
+  };
+
+  return {
+    metadata: {
+      schema_version: DAILY_PORTFOLIO_SNAPSHOT_SCHEMA_VERSION, snapshot_id: crypto.randomUUID(), generated_at: generatedAt,
+      requested_session: input.requestedSession, latest_completed_market_session: input.latestCompletedMarketSession,
+      portfolio_data_as_of: portfolioDataAsOf, price_data_as_of: priceDates.at(0) || null, broker_import_as_of: broker.statementDate || broker.importedAt,
+      broker_import_complete: broker.complete, account_name: input.accountName || null, account_value: accountValue,
+      source_environment: input.sourceEnvironment, application_version: input.applicationVersion
+    },
+    snapshot_status: allWarnings.some((item) => item.severity === "critical") ? "INCOMPLETE" : allWarnings.some((item) => item.severity === "warning") ? "COMPLETE_WITH_WARNINGS" : "COMPLETE",
+    portfolio_summary: summary, open_positions: openPositions, trades_closed_during_session: closedTrades,
+    warnings: allWarnings, critical_warning_count: allWarnings.filter((item) => item.severity === "critical").length
+  };
+}
+
+function formatMoney(value: number | null) { return value === null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value); }
+function formatPercent(value: number | null) { return value === null ? "—" : `${value.toFixed(2)}%`; }
+
+export function renderDailyPortfolioSnapshotMarkdown(snapshot: ReturnType<typeof buildDailyPortfolioSnapshot>) {
+  const lines = [
+    `# Daily Portfolio Snapshot — ${snapshot.metadata.requested_session}`, "",
+    `Status: **${snapshot.snapshot_status}**`,
+    `Snapshot ID: ${snapshot.metadata.snapshot_id}`,
+    `Account: ${snapshot.metadata.account_name || "—"}`,
+    `Broker import complete: ${snapshot.metadata.broker_import_complete}`,
+    `Portfolio data as of: ${snapshot.metadata.portfolio_data_as_of || "—"}`,
+    `Critical warnings: ${snapshot.critical_warning_count}`, "", "## Portfolio summary", "",
+    `- Account value: ${formatMoney(snapshot.metadata.account_value)}`,
+    `- Gross exposure: ${formatMoney(snapshot.portfolio_summary.gross_exposure_dollars)} (${formatPercent(snapshot.portfolio_summary.gross_exposure_pct)})`,
+    `- Net exposure: ${formatMoney(snapshot.portfolio_summary.net_exposure_dollars)} (${formatPercent(snapshot.portfolio_summary.net_exposure_pct)})`,
+    `- Open P&L: ${formatMoney(snapshot.portfolio_summary.total_open_pnl)}`,
+    `- Remaining risk to stops: ${formatMoney(snapshot.portfolio_summary.total_remaining_risk_to_stops)} (${formatPercent(snapshot.portfolio_summary.total_remaining_risk_pct)})`,
+    `- Open positions: ${snapshot.portfolio_summary.open_position_count}`, "", "## Open positions", "",
+    "| Ticker | Side | Shares | Entry | Current | Market value | P&L | R | Stop | Weight |", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"
+  ];
+  for (const position of snapshot.open_positions) lines.push(`| ${position.ticker} | ${position.side} | ${position.shares ?? "—"} | ${formatMoney(position.average_entry)} | ${formatMoney(position.current_price)} | ${formatMoney(position.market_value)} | ${formatMoney(position.current_pnl)} | ${position.current_r_multiple ?? "—"} | ${formatMoney(position.current_stop)} | ${formatPercent(position.position_weight_pct)} |`);
+  if (!snapshot.open_positions.length) lines.push("| — | — | — | — | — | — | — | — | — | — |");
+  lines.push("", "## Position details and warnings", "");
+  for (const position of snapshot.open_positions) {
+    lines.push(`### ${position.ticker}`, "", `- Setup / grade: ${position.setup || "—"} / ${position.grade || "—"}`, `- Criteria: ${position.setup_criteria_score ?? "—"} / ${position.setup_criteria_max ?? "—"}`, `- Notes: ${position.notes || "—"}`, `- Charts / screenshots: ${position.chart_links.length} / ${position.screenshot_references.length}`, ...position.data_warnings.map((item) => `- [${item.severity}] ${item.code}: ${item.message}`), "");
+  }
+  lines.push("## Trades closed during the session", "", "| Ticker | Side | Entry | Exit | Net P&L | R | Setup | Grade |", "|---|---|---:|---:|---:|---:|---|---|");
+  for (const trade of snapshot.trades_closed_during_session) lines.push(`| ${trade.ticker} | ${trade.side} | ${formatMoney(trade.average_entry)} | ${formatMoney(trade.average_exit)} | ${formatMoney(trade.net_pnl)} | ${trade.realized_r_multiple ?? "—"} | ${trade.setup || "—"} | ${trade.grade || "—"} |`);
+  if (!snapshot.trades_closed_during_session.length) lines.push("| — | — | — | — | — | — | — | — |");
+  lines.push("", "## Documentation and data-quality warnings", "");
+  if (!snapshot.warnings.length) lines.push("- None.");
+  else snapshot.warnings.forEach((item) => lines.push(`- [${item.severity}] ${item.code}${item.ticker ? ` (${item.ticker})` : ""}: ${item.message}`));
+  return `${lines.join("\n")}\n`;
+}
+
+export function validateDailyPortfolioSnapshot(snapshot: ReturnType<typeof buildDailyPortfolioSnapshot>) {
+  const errors: string[] = [];
+  if (snapshot.metadata.schema_version !== DAILY_PORTFOLIO_SNAPSHOT_SCHEMA_VERSION) errors.push("schema_version");
+  if (!snapshot.metadata.snapshot_id) errors.push("snapshot_id");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(snapshot.metadata.requested_session)) errors.push("requested_session");
+  if (!Array.isArray(snapshot.open_positions)) errors.push("open_positions");
+  if (!Array.isArray(snapshot.trades_closed_during_session)) errors.push("trades_closed_during_session");
+  if (!Array.isArray(snapshot.warnings) || snapshot.warnings.some((item) => !item.code || !item.message)) errors.push("warnings");
+  return errors;
+}

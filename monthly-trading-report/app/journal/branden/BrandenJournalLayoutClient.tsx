@@ -14,6 +14,7 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   const [user, setUser] = useState<TraderUser | null>(null);
   const [defaultPortfolio, setDefaultPortfolio] = useState("");
   const [isImporting, setIsImporting] = useState(false);
+  const [isGeneratingSnapshot, setIsGeneratingSnapshot] = useState(false);
   const cfImportInputRef = useRef<HTMLInputElement | null>(null);
   const pendingImportPortfolioRef = useRef("");
 
@@ -47,6 +48,43 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   }, []);
 
   const canEditBrandenJournal = user?.id === "branden" && !user.readOnly;
+  const canGenerateSnapshot = user?.id === "branden";
+
+  function downloadText(filename: string, contents: string, type: string) {
+    const url = URL.createObjectURL(new Blob([contents], { type }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function generateSnapshot(sendEmail: boolean) {
+    if (!canGenerateSnapshot) return;
+    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+    const session = window.prompt("Completed U.S. market session (YYYY-MM-DD)", today)?.trim();
+    if (!session) return;
+    const accountName = window.prompt("Portfolio", defaultPortfolio.trim())?.trim();
+    if (!accountName) return;
+    setIsGeneratingSnapshot(true);
+    try {
+      const response = await fetch("/api/journal/branden/daily-snapshot", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session, accountName, sendEmail })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not generate daily snapshot.");
+      downloadText(data.filenames.json, `${JSON.stringify(data.snapshot, null, 2)}\n`, "application/json");
+      downloadText(data.filenames.markdown, data.markdown, "text/markdown");
+      const emailMessage = sendEmail ? ` Email: ${data.email?.status || "unknown"}.` : "";
+      window.alert(`Daily snapshot generated with status ${data.snapshot.snapshot_status}.${emailMessage}`);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not generate daily snapshot.");
+    } finally {
+      setIsGeneratingSnapshot(false);
+    }
+  }
 
   async function choosePortfolioForImport() {
     const targetPortfolio = window.prompt("Portfolio for broker statement import", defaultPortfolio.trim());
@@ -89,8 +127,24 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
     }
   }
 
-  const accountActions = canEditBrandenJournal
-    ? [
+  const accountActions = [
+    ...(canGenerateSnapshot ? [
+      {
+        key: "generate-daily-snapshot",
+        label: isGeneratingSnapshot ? "Generating snapshot..." : "Generate Daily Snapshot",
+        icon: "S",
+        disabled: isGeneratingSnapshot,
+        onClick: () => generateSnapshot(false)
+      },
+      {
+        key: "generate-and-send-daily-snapshot",
+        label: isGeneratingSnapshot ? "Generating snapshot..." : "Generate and Send Daily Snapshot",
+        icon: "E",
+        disabled: isGeneratingSnapshot,
+        onClick: () => generateSnapshot(true)
+      }
+    ] : []),
+    ...(canEditBrandenJournal ? [
         {
           key: "import-broker-statement",
           label: isImporting ? "Importing statement..." : "Import broker statement",
@@ -101,8 +155,8 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
             if (targetPortfolio) cfImportInputRef.current?.click();
           }
         }
-      ]
-    : [];
+      ] : [])
+  ];
 
   return (
     <main className="trade-log-shell branden-journal-shell branden-route-shell sidebar-expanded">
