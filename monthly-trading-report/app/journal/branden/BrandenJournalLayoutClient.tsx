@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import BrandenSidebar from "@/app/components/BrandenSidebar";
+import { buildDailySnapshotRequestBody } from "@/lib/daily-portfolio-snapshot-request";
 import type { TraderUser } from "@/lib/types";
 
 type PortfolioSettingsResponse = {
@@ -30,9 +31,34 @@ type SnapshotValidationDiagnostic = {
   }>;
 };
 
-function formatSnapshotValidationError(data: { error?: string; codes?: string[]; diagnostic?: SnapshotValidationDiagnostic }) {
+type SnapshotSessionDiagnostic = {
+  selectedSession: string;
+  submittedSession: string;
+  currentNewYorkDateTime: string;
+  latestCompletedSession: string;
+  regularSessionCompletionTime: string;
+  validationCodes: ["SNAPSHOT_SESSION_NOT_COMPLETE"];
+};
+
+function formatSnapshotValidationError(data: { error?: string; codes?: string[]; diagnostic?: SnapshotValidationDiagnostic | SnapshotSessionDiagnostic }) {
   const diagnostic = data.diagnostic;
   if (!diagnostic) return data.error || "Could not generate daily snapshot.";
+  if ("selectedSession" in diagnostic) {
+    return [
+      "Snapshot not generated.",
+      "",
+      `Selected session: ${diagnostic.selectedSession}`,
+      `Date submitted: ${diagnostic.submittedSession}`,
+      `Current New York time: ${diagnostic.currentNewYorkDateTime}`,
+      `Latest completed session: ${diagnostic.latestCompletedSession}`,
+      `Regular-session completion time: ${diagnostic.regularSessionCompletionTime}`,
+      "",
+      "Blocking validation:",
+      "SNAPSHOT_SESSION_NOT_COMPLETE",
+      "",
+      "The selected market session has not completed. Generate the snapshot after the broker import is complete following today’s market close."
+    ].join("\n");
+  }
   const lines = [
     "Snapshot not generated.",
     "",
@@ -63,6 +89,9 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   const pathname = usePathname();
   const [user, setUser] = useState<TraderUser | null>(null);
   const [defaultPortfolio, setDefaultPortfolio] = useState("");
+  const [snapshotSession, setSnapshotSession] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()));
+  const [lastSubmittedSnapshotSession, setLastSubmittedSnapshotSession] = useState("");
+  const [latestCompletedSnapshotSession, setLatestCompletedSnapshotSession] = useState("");
   const [isImporting, setIsImporting] = useState(false);
   const [isGeneratingSnapshot, setIsGeneratingSnapshot] = useState(false);
   const cfImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -111,19 +140,21 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
 
   async function generateSnapshot(sendEmail: boolean) {
     if (!canGenerateSnapshot) return;
-    const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
-    const session = window.prompt("Completed U.S. market session (YYYY-MM-DD)", today)?.trim();
+    const session = snapshotSession.trim();
     if (!session) return;
     const accountName = window.prompt("Portfolio", defaultPortfolio.trim())?.trim();
     if (!accountName) return;
     setIsGeneratingSnapshot(true);
+    setLastSubmittedSnapshotSession(session);
     try {
       const response = await fetch("/api/journal/branden/daily-snapshot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session, accountName, sendEmail })
+        body: JSON.stringify(buildDailySnapshotRequestBody(session, accountName, sendEmail))
       });
       const data = await response.json().catch(() => ({}));
+      const reportedLatestSession = data.datePath?.latestCompletedSession || data.diagnostic?.latestCompletedSession || "";
+      if (reportedLatestSession) setLatestCompletedSnapshotSession(reportedLatestSession);
       if (!response.ok) throw new Error(formatSnapshotValidationError(data));
       const JSZip = (await import("jszip")).default;
       const archive = new JSZip();
@@ -230,6 +261,27 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         }}
       />
       <BrandenSidebar activeHref={pathname || "/journal/branden/dashboard"} accountActions={accountActions} />
+      {canGenerateSnapshot ? (
+        <section
+          aria-label="Daily snapshot date selection"
+          style={{ position: "fixed", right: 18, bottom: 18, zIndex: 40, width: 270, padding: 12, border: "1px solid rgba(148,163,184,.35)", borderRadius: 10, background: "rgba(15,23,42,.96)", color: "#e2e8f0", boxShadow: "0 12px 32px rgba(0,0,0,.3)" }}
+        >
+          <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
+            <strong>Daily snapshot date</strong>
+            <input
+              type="date"
+              value={snapshotSession}
+              onChange={(event) => setSnapshotSession(event.currentTarget.value)}
+              style={{ width: "100%", padding: "7px 8px", borderRadius: 6 }}
+            />
+          </label>
+          <div style={{ display: "grid", gap: 3, marginTop: 8, fontSize: 11, color: "#94a3b8" }}>
+            <span>Selected date: {snapshotSession || "—"}</span>
+            <span>Date submitted: {lastSubmittedSnapshotSession || "—"}</span>
+            <span>Latest completed session: {latestCompletedSnapshotSession || "shown after submission"}</span>
+          </div>
+        </section>
+      ) : null}
       {children}
     </main>
   );

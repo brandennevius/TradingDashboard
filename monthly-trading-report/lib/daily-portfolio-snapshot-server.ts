@@ -31,7 +31,7 @@ export class SnapshotValidationError extends Error {
   constructor(
     public readonly code: SnapshotValidationCode,
     message: string,
-    public readonly diagnostic?: SnapshotValidationDiagnostic
+    public readonly diagnostic?: SnapshotValidationDiagnostic | SnapshotSessionDiagnostic
   ) {
     super(message);
     this.name = "SnapshotValidationError";
@@ -50,7 +50,17 @@ export type SnapshotValidationCode =
   | "PORTFOLIO_UNRESOLVED"
   | "POINT_IN_TIME_UNAVAILABLE"
   | "CURRENT_PRICES_INVALID"
+  | "SNAPSHOT_SESSION_NOT_COMPLETE"
   | BrokerImportValidationCode;
+
+export type SnapshotSessionDiagnostic = {
+  selectedSession: string;
+  submittedSession: string;
+  currentNewYorkDateTime: string;
+  latestCompletedSession: string;
+  regularSessionCompletionTime: string;
+  validationCodes: ["SNAPSHOT_SESSION_NOT_COMPLETE"];
+};
 
 export type SnapshotValidationDiagnostic = {
   requestedSession: string;
@@ -228,6 +238,21 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
   };
   const now = dependencies.now();
   const session = resolveSnapshotSession(options.session, now);
+  if (!session.complete) {
+    const diagnostic: SnapshotSessionDiagnostic = {
+      selectedSession: options.session,
+      submittedSession: session.requested,
+      currentNewYorkDateTime: session.currentNewYorkDateTime,
+      latestCompletedSession: session.latestCompleted,
+      regularSessionCompletionTime: session.regularSessionCompletionTime,
+      validationCodes: ["SNAPSHOT_SESSION_NOT_COMPLETE"]
+    };
+    throw new SnapshotValidationError(
+      "SNAPSHOT_SESSION_NOT_COMPLETE",
+      "Snapshot not generated. The selected market session has not completed.",
+      diagnostic
+    );
+  }
   const [trades, portfolioSettings] = await Promise.all([
     dependencies.loadTrades(),
     dependencies.loadPortfolioSettings()
@@ -319,5 +344,18 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
       atomicWrite(markdownPath, markdown)
     ]);
   }
-  return { snapshot, markdown, jsonPath, markdownPath, baseName, brokerDiagnostic: brokerDiagnostic || undefined };
+  return {
+    snapshot,
+    markdown,
+    jsonPath,
+    markdownPath,
+    baseName,
+    brokerDiagnostic: brokerDiagnostic || undefined,
+    datePath: {
+      selectedDate: options.session,
+      submittedDate: session.requested,
+      evaluatedDate: session.resolved,
+      latestCompletedSession: session.latestCompleted
+    }
+  };
 }

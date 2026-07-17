@@ -126,19 +126,29 @@ function newYorkParts(now: Date) {
   return Object.fromEntries(parts.map((part) => [part.type, part.value]));
 }
 
+export const SNAPSHOT_SESSION_COMPLETION_TIME = "16:00 America/New_York";
+
 export function latestCompletedMarketSession(now = new Date()) {
   const parts = newYorkParts(now), today = `${parts.year}-${parts.month}-${parts.day}`;
   const minutes = Number(parts.hour) * 60 + Number(parts.minute);
-  if (isCompletedUsTradingSession(today) && minutes >= 16 * 60 + 15) return today;
+  if (isCompletedUsTradingSession(today) && minutes >= 16 * 60) return today;
   return previousTradingSession(today);
 }
 
 export function resolveSnapshotSession(requested: string, now = new Date()) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(requested)) throw new Error("Session must use YYYY-MM-DD.");
+  const parts = newYorkParts(now);
   const latest = latestCompletedMarketSession(now);
-  let resolved = requested > latest ? latest : requested;
-  while (!isCompletedUsTradingSession(resolved)) resolved = previousTradingSession(resolved);
-  return { requested, resolved, latestCompleted: latest, adjusted: requested !== resolved };
+  const complete = isCompletedUsTradingSession(requested) && requested <= latest;
+  return {
+    requested,
+    resolved: requested,
+    latestCompleted: latest,
+    adjusted: false,
+    complete,
+    currentNewYorkDateTime: `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}`,
+    regularSessionCompletionTime: SNAPSHOT_SESSION_COMPLETION_TIME
+  };
 }
 
 function warning(code: SnapshotWarningCode, message: string, severity: SnapshotWarning["severity"], trade?: TradeLogEntry): SnapshotWarning {

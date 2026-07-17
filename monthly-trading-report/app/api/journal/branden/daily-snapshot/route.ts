@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { generateDailyPortfolioSnapshot, SnapshotValidationError } from "@/lib/daily-portfolio-snapshot-server";
 import { sendDailyPortfolioSnapshotEmail } from "@/lib/snapshot-email";
+import { snapshotSessionFromRequestBody } from "@/lib/daily-portfolio-snapshot-request";
 
 export const runtime = "nodejs";
 
@@ -10,8 +11,9 @@ export async function POST(request: Request) {
   if (!user || user.id !== "branden") return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   try {
     const body = await request.json().catch(() => ({}));
+    const submittedSession = snapshotSessionFromRequestBody(body);
     const result = await generateDailyPortfolioSnapshot({
-      session: String(body.session || ""),
+      session: submittedSession,
       accountName: String(body.accountName || "") || undefined,
       // Vercel functions run from a read-only /var/task filesystem. The browser
       // receives both payloads directly and performs the downloads client-side.
@@ -25,6 +27,7 @@ export async function POST(request: Request) {
       markdown: result.markdown,
       filenames: { json: `${result.baseName}.json`, markdown: `${result.baseName}.md` },
       brokerDiagnostic: result.brokerDiagnostic,
+      datePath: result.datePath,
       email
     });
   } catch (error) {

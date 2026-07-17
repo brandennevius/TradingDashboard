@@ -10,6 +10,7 @@ import {
   resolveSnapshotSession,
   validateDailyPortfolioSnapshot
 } from "../lib/daily-portfolio-snapshot";
+import { buildDailySnapshotRequestBody, snapshotSessionFromRequestBody } from "../lib/daily-portfolio-snapshot-request";
 import { generateDailyPortfolioSnapshot, SnapshotValidationError } from "../lib/daily-portfolio-snapshot-server";
 import { sendDailyPortfolioSnapshotEmail, snapshotEmailConfiguration } from "../lib/snapshot-email";
 import type { TradeLogEntry } from "../lib/types";
@@ -35,11 +36,25 @@ function input(trades: TradeLogEntry[]) {
   };
 }
 
-test("resolves weekends, holidays, and same-day cutoff to a completed session", () => {
-  assert.equal(resolveSnapshotSession("2026-07-18", new Date("2026-07-20T13:00:00Z")).resolved, "2026-07-17");
-  assert.equal(resolveSnapshotSession("2026-07-03", new Date("2026-07-06T22:00:00Z")).resolved, "2026-07-02");
+test("session resolution never silently replaces the selected date", () => {
+  assert.deepEqual(
+    { resolved: resolveSnapshotSession("2026-07-18", new Date("2026-07-20T13:00:00Z")).resolved, complete: resolveSnapshotSession("2026-07-18", new Date("2026-07-20T13:00:00Z")).complete },
+    { resolved: "2026-07-18", complete: false }
+  );
+  assert.deepEqual(
+    { resolved: resolveSnapshotSession("2026-07-03", new Date("2026-07-06T22:00:00Z")).resolved, complete: resolveSnapshotSession("2026-07-03", new Date("2026-07-06T22:00:00Z")).complete },
+    { resolved: "2026-07-03", complete: false }
+  );
   assert.equal(latestCompletedMarketSession(new Date("2026-07-16T19:00:00Z")), "2026-07-15");
-  assert.equal(latestCompletedMarketSession(new Date("2026-07-16T21:00:00Z")), "2026-07-16");
+  assert.equal(latestCompletedMarketSession(new Date("2026-07-16T19:59:00Z")), "2026-07-15");
+  assert.equal(latestCompletedMarketSession(new Date("2026-07-16T20:00:00Z")), "2026-07-16");
+});
+
+test("request-body date takes precedence and preserves the selected value", () => {
+  assert.equal(snapshotSessionFromRequestBody({ session: "2026-07-15" }, "2026-07-16"), "2026-07-15");
+  assert.deepEqual(buildDailySnapshotRequestBody(" 2026-07-16 ", " CF_Statement ", false), {
+    session: "2026-07-16", accountName: "CF_Statement", sendEmail: false
+  });
 });
 
 test("builds current open positions without mutating stored inputs", () => {
@@ -139,6 +154,52 @@ test("server orchestration writes JSON and Markdown while data loaders remain re
   assert.equal(await readFile(result.markdownPath, "utf8"), result.markdown);
 });
 
+test("July 15 and July 16 flow unchanged from selection to server evaluation", async () => {
+  for (const selected of ["2026-07-15", "2026-07-16"]) {
+    const result = await generateDailyPortfolioSnapshot({
+      session: selected, accountName: "Main", writeExports: false,
+      dependencies: {
+        now: () => new Date("2026-07-17T22:00:00Z"),
+        loadTrades: async () => [trade()],
+        loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: input([]).portfolioMeta } }),
+        loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
+      }
+    });
+    assert.deepEqual(result.datePath, {
+      selectedDate: selected,
+      submittedDate: selected,
+      evaluatedDate: selected,
+      latestCompletedSession: "2026-07-17"
+    });
+    assert.equal(result.snapshot.metadata.requested_session, selected);
+  }
+});
+
+test("current New York session is rejected before close and evaluated after close without fallback", async () => {
+  const dependencies = (now: Date) => ({
+    now: () => now,
+    loadTrades: async () => [trade()],
+    loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: { ...input([]).portfolioMeta, equityStatementDate: "2026-07-17" } } }),
+    loadPrice: async (symbol: string, session: string) => ({ symbol, price: 110, timestamp: session, provider: "test" })
+  });
+  await assert.rejects(
+    generateDailyPortfolioSnapshot({ session: "2026-07-17", accountName: "Main", writeExports: false, dependencies: dependencies(new Date("2026-07-17T19:59:00Z")) }),
+    (error) => error instanceof SnapshotValidationError
+      && error.code === "SNAPSHOT_SESSION_NOT_COMPLETE"
+      && error.diagnostic !== undefined
+      && "selectedSession" in error.diagnostic
+      && error.diagnostic.selectedSession === "2026-07-17"
+      && error.diagnostic.latestCompletedSession === "2026-07-16"
+  );
+  const result = await generateDailyPortfolioSnapshot({
+    session: "2026-07-17", accountName: "Main", writeExports: false,
+    dependencies: dependencies(new Date("2026-07-17T20:00:00Z"))
+  });
+  assert.equal(result.datePath.evaluatedDate, "2026-07-17");
+  assert.equal(result.snapshot.metadata.requested_session, "2026-07-17");
+  assert.notEqual(result.datePath.evaluatedDate, "2026-07-16");
+});
+
 test("broker-import validation returns distinct safe codes and writes no exports", async () => {
   const cases = [
     { name: "not found", code: "BROKER_IMPORT_NOT_FOUND", trades: [trade({ importSource: "manual" })], meta: input([]).portfolioMeta },
@@ -161,9 +222,11 @@ test("broker-import validation returns distinct safe codes and writes no exports
       }),
       (error) => error instanceof SnapshotValidationError
         && error.code === item.code
-        && error.diagnostic?.validationCodes.includes(item.code)
-        && error.diagnostic?.requestedSession === "2026-07-16"
-        && error.diagnostic?.portfolio === "Main"
+        && error.diagnostic !== undefined
+        && "portfolio" in error.diagnostic
+        && error.diagnostic.validationCodes.includes(item.code)
+        && error.diagnostic.requestedSession === "2026-07-16"
+        && error.diagnostic.portfolio === "Main"
     );
     assert.deepEqual(await readdir(outputDirectory), []);
   }
@@ -179,12 +242,12 @@ test("statement coverage is inclusive and date-only values retain their U.S. mar
       loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
     }
   });
-  await assert.rejects(run("2026-07-15"), (error) => error instanceof SnapshotValidationError && error.diagnostic?.validationCodes.includes("BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT"));
+  await assert.rejects(run("2026-07-15"), (error) => error instanceof SnapshotValidationError && error.diagnostic !== undefined && "portfolio" in error.diagnostic && error.diagnostic.validationCodes.includes("BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT"));
   assert.equal((await run("2026-07-16")).snapshot.open_positions.length, 1);
   assert.equal((await run("2026-07-17")).snapshot.open_positions.length, 1);
   // 00:30 UTC is still July 16 in New York; a date-only July 16 must also stay July 16.
   assert.equal((await run("2026-07-17T00:30:00.000Z")).snapshot.open_positions.length, 1);
-  await assert.rejects(run("2026-07-16T00:30:00.000Z"), (error) => error instanceof SnapshotValidationError && error.diagnostic?.validationCodes.includes("BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT"));
+  await assert.rejects(run("2026-07-16T00:30:00.000Z"), (error) => error instanceof SnapshotValidationError && error.diagnostic !== undefined && "portfolio" in error.diagnostic && error.diagnostic.validationCodes.includes("BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT"));
 });
 
 test("unrelated Needs review rows warn without blocking a snapshot", async () => {
