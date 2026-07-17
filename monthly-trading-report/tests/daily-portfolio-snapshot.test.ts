@@ -165,6 +165,22 @@ test("server does not write exports when a current price is stale", async () => 
   assert.deepEqual(await readdir(outputDirectory), []);
 });
 
+test("server can return browser download payloads without writing deployment files", async () => {
+  const outputDirectory = await mkdtemp(path.join(os.tmpdir(), "snapshot-browser-test-"));
+  const result = await generateDailyPortfolioSnapshot({
+    session: "2026-07-16", accountName: "Main", outputDirectory, writeExports: false,
+    dependencies: {
+      now: () => new Date("2026-07-17T00:00:00Z"),
+      loadTrades: async () => [trade()],
+      loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: input([]).portfolioMeta } }),
+      loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
+    }
+  });
+  assert.equal(result.snapshot.open_positions.length, 1);
+  assert.match(result.markdown, /TEST/);
+  assert.deepEqual(await readdir(outputDirectory), []);
+});
+
 test("email is disabled by default and test transport receives no credentials", async () => {
   assert.equal(snapshotEmailConfiguration({}).configured, false);
   const snapshot = buildDailyPortfolioSnapshot(input([trade()]));

@@ -12,7 +12,10 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => ({}));
     const result = await generateDailyPortfolioSnapshot({
       session: String(body.session || ""),
-      accountName: String(body.accountName || "") || undefined
+      accountName: String(body.accountName || "") || undefined,
+      // Vercel functions run from a read-only /var/task filesystem. The browser
+      // receives both payloads directly and performs the downloads client-side.
+      writeExports: false
     });
     const email = body.sendEmail
       ? await sendDailyPortfolioSnapshotEmail({ snapshot: result.snapshot, markdown: result.markdown, baseName: result.baseName })
