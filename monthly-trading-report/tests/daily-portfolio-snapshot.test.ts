@@ -99,6 +99,14 @@ test("a prior broker statement is stale for the requested session", () => {
   assert.equal(snapshot.metadata.broker_import_complete, false);
 });
 
+test("trade-log review tags and missing executions remain per-trade warnings instead of invalidating fresh broker metadata", () => {
+  const reviewedInTradeLog = trade({ customTags: ["Needs review"], executions: [] });
+  const snapshot = buildDailyPortfolioSnapshot(input([reviewedInTradeLog]));
+  assert.equal(snapshot.metadata.broker_import_complete, true);
+  assert(snapshot.open_positions[0].data_warnings.some((item) => item.code === "MISSING_EXECUTIONS"));
+  assert(!snapshot.warnings.some((item) => item.code === "BROKER_IMPORT_INCOMPLETE"));
+});
+
 test("markdown is sourced from the JSON snapshot", () => {
   const snapshot = buildDailyPortfolioSnapshot(input([trade()]));
   const markdown = renderDailyPortfolioSnapshotMarkdown(snapshot);

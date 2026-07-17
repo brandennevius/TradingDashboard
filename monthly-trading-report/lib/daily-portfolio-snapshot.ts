@@ -210,12 +210,12 @@ function brokerMetadata(trades: TradeLogEntry[], meta: PortfolioMeta | undefined
   const imported = trades.filter((trade) => trade.importSource === "cf-statement-pdf");
   const importedAt = [meta?.equityUpdatedAt || "", ...imported.map((trade) => trade.updatedAt)].filter(Boolean).sort().at(-1) || null;
   const statementDate = meta?.equityStatementDate || null;
+  const hasBrokerImport = imported.length > 0 || meta?.equitySource === "CF Import";
   const warnings: SnapshotWarning[] = [];
-  if (!imported.length && !importedAt) warnings.push(warning("BROKER_IMPORT_MISSING", "No broker import was found for this account.", "critical"));
+  if (!hasBrokerImport || !importedAt) warnings.push(warning("BROKER_IMPORT_MISSING", "No broker import metadata was found for this account.", "critical"));
   if (statementDate && statementDate < session) warnings.push(warning("BROKER_IMPORT_STALE", `Latest broker statement is ${statementDate}; requested session is ${session}.`, "critical"));
-  if (!statementDate && imported.length) warnings.push(warning("BROKER_IMPORT_INCOMPLETE", "Broker-import records exist without a stored statement date.", "critical"));
-  if (imported.some((trade) => trade.customTags.includes("Needs review") || !trade.executions.length)) warnings.push(warning("BROKER_IMPORT_INCOMPLETE", "One or more broker-import trades require review or lack executions.", "critical"));
-  const complete = Boolean(imported.length && statementDate && statementDate >= session && !warnings.some((item) => item.code === "BROKER_IMPORT_INCOMPLETE"));
+  if (!statementDate && hasBrokerImport) warnings.push(warning("BROKER_IMPORT_INCOMPLETE", "Broker-import metadata has no stored statement date.", "critical"));
+  const complete = Boolean(hasBrokerImport && importedAt && statementDate && statementDate >= session);
   return { importedAt, statementDate, complete, warnings };
 }
 
