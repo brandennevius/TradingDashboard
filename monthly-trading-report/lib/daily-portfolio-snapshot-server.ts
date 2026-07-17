@@ -5,6 +5,7 @@ import {
   buildDailyPortfolioSnapshot,
   renderDailyPortfolioSnapshotMarkdown,
   resolveSnapshotSession,
+  snapshotStatusFromWarnings,
   type SnapshotPrice,
   type SnapshotWarning
 } from "./daily-portfolio-snapshot";
@@ -314,7 +315,6 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
       message: `${unrelatedNeedsReview.length} imported row${unrelatedNeedsReview.length === 1 ? "" : "s"} still require review but do not affect ${session.resolved}: ${sample}.`
     };
     snapshot.warnings.unshift(warning);
-    snapshot.snapshot_status = snapshot.snapshot_status === "COMPLETE" ? "COMPLETE_WITH_WARNINGS" : snapshot.snapshot_status;
   }
   if (session.adjusted) {
     snapshot.warnings.unshift({
@@ -322,8 +322,9 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
       severity: "warning",
       message: `Requested session ${session.requested} was adjusted to completed U.S. session ${session.resolved}.`
     });
-    snapshot.snapshot_status = snapshot.snapshot_status === "COMPLETE" ? "COMPLETE_WITH_WARNINGS" : snapshot.snapshot_status;
   }
+  snapshot.snapshot_status = snapshotStatusFromWarnings(snapshot.warnings);
+  snapshot.critical_warning_count = snapshot.warnings.filter((item) => item.severity === "critical").length;
   const invalidPrices = snapshot.open_positions
     .filter((position) => position.current_price === null || position.current_price_timestamp !== session.resolved)
     .map((position) => position.ticker);

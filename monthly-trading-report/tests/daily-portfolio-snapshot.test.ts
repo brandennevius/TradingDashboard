@@ -8,6 +8,7 @@ import {
   latestCompletedMarketSession,
   renderDailyPortfolioSnapshotMarkdown,
   resolveSnapshotSession,
+  snapshotStatusFromWarnings,
   validateDailyPortfolioSnapshot
 } from "../lib/daily-portfolio-snapshot";
 import { buildDailySnapshotRequestBody, snapshotSessionFromRequestBody } from "../lib/daily-portfolio-snapshot-request";
@@ -55,6 +56,12 @@ test("request-body date takes precedence and preserves the selected value", () =
   assert.deepEqual(buildDailySnapshotRequestBody(" 2026-07-16 ", " CF_Statement ", false), {
     session: "2026-07-16", accountName: "CF_Statement", sendEmail: false
   });
+});
+
+test("snapshot status reflects final warning severity", () => {
+  assert.equal(snapshotStatusFromWarnings([]), "COMPLETE");
+  assert.equal(snapshotStatusFromWarnings([{ code: "BROKER_IMPORT_UNRELATED_ROWS_NEED_REVIEW", message: "Historical row", severity: "warning" }]), "COMPLETE_WITH_WARNINGS");
+  assert.equal(snapshotStatusFromWarnings([{ code: "CURRENT_PRICE_STALE", message: "Current price missing", severity: "critical" }]), "INCOMPLETE");
 });
 
 test("builds current open positions without mutating stored inputs", () => {
@@ -265,6 +272,8 @@ test("unrelated Needs review rows warn without blocking a snapshot", async () =>
     }
   });
   assert(result.snapshot.warnings.some((warning) => warning.code === "BROKER_IMPORT_UNRELATED_ROWS_NEED_REVIEW"));
+  assert.equal(result.snapshot.snapshot_status, "COMPLETE_WITH_WARNINGS");
+  assert.equal(result.snapshot.critical_warning_count, 0);
   assert.deepEqual(result.brokerDiagnostic?.needsReviewRows, [{
     ticker: "TEST", tradeId: "old-review", entryDate: "2026-07-10", exitDate: "2026-07-15", status: "CLOSED", affectsRequestedSnapshot: false, blockingReason: null
   }]);

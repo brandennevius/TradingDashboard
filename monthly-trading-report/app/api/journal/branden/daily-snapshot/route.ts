@@ -34,6 +34,7 @@ export async function POST(request: Request) {
     if (error instanceof SnapshotValidationError) {
       return NextResponse.json({
         error: error.message,
+        snapshotStatus: "BLOCKED",
         code: error.code,
         codes: error.diagnostic?.validationCodes || [error.code],
         diagnostic: error.diagnostic

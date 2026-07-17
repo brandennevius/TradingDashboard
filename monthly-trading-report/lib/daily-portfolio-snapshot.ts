@@ -38,6 +38,14 @@ export type SnapshotWarning = {
   ticker?: string;
 };
 
+export type DailyPortfolioSnapshotStatus = "COMPLETE" | "COMPLETE_WITH_WARNINGS" | "INCOMPLETE";
+
+export function snapshotStatusFromWarnings(warnings: SnapshotWarning[]): DailyPortfolioSnapshotStatus {
+  if (warnings.some((item) => item.severity === "critical")) return "INCOMPLETE";
+  if (warnings.length) return "COMPLETE_WITH_WARNINGS";
+  return "COMPLETE";
+}
+
 export type SnapshotPrice = {
   symbol: string;
   price: number | null;
@@ -336,7 +344,7 @@ export function buildDailyPortfolioSnapshot(input: SnapshotInput) {
       broker_import_complete: broker.complete, account_name: input.accountName || null, account_value: accountValue,
       source_environment: input.sourceEnvironment, application_version: input.applicationVersion
     },
-    snapshot_status: allWarnings.some((item) => item.severity === "critical") ? "INCOMPLETE" : allWarnings.some((item) => item.severity === "warning") ? "COMPLETE_WITH_WARNINGS" : "COMPLETE",
+    snapshot_status: snapshotStatusFromWarnings(allWarnings),
     portfolio_summary: summary, open_positions: openPositions, trades_closed_during_session: closedTrades,
     warnings: allWarnings, critical_warning_count: allWarnings.filter((item) => item.severity === "critical").length
   };
