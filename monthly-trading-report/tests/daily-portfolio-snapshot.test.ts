@@ -96,7 +96,7 @@ test("a prior broker statement is stale for the requested session", () => {
   value.portfolioMeta.equityStatementDate = "2026-07-15";
   const snapshot = buildDailyPortfolioSnapshot(value);
   assert(snapshot.warnings.some((item) => item.code === "BROKER_IMPORT_STALE"));
-  assert.equal(snapshot.metadata.broker_import_complete, false);
+  assert.equal(snapshot.metadata.broker_import_complete, true);
 });
 
 test("a newer broker statement cannot be used as historical point-in-time portfolio state", () => {
@@ -104,7 +104,7 @@ test("a newer broker statement cannot be used as historical point-in-time portfo
   value.portfolioMeta.equityStatementDate = "2026-07-17";
   const snapshot = buildDailyPortfolioSnapshot(value);
   assert(snapshot.warnings.some((item) => item.code === "BROKER_IMPORT_INCOMPLETE" && item.message.includes("newer than requested session")));
-  assert.equal(snapshot.metadata.broker_import_complete, false);
+  assert.equal(snapshot.metadata.broker_import_complete, true);
 });
 
 test("trade-log review tags and missing executions remain per-trade warnings instead of invalidating fresh broker metadata", () => {
@@ -139,21 +139,52 @@ test("server orchestration writes JSON and Markdown while data loaders remain re
   assert.equal(await readFile(result.markdownPath, "utf8"), result.markdown);
 });
 
-test("server does not write exports when the broker import is incomplete", async () => {
-  const outputDirectory = await mkdtemp(path.join(os.tmpdir(), "snapshot-incomplete-test-"));
+test("missing broker metadata warns but does not block a trade-log snapshot", async () => {
+  const result = await generateDailyPortfolioSnapshot({
+    session: "2026-07-16", accountName: "Main", writeExports: false,
+    dependencies: {
+      now: () => new Date("2026-07-17T00:00:00Z"),
+      loadTrades: async () => [trade({ importSource: "manual" })],
+      loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: {} }),
+      loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
+    }
+  });
+  assert.equal(result.snapshot.metadata.broker_import_complete, false);
+  assert(result.snapshot.warnings.some((item) => item.code === "BROKER_IMPORT_MISSING"));
+  assert.equal(result.snapshot.open_positions.length, 1);
+});
+
+test("post-session trade-log activity blocks a historical snapshot", async () => {
+  const outputDirectory = await mkdtemp(path.join(os.tmpdir(), "snapshot-point-in-time-test-"));
+  const laterExecution = { ...trade().executions[0], id: "later", date: "2026-07-17", sourceKey: "later" };
   await assert.rejects(
     generateDailyPortfolioSnapshot({
       session: "2026-07-16", accountName: "Main", outputDirectory,
       dependencies: {
-        now: () => new Date("2026-07-17T00:00:00Z"),
-        loadTrades: async () => [trade({ importSource: "manual" })],
-        loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: {} }),
+        now: () => new Date("2026-07-17T22:00:00Z"),
+        loadTrades: async () => [trade({ executions: [...trade().executions, laterExecution] })],
+        loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: input([]).portfolioMeta } }),
         loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
       }
     }),
-    (error) => error instanceof SnapshotValidationError && error.code === "BROKER_IMPORT_INCOMPLETE"
+    (error) => error instanceof SnapshotValidationError && error.code === "POINT_IN_TIME_UNAVAILABLE"
   );
   assert.deepEqual(await readdir(outputDirectory), []);
+});
+
+test("stale account metadata is excluded while unchanged trade-log positions still generate", async () => {
+  const result = await generateDailyPortfolioSnapshot({
+    session: "2026-07-16", accountName: "Main", writeExports: false,
+    dependencies: {
+      now: () => new Date("2026-07-17T22:00:00Z"),
+      loadTrades: async () => [trade()],
+      loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: { ...input([]).portfolioMeta, equityStatementDate: "2026-07-15" } } }),
+      loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
+    }
+  });
+  assert.equal(result.snapshot.metadata.account_value, null);
+  assert.equal(result.snapshot.portfolio_summary.gross_exposure_dollars, 1100);
+  assert.equal(result.snapshot.portfolio_summary.gross_exposure_pct, null);
 });
 
 test("server does not write exports when a current price is stale", async () => {

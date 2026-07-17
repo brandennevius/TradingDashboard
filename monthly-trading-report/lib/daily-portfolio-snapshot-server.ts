@@ -27,7 +27,7 @@ export type GenerateDailyPortfolioSnapshotOptions = {
 };
 
 export class SnapshotValidationError extends Error {
-  constructor(public readonly code: "PORTFOLIO_UNRESOLVED" | "BROKER_IMPORT_INCOMPLETE" | "CURRENT_PRICES_INVALID", message: string) {
+  constructor(public readonly code: "PORTFOLIO_UNRESOLVED" | "POINT_IN_TIME_UNAVAILABLE" | "CURRENT_PRICES_INVALID", message: string) {
     super(message);
     this.name = "SnapshotValidationError";
   }
@@ -85,15 +85,31 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
     throw new SnapshotValidationError("PORTFOLIO_UNRESOLVED", `Portfolio ${accountName} could not be resolved.`);
   }
   const accountTrades = trades.filter((trade) => !trade.hidden && trade.portfolioTag === accountName);
+  const laterActivity = accountTrades.filter((trade) =>
+    trade.entryDate > session.resolved || trade.executions.some((execution) => execution.date > session.resolved)
+  );
+  if (laterActivity.length) {
+    const symbols = Array.from(new Set(laterActivity.map((trade) => trade.symbol))).sort();
+    throw new SnapshotValidationError(
+      "POINT_IN_TIME_UNAVAILABLE",
+      `Snapshot not generated: trade-log activity after ${session.resolved} exists for ${symbols.join(", ")}. Current trade-log position state cannot be used for that earlier session.`
+    );
+  }
   const openSymbols = Array.from(new Set(accountTrades.filter((trade) => trade.status === "OPEN").map((trade) => trade.symbol))).sort();
   const loadedPrices = await mapWithConcurrency(openSymbols, 4, (symbol) => dependencies.loadPrice(symbol, session.resolved));
   const prices = new Map(loadedPrices.map((price) => [price.symbol, price]));
+  const portfolioMeta = portfolioSettings.portfolioMeta?.[accountName];
+  const sessionPortfolioMeta = portfolioMeta?.equityStatementDate === session.resolved
+    ? portfolioMeta
+    : portfolioMeta
+      ? { ...portfolioMeta, currentEquity: undefined, statementEquity: undefined, floatingPnl: undefined }
+      : undefined;
   const snapshot = buildDailyPortfolioSnapshot({
     requestedSession: session.resolved,
     latestCompletedMarketSession: session.latestCompleted,
     generatedAt: now.toISOString(),
     accountName,
-    portfolioMeta: portfolioSettings.portfolioMeta?.[accountName],
+    portfolioMeta: sessionPortfolioMeta,
     trades: accountTrades,
     // The existing template getter can perform a screenshot migration. A snapshot
     // must not trigger that write, so only trade-stored manual grades/checklists
@@ -110,16 +126,6 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
       message: `Requested session ${session.requested} was adjusted to completed U.S. session ${session.resolved}.`
     });
     snapshot.snapshot_status = snapshot.snapshot_status === "COMPLETE" ? "COMPLETE_WITH_WARNINGS" : snapshot.snapshot_status;
-  }
-  if (!snapshot.metadata.broker_import_complete) {
-    const brokerReasons = snapshot.warnings
-      .filter((item) => item.code === "BROKER_IMPORT_MISSING" || item.code === "BROKER_IMPORT_STALE" || item.code === "BROKER_IMPORT_INCOMPLETE")
-      .map((item) => item.message)
-      .join(" ");
-    throw new SnapshotValidationError(
-      "BROKER_IMPORT_INCOMPLETE",
-      `Snapshot not generated: ${brokerReasons || `the broker import for ${accountName} is missing, stale, or incomplete for ${session.resolved}.`}`
-    );
   }
   const invalidPrices = snapshot.open_positions
     .filter((position) => position.current_price === null || position.current_price_timestamp !== session.resolved)
