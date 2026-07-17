@@ -50,8 +50,8 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   const canEditBrandenJournal = user?.id === "branden" && !user.readOnly;
   const canGenerateSnapshot = user?.id === "branden";
 
-  function downloadText(filename: string, contents: string, type: string) {
-    const url = URL.createObjectURL(new Blob([contents], { type }));
+  function downloadBlob(filename: string, blob: Blob) {
+    const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
     link.download = filename;
@@ -75,8 +75,12 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error || "Could not generate daily snapshot.");
-      downloadText(data.filenames.json, `${JSON.stringify(data.snapshot, null, 2)}\n`, "application/json");
-      downloadText(data.filenames.markdown, data.markdown, "text/markdown");
+      const JSZip = (await import("jszip")).default;
+      const archive = new JSZip();
+      archive.file(data.filenames.json, `${JSON.stringify(data.snapshot, null, 2)}\n`);
+      archive.file(data.filenames.markdown, data.markdown);
+      const bundle = await archive.generateAsync({ type: "blob" });
+      downloadBlob(data.filenames.json.replace(/\.json$/i, ".zip"), bundle);
       const emailMessage = sendEmail ? ` Email: ${data.email?.status || "unknown"}.` : "";
       window.alert(`Daily snapshot generated with status ${data.snapshot.snapshot_status}.${emailMessage}`);
     } catch (error) {
