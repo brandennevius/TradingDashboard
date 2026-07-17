@@ -48,6 +48,12 @@ function formatSnapshotValidationError(data: { error?: string; codes?: string[];
     if (code === "BROKER_IMPORT_MISSING_EXECUTIONS") lines.push("", `${diagnostic.missingExecutionsCount} imported trades have no execution records:`);
     if (samples.length) lines.push(...samples.map((sample) => `- ${sample.ticker} (${sample.tradeId})`));
   }
+  if (diagnostic.needsReviewRows.length) {
+    lines.push("", "Needs review row diagnostics:");
+    lines.push(...diagnostic.needsReviewRows.map((row) =>
+      `- ${row.ticker} (${row.tradeId}): ${row.status}, entry ${row.entryDate}, exit ${row.exitDate || "open"}; ${row.affectsRequestedSnapshot ? `affects snapshot — ${row.blockingReason}` : "unrelated to requested snapshot"}`
+    ));
+  }
   if (diagnostic.latestBrokerImportTimestamp) lines.push("", `Latest broker import: ${diagnostic.latestBrokerImportTimestamp}`);
   if (diagnostic.latestStatementCoverageDate) lines.push(`Statement coverage date: ${diagnostic.latestStatementCoverageDate}`);
   return lines.join("\n");
