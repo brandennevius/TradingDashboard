@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type { SetupChecklistTemplate, TradeChecklistItem, TradeExecution, TradeLogEntry } from "./types";
+import { hasTradeReviewContent, resolvedTradeReviewSections } from "./trade-review";
 
 export const DAILY_PORTFOLIO_SNAPSHOT_SCHEMA_VERSION = "daily-portfolio-snapshot-v1";
 
@@ -233,7 +234,7 @@ function documentationWarnings(trade: TradeLogEntry, grade: string | null, setup
   if (!trade.risk) warnings.push(warning("MISSING_INITIAL_RISK", "No planned risk is stored.", lifecycleState === "open" ? "critical" : "warning", trade));
   if (!setup) warnings.push(warning("MISSING_SETUP", "No setup is stored.", "warning", trade));
   if (!grade) warnings.push(warning("MISSING_GRADE", "No grade is stored or derivable.", "warning", trade));
-  if (!trade.notes.trim()) warnings.push(warning("MISSING_NOTES", "No notes are stored.", "warning", trade));
+  if (!trade.notes.trim() && !hasTradeReviewContent(resolvedTradeReviewSections(trade.reviewSections, trade.notes))) warnings.push(warning("MISSING_NOTES", "No structured review or legacy notes are stored.", "warning", trade));
   if (!trade.chartLinks.length) warnings.push(warning("MISSING_CHART", "No chart link is stored.", "info", trade));
   if (!trade.screenshots.length) warnings.push(warning("MISSING_SCREENSHOT", "No screenshot is stored.", "info", trade));
   if (!trade.executions.length) warnings.push(warning("MISSING_EXECUTIONS", "No executions are stored.", "critical", trade));
@@ -379,7 +380,8 @@ export function buildDailyPortfolioSnapshot(input: SnapshotInput) {
       protective_levels: stopPlan.protectiveLevels, stop_plan_provenance: stopPlan.provenance,
       remaining_risk_to_stop_dollars: round(remainingRisk), remaining_risk_to_stop_pct: remainingRisk !== null && accountValue ? round(remainingRisk / accountValue * 100) : null,
       take_profit: trade.takeProfitPrice || null, profit_taking_orders: stopPlan.profitTakingOrders, setup, grade, setup_criteria_score: score.score, setup_criteria_max: score.maximum,
-      setup_criteria_results: trade.checklistItems, mistake_tags: trade.mistakeTags, system: trade.tradeQuality || null, notes: trade.notes || null,
+      setup_criteria_results: trade.checklistItems, mistake_tags: trade.mistakeTags, system: trade.tradeQuality || null,
+      review_sections: resolvedTradeReviewSections(trade.reviewSections, trade.notes), notes: trade.notes || null,
       chart_links: trade.chartLinks, screenshot_references: trade.screenshots, partial_exits: exits, stop_change_history: null, earnings_date: null,
       execution_count: trade.executions.length, executions: sortedExecutions(trade), data_warnings: warnings
     };
@@ -411,7 +413,8 @@ export function buildDailyPortfolioSnapshot(input: SnapshotInput) {
       position_return_pct: trade.returnPercent || (trade.avgEntry && averageExit ? round((averageExit - trade.avgEntry) / trade.avgEntry * 100 * (trade.side === "SHORT" ? -1 : 1)) : null),
       planned_risk_dollars: trade.risk || null, realized_r_multiple: round(realizedR), initial_stop: null, final_stop: trade.stopPrice || null, take_profit: trade.takeProfitPrice || null,
       mfe_dollars: null, mfe_r: null, mae_dollars: null, mae_r: null, setup, grade, setup_criteria_score: score.score, setup_criteria_max: score.maximum,
-      setup_criteria_results: trade.checklistItems, mistake_tags: trade.mistakeTags, system: trade.tradeQuality || null, notes: trade.notes || null,
+      setup_criteria_results: trade.checklistItems, mistake_tags: trade.mistakeTags, system: trade.tradeQuality || null,
+      review_sections: resolvedTradeReviewSections(trade.reviewSections, trade.notes), notes: trade.notes || null,
       chart_links: trade.chartLinks, screenshot_references: trade.screenshots, documentation_warnings: warnings
     };
   });
@@ -491,7 +494,8 @@ export function renderDailyPortfolioSnapshotMarkdown(snapshot: ReturnType<typeof
   for (const position of snapshot.open_positions) {
     const protectiveLevels = position.protective_levels.map((level) => `${level.effective_quantity} @ ${formatMoney(Number(level.price))} (${level.role})`).join("; ") || "—";
     const profitOrders = position.profit_taking_orders.map((order) => `${order.quantity} @ ${formatMoney(order.price)}`).join("; ") || "—";
-    lines.push(`### ${position.ticker}`, "", `- Setup / grade: ${position.setup || "—"} / ${position.grade || "—"}`, `- P&L: unrealized ${formatMoney(position.unrealized_pnl)}; realized to date ${formatMoney(position.realized_pnl_to_date)}; lifecycle ${formatMoney(position.total_trade_pnl)}`, `- R: open ${position.open_r_multiple === null ? "—" : `${position.open_r_multiple.toFixed(2)}R`}; lifecycle ${position.lifecycle_r_multiple === null ? "—" : `${position.lifecycle_r_multiple.toFixed(2)}R`}`, `- Price: ${formatMoney(position.current_price)} at ${position.current_price_timestamp || "—"} (${position.current_price_source || "—"}, ${position.current_price_type || "—"})`, `- Stop plan: ${position.stop_plan_type}; ${protectiveLevels}`, `- Profit-taking orders: ${profitOrders}`, `- Remaining risk: ${formatMoney(position.remaining_risk_to_stop_dollars)}`, `- Criteria: ${position.setup_criteria_score ?? "—"} / ${position.setup_criteria_max ?? "—"}`, `- Notes: ${position.notes || "—"}`, `- Charts / screenshots: ${position.chart_links.length} / ${position.screenshot_references.length}`, ...position.data_warnings.map((item) => `- [${item.severity}] ${item.code}: ${item.message}`), "");
+    const review = (key: keyof typeof position.review_sections) => position.review_sections[key]?.replace(/\s*\n\s*/g, " ") || "—";
+    lines.push(`### ${position.ticker}`, "", `- Setup / grade: ${position.setup || "—"} / ${position.grade || "—"}`, `- P&L: unrealized ${formatMoney(position.unrealized_pnl)}; realized to date ${formatMoney(position.realized_pnl_to_date)}; lifecycle ${formatMoney(position.total_trade_pnl)}`, `- R: open ${position.open_r_multiple === null ? "—" : `${position.open_r_multiple.toFixed(2)}R`}; lifecycle ${position.lifecycle_r_multiple === null ? "—" : `${position.lifecycle_r_multiple.toFixed(2)}R`}`, `- Price: ${formatMoney(position.current_price)} at ${position.current_price_timestamp || "—"} (${position.current_price_source || "—"}, ${position.current_price_type || "—"})`, `- Stop plan: ${position.stop_plan_type}; ${protectiveLevels}`, `- Profit-taking orders: ${profitOrders}`, `- Remaining risk: ${formatMoney(position.remaining_risk_to_stop_dollars)}`, `- Criteria: ${position.setup_criteria_score ?? "—"} / ${position.setup_criteria_max ?? "—"}`, `- Review — setup: ${review("setup")}`, `- Review — entry: ${review("entry")}`, `- Review — exit: ${review("exit")}`, `- Review — did right: ${review("didRight")}`, `- Review — did wrong: ${review("didWrong")}`, `- Review — general: ${review("general")}`, `- Legacy notes: ${position.notes || "—"}`, `- Charts / screenshots: ${position.chart_links.length} / ${position.screenshot_references.length}`, ...position.data_warnings.map((item) => `- [${item.severity}] ${item.code}: ${item.message}`), "");
   }
   lines.push("## Trades closed during the session", "", "| Ticker | Side | Entry | Exit | Net P&L | R | Setup | Grade |", "|---|---|---:|---:|---:|---:|---|---|");
   for (const trade of snapshot.trades_closed_during_session) lines.push(`| ${trade.ticker} | ${trade.side} | ${formatMoney(trade.average_entry)} | ${formatMoney(trade.average_exit)} | ${formatMoney(trade.net_pnl)} | ${trade.realized_r_multiple ?? "—"} | ${trade.setup || "—"} | ${trade.grade || "—"} |`);

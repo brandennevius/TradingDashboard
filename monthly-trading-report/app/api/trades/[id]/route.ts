@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { deleteTrade, setTradeHidden, updateTrade } from "@/lib/store";
+import { normalizeTradeReviewSections } from "@/lib/trade-review";
 import type { TradeChecklistItem, TradeExecution, TradeLogInput, TradeSide, TradeStatus } from "@/lib/types";
 
 function numberValue(value: unknown) {
@@ -138,6 +139,7 @@ export async function PUT(request: Request, context: { params: Promise<{ id: str
     tradeQuality: String(body.tradeQuality || "").trim(),
     checklistItems: checklistItems(body.checklistItems),
     notes: String(body.notes || ""),
+    reviewSections: normalizeTradeReviewSections(body.reviewSections),
     screenshots: stringArray(body.screenshots),
     chartLinks: stringArray(body.chartLinks),
     executions: tradeExecutions(body.executions),

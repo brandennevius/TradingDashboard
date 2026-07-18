@@ -11,6 +11,7 @@ function importedTrade(): TradeLogEntry {
     stopPrice: 1079.96, takeProfitPrice: 1287.94, shares: 3, commission: 1.25, usedMargin: 3300, risk: 300,
     pnl: 25, rMultiple: 0.08, returnPercent: 0, daysInTrade: 2, setupTags: ["Breakout"], mistakeTags: [], customTags: ["CF Statement"],
     manualGrade: "A", portfolioTag: "CF_Statement", emotion: "", tradeQuality: "", checklistItems: [], notes: "Keep the linked bracket.",
+    reviewSections: { setup: "Breakout", entry: "Waited for confirmation", exit: "", didRight: "Sized correctly", didWrong: "", general: "" },
     screenshots: ["chart.png"], chartLinks: ["https://example.test/lly"], executions: [
       { id: "entry", type: "ENTRY", date: "2026-07-15", time: "10:00:00", side: "LONG", shares: 3, price: 1100, pnl: 0, commission: 1.25, source: "broker", sourceKey: "entry" }
     ], hidden: false, groupId: "", groupRole: "none", createdAt: "2026-07-17T16:00:00Z", updatedAt: "2026-07-17T16:00:00Z"
@@ -49,6 +50,7 @@ test("replaying the same July 17 import leaves broker trades and manual fields u
   assert.equal(state.trades[0].pnl, original.pnl);
   assert.equal(state.trades[0].shares, original.shares);
   assert.equal(state.trades[0].notes, original.notes);
+  assert.deepEqual(state.trades[0].reviewSections, original.reviewSections);
   assert.equal(state.trades[0].manualGrade, original.manualGrade);
   assert.deepEqual(state.trades[0].setupTags, original.setupTags);
   assert.equal(state.trades[0].stopPrice, original.stopPrice);

@@ -51,6 +51,7 @@ function applyManualFields(rebuiltTrade: TradeLogInput, existingTrades: TradeLog
     tradeQuality: existing.tradeQuality || rebuiltTrade.tradeQuality,
     checklistItems: existing.checklistItems.length ? existing.checklistItems : rebuiltTrade.checklistItems,
     notes: existing.notes || rebuiltTrade.notes,
+    reviewSections: existing.reviewSections || rebuiltTrade.reviewSections,
     screenshots: existing.screenshots.length ? existing.screenshots : rebuiltTrade.screenshots,
     chartLinks: existing.chartLinks.length ? existing.chartLinks : rebuiltTrade.chartLinks,
     hidden: exact ? existing.hidden : rebuiltTrade.hidden

@@ -32,10 +32,12 @@ import type {
   SetupTemplateCriterion,
   TradeChecklistItem,
   TradeLogEntry,
+  TradeReviewSections,
   TradeSide,
   TraderUser
 } from "@/lib/types";
 import { displayTradeReturnPercent, tradeReturnLabel } from "@/lib/trade-return";
+import { emptyTradeReviewSections, hasTradeReviewContent, resolvedTradeReviewSections } from "@/lib/trade-review";
 import BrandenSidebar from "./components/BrandenSidebar";
 
 const BottomToBullChecklist = dynamic(() => import("./components/BottomToBullChecklist"), {
@@ -150,6 +152,7 @@ type TradeFormState = {
   manualGrade: string;
   checklistItems: TradeChecklistItem[];
   notes: string;
+  reviewSections: TradeReviewSections;
   screenshots: string[];
   chartLinks: string[];
   executions: TradeLogEntry["executions"];
@@ -241,31 +244,6 @@ const defaultChecklistGradeBands: ChecklistGradeBand[] = [
   { id: "grade-b", label: "B", minScore: 6, maxScore: 6 },
   { id: "grade-c", label: "C", minScore: 0, maxScore: 5 }
 ];
-const tradeNotesTemplate = `Setup:
-
-What did I do right:
-
-What did I do wrong:
-
-Exit strategy:`;
-
-function withTradeNotesTemplate(notes: string) {
-  const currentNotes = String(notes || "");
-  const normalized = currentNotes.toLowerCase();
-  const hasTemplate =
-    normalized.includes("setup:") &&
-    normalized.includes("what did i do right:") &&
-    normalized.includes("what did i do wrong:") &&
-    normalized.includes("exit strategy:");
-
-  if (hasTemplate) {
-    return currentNotes;
-  }
-
-  const trimmed = currentNotes.trimEnd();
-  return trimmed ? `${trimmed}\n\n${tradeNotesTemplate}` : tradeNotesTemplate;
-}
-
 const emptyForm: FormState = {
   month: new Date().toISOString().slice(0, 7),
   accountSize: 0,
@@ -322,7 +300,8 @@ const emptyTradeForm: TradeFormState = {
   customTags: "",
   manualGrade: "",
   checklistItems: [],
-  notes: tradeNotesTemplate,
+  notes: "",
+  reviewSections: { ...emptyTradeReviewSections },
   screenshots: [],
   chartLinks: [],
   executions: []
@@ -1099,7 +1078,8 @@ function tradeToForm(trade: TradeLogEntry, templates: SetupChecklistTemplate[]):
     customTags: trade.customTags.join(", "),
     manualGrade: trade.manualGrade || "",
     checklistItems: resolvedTradeChecklistItems(trade, templates),
-    notes: withTradeNotesTemplate(trade.notes),
+    notes: trade.notes || "",
+    reviewSections: resolvedTradeReviewSections(trade.reviewSections, trade.notes),
     screenshots: trade.screenshots,
     chartLinks: trade.chartLinks || [],
     executions: trade.executions || []
@@ -1348,7 +1328,8 @@ async function parseExcelTradeLogWorkbook(file: File): Promise<ExcelTradeDraft[]
         mistakeTags: String(row[indexes.mistake] || "").trim(),
         customTags: ["Imported", "Excel Trade Log", ...importTags].join(", "),
         manualGrade: importedGrade,
-        notes: withTradeNotesTemplate(String(row[indexes.notes] || "").trim()),
+        notes: String(row[indexes.notes] || "").trim(),
+        reviewSections: { ...emptyTradeReviewSections },
         chartLinks: chartLink ? [chartLink] : [],
         importedPnl: pnl,
         importedRMultiple: risk ? pnl / risk : 0,
@@ -1472,9 +1453,10 @@ function parseBrokerStatementTrades(csvText: string): TradeFormState[] {
 }
 
 function tradeNeedsReview(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
+  const hasReview = hasTradeReviewContent(resolvedTradeReviewSections(trade.reviewSections, trade.notes));
   return (
     !numberValue(trade.risk) ||
-    !trade.notes.trim() ||
+    (!trade.notes.trim() && !hasReview) ||
     (!trade.screenshots.length && !(trade.chartLinks || []).length) ||
     !resolvedTradeChecklistItems(trade, templates).length
   );
@@ -2508,6 +2490,14 @@ export default function Home() {
     setEditTradeForm((current) => ({
       ...current,
       [key]: value
+    }));
+  }
+
+  function updateTradeReviewField(target: "create" | "edit", key: keyof TradeReviewSections, value: string) {
+    const setter = target === "create" ? setTradeForm : setEditTradeForm;
+    setter((current) => ({
+      ...current,
+      reviewSections: { ...current.reviewSections, [key]: value }
     }));
   }
 
@@ -4077,6 +4067,12 @@ export default function Home() {
       "custom_tags",
       "manual_grade",
       "needs_review",
+      "review_setup",
+      "review_entry",
+      "review_exit",
+      "review_did_right",
+      "review_did_wrong",
+      "review_general",
       "notes",
       "screenshots",
       "chart_links"
@@ -4090,6 +4086,7 @@ export default function Home() {
       }
 
       exportedIds.add(`${rowType}:${trade.id}`);
+      const review = resolvedTradeReviewSections(trade.reviewSections, trade.notes);
       rows.push([
         rowType,
         visibleInTable ? "yes" : "no",
@@ -4122,6 +4119,12 @@ export default function Home() {
         trade.customTags,
         trade.manualGrade,
         tradeNeedsReview(trade, setupTemplates) ? "yes" : "no",
+        review.setup,
+        review.entry,
+        review.exit,
+        review.didRight,
+        review.didWrong,
+        review.general,
         trade.notes,
         trade.screenshots,
         trade.chartLinks
@@ -5605,16 +5608,37 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-                <label className="trade-form-notes">
-                  Notes <span className="review-required-marker" title="Required to clear Needs Review">*</span>
-                  <textarea
-                    className="trade-detail-notes-textarea"
-                    value={editTradeForm.notes}
-                    onChange={(event) => updateEditTradeField("notes", event.target.value)}
-                    placeholder="Entry reason, management, exit reason, what to improve."
-                    disabled={selectedTrade.userId !== user.id}
-                  />
-                </label>
+                <div className="trade-form-grid">
+                  {([
+                    ["setup", "Setup"],
+                    ["entry", "Entry"],
+                    ["exit", "Exit"],
+                    ["didRight", "What did I do right"],
+                    ["didWrong", "What did I do wrong"],
+                    ["general", "General review"]
+                  ] as Array<[keyof TradeReviewSections, string]>).map(([key, label]) => (
+                    <label className="trade-form-notes" key={key}>
+                      {label}
+                      <textarea
+                        className="trade-detail-notes-textarea"
+                        value={editTradeForm.reviewSections[key]}
+                        onChange={(event) => updateTradeReviewField("edit", key, event.target.value)}
+                        disabled={selectedTrade.userId !== user.id}
+                      />
+                    </label>
+                  ))}
+                </div>
+                {editTradeForm.notes ? (
+                  <label className="trade-form-notes">
+                    Legacy notes (preserved)
+                    <textarea
+                      className="trade-detail-notes-textarea"
+                      value={editTradeForm.notes}
+                      onChange={(event) => updateEditTradeField("notes", event.target.value)}
+                      disabled={selectedTrade.userId !== user.id}
+                    />
+                  </label>
+                ) : null}
               </article>
 
 	              <article className="trade-detail-section">
@@ -6259,10 +6283,24 @@ export default function Home() {
                   </div>
                 </div>
                 {renderChecklistEditor("create", tradeForm)}
-                <label>
-                  Notes
-                  <textarea value={tradeForm.notes} onChange={(event) => updateTradeField("notes", event.target.value)} placeholder="Entry reason, management, exit reason, what to improve." />
-                </label>
+                <div className="trade-form-grid">
+                  {([
+                    ["setup", "Setup"],
+                    ["entry", "Entry"],
+                    ["exit", "Exit"],
+                    ["didRight", "What did I do right"],
+                    ["didWrong", "What did I do wrong"],
+                    ["general", "General review"]
+                  ] as Array<[keyof TradeReviewSections, string]>).map(([key, label]) => (
+                    <label key={key}>
+                      {label}
+                      <textarea
+                        value={tradeForm.reviewSections[key]}
+                        onChange={(event) => updateTradeReviewField("create", key, event.target.value)}
+                      />
+                    </label>
+                  ))}
+                </div>
                 {tradeForm.screenshots.length ? (
                   <div className="trade-screenshot-strip">
                     {tradeForm.screenshots.map((screenshot, index) => (

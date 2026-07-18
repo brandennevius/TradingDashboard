@@ -1,4 +1,5 @@
 import type { TradeExecution, TradeLogEntry, TradeLogInput } from "./types";
+import { normalizeTradeReviewSections } from "./trade-review";
 
 export type CfWorkingOrderMetadata = {
   orderId: string;
@@ -20,7 +21,8 @@ function tradeFingerprint(trade: TradeLogEntry | TradeLogInput) {
     rMultiple: trade.rMultiple, returnPercent: trade.returnPercent, daysInTrade: trade.daysInTrade,
     setupTags: trade.setupTags, mistakeTags: trade.mistakeTags, customTags: trade.customTags, manualGrade: trade.manualGrade,
     portfolioTag: trade.portfolioTag, emotion: trade.emotion, tradeQuality: trade.tradeQuality,
-    checklistItems: trade.checklistItems, notes: trade.notes, screenshots: trade.screenshots, chartLinks: trade.chartLinks,
+    checklistItems: trade.checklistItems, notes: trade.notes, reviewSections: normalizeTradeReviewSections(trade.reviewSections),
+    screenshots: trade.screenshots, chartLinks: trade.chartLinks,
     executions: trade.executions, hidden: Boolean(trade.hidden)
   });
 }

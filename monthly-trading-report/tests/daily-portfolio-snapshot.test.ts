@@ -15,6 +15,7 @@ import {
 import { buildDailySnapshotRequestBody, snapshotSessionFromRequestBody } from "../lib/daily-portfolio-snapshot-request";
 import { generateDailyPortfolioSnapshot, SnapshotValidationError } from "../lib/daily-portfolio-snapshot-server";
 import { sendDailyPortfolioSnapshotEmail, snapshotEmailConfiguration } from "../lib/snapshot-email";
+import { reviewSectionsFromLegacyNotes } from "../lib/trade-review";
 import type { TradeLogEntry } from "../lib/types";
 
 function trade(overrides: Partial<TradeLogEntry> = {}): TradeLogEntry {
@@ -66,6 +67,33 @@ test("snapshot status reflects final warning severity", () => {
   assert.equal(snapshotStatusFromWarnings([]), "COMPLETE");
   assert.equal(snapshotStatusFromWarnings([{ code: "BROKER_IMPORT_UNRELATED_ROWS_NEED_REVIEW", message: "Historical row", severity: "warning" }]), "COMPLETE_WITH_WARNINGS");
   assert.equal(snapshotStatusFromWarnings([{ code: "CURRENT_PRICE_STALE", message: "Current price missing", severity: "critical" }]), "INCOMPLETE");
+});
+
+test("legacy labeled notes are split deterministically without changing the original notes", () => {
+  const notes = `Setup:\nCup with handle\n\nWhat did I do right:\nWaited for volume\n\nWhat did I do wrong:\nSized too quickly\n\nExit strategy:\nSell into weakness`;
+  assert.deepEqual(reviewSectionsFromLegacyNotes(notes), {
+    setup: "Cup with handle",
+    entry: "",
+    exit: "Sell into weakness",
+    didRight: "Waited for volume",
+    didWrong: "Sized too quickly",
+    general: ""
+  });
+  const snapshot = buildDailyPortfolioSnapshot(input([trade({ notes })]));
+  assert.equal(snapshot.open_positions[0].review_sections.setup, "Cup with handle");
+  assert.equal(snapshot.open_positions[0].review_sections.exit, "Sell into weakness");
+  assert.equal(snapshot.open_positions[0].notes, notes);
+  assert(!snapshot.open_positions[0].data_warnings.some((warning) => warning.code === "MISSING_NOTES"));
+});
+
+test("structured review fields are emitted independently of legacy notes", () => {
+  const snapshot = buildDailyPortfolioSnapshot(input([trade({
+    notes: "",
+    reviewSections: { setup: "Pullback", entry: "50-day support", exit: "", didRight: "Followed risk", didWrong: "", general: "" }
+  })]));
+  assert.equal(snapshot.open_positions[0].review_sections.entry, "50-day support");
+  assert.equal(snapshot.open_positions[0].notes, null);
+  assert(!snapshot.open_positions[0].data_warnings.some((warning) => warning.code === "MISSING_NOTES"));
 });
 
 test("New York market timestamps carry the correct daylight-saving offset", () => {

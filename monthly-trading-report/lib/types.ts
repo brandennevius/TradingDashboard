@@ -155,6 +155,7 @@ export type TradeLogEntry = {
   tradeQuality: string;
   checklistItems: TradeChecklistItem[];
   notes: string;
+  reviewSections?: TradeReviewSections;
   screenshots: string[];
   chartLinks: string[];
   executions: TradeExecution[];
@@ -163,6 +164,15 @@ export type TradeLogEntry = {
   groupRole: "none" | "parent" | "child";
   createdAt: string;
   updatedAt: string;
+};
+
+export type TradeReviewSections = {
+  setup: string;
+  entry: string;
+  exit: string;
+  didRight: string;
+  didWrong: string;
+  general: string;
 };
 
 export type TradeExecution = {
@@ -214,11 +224,12 @@ export type WeeklyWatchlist = {
   updatedAt: string;
 };
 
-export type TradeLogInput = Omit<TradeLogEntry, "id" | "createdAt" | "updatedAt" | "hidden" | "groupId" | "groupRole" | "executions"> & {
+export type TradeLogInput = Omit<TradeLogEntry, "id" | "createdAt" | "updatedAt" | "hidden" | "groupId" | "groupRole" | "executions" | "reviewSections"> & {
   hidden?: boolean;
   groupId?: string;
   groupRole?: TradeLogEntry["groupRole"];
   executions?: TradeExecution[];
+  reviewSections?: TradeReviewSections;
 };
 
 export type MarketCycleEntry = {

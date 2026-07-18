@@ -3,6 +3,7 @@ import crypto from "crypto";
 import path from "path";
 import { Pool, type PoolClient } from "pg";
 import { runAtomicCfImport, type CfWorkingOrderMetadata } from "./cf-import-idempotency";
+import { normalizeTradeReviewSections } from "./trade-review";
 import type {
   ChecklistGradeBand,
   ChecklistInputType,
@@ -117,6 +118,7 @@ const tradeColumns = [
   "trade_quality",
   "checklist_items",
   "notes",
+  "review_sections",
   "screenshots",
   "chart_links",
   "executions",
@@ -382,6 +384,7 @@ function rowToTrade(row: Record<string, unknown>): TradeLogEntry {
     tradeQuality: String(row.trade_quality || ""),
     checklistItems: checklistItems(row.checklist_items),
     notes: String(row.notes || ""),
+    reviewSections: normalizeTradeReviewSections(row.review_sections),
     screenshots: stringArray(row.screenshots),
     chartLinks: stringArray(row.chart_links),
     executions: tradeExecutions(row.executions),
@@ -493,6 +496,7 @@ function mergeCfImportIntoExisting(existing: TradeLogEntry, input: TradeLogInput
     tradeQuality: input.tradeQuality || existing.tradeQuality || "",
     checklistItems: input.checklistItems.length ? input.checklistItems : existing.checklistItems,
     notes: input.notes || existing.notes || "",
+    reviewSections: normalizeTradeReviewSections(input.reviewSections || existing.reviewSections),
     screenshots: input.screenshots.length ? input.screenshots : existing.screenshots,
     chartLinks: input.chartLinks.length ? input.chartLinks : existing.chartLinks,
     executions: input.executions?.length ? input.executions : existing.executions
@@ -549,6 +553,7 @@ function mergeCfContinuationIntoOpenTrade(existing: TradeLogEntry, input: TradeL
     tradeQuality: input.tradeQuality || existing.tradeQuality || "",
     checklistItems: input.checklistItems.length ? input.checklistItems : existing.checklistItems,
     notes: existing.notes || input.notes || "",
+    reviewSections: normalizeTradeReviewSections(existing.reviewSections || input.reviewSections),
     screenshots: existing.screenshots.length ? existing.screenshots : input.screenshots,
     chartLinks: existing.chartLinks.length ? existing.chartLinks : input.chartLinks,
     executions
@@ -794,6 +799,7 @@ async function ensureTradeTable() {
       trade_quality text not null default '',
       checklist_items jsonb not null default '[]'::jsonb,
       notes text not null default '',
+      review_sections jsonb not null default '{}'::jsonb,
       screenshots jsonb not null default '[]'::jsonb,
       chart_links jsonb not null default '[]'::jsonb,
       executions jsonb not null default '[]'::jsonb,
@@ -805,6 +811,7 @@ async function ensureTradeTable() {
     );
   `);
   await db.query("alter table trade_logs add column if not exists checklist_items jsonb not null default '[]'::jsonb");
+  await db.query("alter table trade_logs add column if not exists review_sections jsonb not null default '{}'::jsonb");
   await db.query("alter table trade_logs add column if not exists chart_links jsonb not null default '[]'::jsonb");
   await db.query("alter table trade_logs add column if not exists executions jsonb not null default '[]'::jsonb");
   await db.query("alter table trade_logs add column if not exists manual_grade text not null default ''");
@@ -870,7 +877,10 @@ async function readLocalTrades(): Promise<TradeLogEntry[]> {
 
   try {
     const raw = await fs.readFile(localTradesFile, "utf8");
-    return JSON.parse(raw) as TradeLogEntry[];
+    return (JSON.parse(raw) as TradeLogEntry[]).map((trade) => ({
+      ...trade,
+      reviewSections: normalizeTradeReviewSections(trade.reviewSections)
+    }));
   } catch {
     return [];
   }
@@ -2729,6 +2739,7 @@ async function replaceCfStatementTradesWithClient(client: PoolClient, userId: st
         trade.tradeQuality || "",
         JSON.stringify(trade.checklistItems),
         trade.notes,
+        JSON.stringify(normalizeTradeReviewSections(trade.reviewSections)),
         JSON.stringify(trade.screenshots),
         JSON.stringify(trade.chartLinks || []),
         JSON.stringify(trade.executions || []),
@@ -2742,12 +2753,12 @@ async function replaceCfStatementTradesWithClient(client: PoolClient, userId: st
           insert into trade_logs (
             id, user_id, import_source, import_row_key, symbol, side, status, entry_date, exit_date, open_time, close_time, avg_entry, exit_price,
             stop_price, take_profit_price, shares, commission, used_margin, risk, pnl, r_multiple, return_percent, days_in_trade, setup_tags,
-            mistake_tags, custom_tags, manual_grade, portfolio_tag, emotion, trade_quality, checklist_items, notes, screenshots, chart_links, executions, hidden, group_id, group_role
+            mistake_tags, custom_tags, manual_grade, portfolio_tag, emotion, trade_quality, checklist_items, notes, review_sections, screenshots, chart_links, executions, hidden, group_id, group_role
           )
           values (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
             $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-            $21, $22, $23, $24::jsonb, $25::jsonb, $26::jsonb, $27, $28, $29, $30, $31::jsonb, $32, $33::jsonb, $34::jsonb, $35::jsonb, $36, $37, $38
+            $21, $22, $23, $24::jsonb, $25::jsonb, $26::jsonb, $27, $28, $29, $30, $31::jsonb, $32, $33::jsonb, $34::jsonb, $35::jsonb, $36::jsonb, $37, $38, $39
           )
         `,
         values
@@ -3029,6 +3040,7 @@ export async function upsertTrade(input: TradeLogInput) {
     mergedInput.tradeQuality || "",
     JSON.stringify(mergedInput.checklistItems),
     mergedInput.notes,
+    JSON.stringify(normalizeTradeReviewSections(mergedInput.reviewSections)),
     JSON.stringify(mergedInput.screenshots),
     JSON.stringify(mergedInput.chartLinks || []),
     JSON.stringify(mergedInput.executions || []),
@@ -3042,12 +3054,12 @@ export async function upsertTrade(input: TradeLogInput) {
       insert into trade_logs (
         id, user_id, import_source, import_row_key, symbol, side, status, entry_date, exit_date, open_time, close_time, avg_entry, exit_price,
         stop_price, take_profit_price, shares, commission, used_margin, risk, pnl, r_multiple, return_percent, days_in_trade, setup_tags,
-        mistake_tags, custom_tags, manual_grade, portfolio_tag, emotion, trade_quality, checklist_items, notes, screenshots, chart_links, executions, hidden, group_id, group_role
+        mistake_tags, custom_tags, manual_grade, portfolio_tag, emotion, trade_quality, checklist_items, notes, review_sections, screenshots, chart_links, executions, hidden, group_id, group_role
       )
       values (
         $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-        $21, $22, $23, $24::jsonb, $25::jsonb, $26::jsonb, $27, $28, $29, $30, $31::jsonb, $32, $33::jsonb, $34::jsonb, $35::jsonb, $36, $37, $38
+        $21, $22, $23, $24::jsonb, $25::jsonb, $26::jsonb, $27, $28, $29, $30, $31::jsonb, $32, $33::jsonb, $34::jsonb, $35::jsonb, $36::jsonb, $37, $38, $39
       )
       on conflict (id) do update set
         import_source = excluded.import_source,
@@ -3080,6 +3092,7 @@ export async function upsertTrade(input: TradeLogInput) {
         trade_quality = excluded.trade_quality,
         checklist_items = excluded.checklist_items,
         notes = excluded.notes,
+        review_sections = excluded.review_sections,
         screenshots = excluded.screenshots,
         chart_links = excluded.chart_links,
         executions = excluded.executions,
@@ -3125,6 +3138,7 @@ export async function updateTrade(id: string, userId: string, input: TradeLogInp
       usedMargin: input.usedMargin || 0,
       emotion: input.emotion || "",
       tradeQuality: input.tradeQuality || "",
+      reviewSections: normalizeTradeReviewSections(input.reviewSections || existing.reviewSections),
       executions: input.executions || existing.executions || [],
       groupId: "",
       groupRole: "none",
@@ -3173,6 +3187,7 @@ export async function updateTrade(id: string, userId: string, input: TradeLogInp
     input.tradeQuality || "",
     JSON.stringify(input.checklistItems),
     input.notes,
+    JSON.stringify(normalizeTradeReviewSections(input.reviewSections)),
     JSON.stringify(input.screenshots),
     JSON.stringify(input.chartLinks || []),
     JSON.stringify(input.executions || [])
@@ -3210,9 +3225,10 @@ export async function updateTrade(id: string, userId: string, input: TradeLogInp
         trade_quality = $29,
         checklist_items = $30::jsonb,
         notes = $31,
-        screenshots = $32::jsonb,
-        chart_links = $33::jsonb,
-        executions = $34::jsonb,
+        review_sections = $32::jsonb,
+        screenshots = $33::jsonb,
+        chart_links = $34::jsonb,
+        executions = $35::jsonb,
         updated_at = now()
       where id = $1 and user_id = $2
       returning ${tradeColumns};
@@ -3893,12 +3909,12 @@ export async function importBrandenJournalBackup(value: unknown) {
             id,user_id,import_source,import_row_key,symbol,side,status,entry_date,exit_date,open_time,close_time,
             avg_entry,exit_price,stop_price,take_profit_price,shares,commission,used_margin,risk,pnl,r_multiple,
             return_percent,days_in_trade,setup_tags,mistake_tags,custom_tags,manual_grade,portfolio_tag,emotion,
-            trade_quality,checklist_items,notes,screenshots,chart_links,executions,hidden,group_id,group_role,
+            trade_quality,checklist_items,notes,review_sections,screenshots,chart_links,executions,hidden,group_id,group_role,
             created_at,updated_at
           ) values (
             $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,
-            $24::jsonb,$25::jsonb,$26::jsonb,$27,$28,$29,$30,$31::jsonb,$32,$33::jsonb,$34::jsonb,
-            $35::jsonb,$36,$37,$38,$39,$40
+            $24::jsonb,$25::jsonb,$26::jsonb,$27,$28,$29,$30,$31::jsonb,$32,$33::jsonb,$34::jsonb,$35::jsonb,
+            $36::jsonb,$37,$38,$39,$40,$41
           )
         `,
         [
@@ -3908,7 +3924,7 @@ export async function importBrandenJournalBackup(value: unknown) {
           trade.pnl, trade.rMultiple, trade.returnPercent, trade.daysInTrade, JSON.stringify(trade.setupTags),
           JSON.stringify(trade.mistakeTags), JSON.stringify(trade.customTags), trade.manualGrade,
           trade.portfolioTag, trade.emotion, trade.tradeQuality, JSON.stringify(trade.checklistItems), trade.notes,
-          JSON.stringify(trade.screenshots), JSON.stringify(trade.chartLinks), JSON.stringify(trade.executions),
+          JSON.stringify(normalizeTradeReviewSections(trade.reviewSections)), JSON.stringify(trade.screenshots), JSON.stringify(trade.chartLinks), JSON.stringify(trade.executions),
           trade.hidden, trade.groupId || "", trade.groupRole || "none", trade.createdAt, trade.updatedAt
         ]
       );
