@@ -1,4 +1,4 @@
-import type { TradeLogEntry, TradeLogInput } from "./types";
+import type { TradeExecution, TradeLogEntry, TradeLogInput } from "./types";
 
 export type CfWorkingOrderMetadata = {
   orderId: string;
@@ -30,6 +30,25 @@ export function cfImportTradesEquivalent(existing: TradeLogEntry[], incoming: Tr
   const existingFingerprints = existing.map(tradeFingerprint).sort();
   const incomingFingerprints = incoming.map(tradeFingerprint).sort();
   return existingFingerprints.every((fingerprint, index) => fingerprint === incomingFingerprints[index]);
+}
+
+function brokerTransactionKey(execution: TradeExecution) {
+  const transactionId = String(execution.sourceKey || execution.id || "").replace(/^cf-transaction:/, "");
+  const direction = execution.type === "ENTRY"
+    ? execution.side === "LONG" ? "Buy" : "Sell"
+    : execution.side === "LONG" ? "Sell" : "Buy";
+  return transactionId ? `${transactionId}|${direction}` : "";
+}
+
+export function mergeCfExecutionHistory(existing: TradeExecution[], currentStatement: TradeExecution[]) {
+  const currentKeys = new Set(currentStatement.map(brokerTransactionKey).filter(Boolean));
+  return [
+    ...existing.filter((execution) => {
+      const key = brokerTransactionKey(execution);
+      return !key || !currentKeys.has(key);
+    }),
+    ...currentStatement
+  ];
 }
 
 export function replaceActiveWorkingOrders(orders: CfWorkingOrderMetadata[]) {

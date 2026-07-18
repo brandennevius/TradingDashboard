@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCfTradesFromExecutionHistory, type ParsedOpenPositionRow } from "../lib/cf-statement";
-import { cfImportTradesEquivalent, replaceActiveWorkingOrders, runAtomicCfImport, type CfWorkingOrderMetadata } from "../lib/cf-import-idempotency";
+import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders, runAtomicCfImport, type CfWorkingOrderMetadata } from "../lib/cf-import-idempotency";
 import type { TradeLogEntry, TradeLogInput } from "../lib/types";
 
 function importedTrade(): TradeLogEntry {
@@ -74,6 +74,24 @@ test("the CF execution-history rebuild is idempotent for executions, commissions
   assert.equal(second[0].shares, first[0].shares);
   assert.equal(second[0].stopPrice, first[0].stopPrice);
   assert.equal(second[0].takeProfitPrice, first[0].takeProfitPrice);
+});
+
+test("the current statement replaces matching transaction IDs instead of accumulating P&L on every replay", () => {
+  const currentDxcm = {
+    ...importedTrade().executions[0], id: "dxcm-current", type: "EXIT" as const, side: "LONG" as const,
+    sourceKey: "cf-transaction:dxcm-close", source: "DXCM", shares: 10, price: 74, pnl: -3, commission: 1
+  };
+  const previouslyAccumulated = { ...currentDxcm, id: "dxcm-stored", pnl: -6, commission: 2 };
+  const olderTransaction = { ...currentDxcm, id: "older", sourceKey: "cf-transaction:older-close", pnl: -119.4 };
+  const once = mergeCfExecutionHistory([olderTransaction, previouslyAccumulated], [currentDxcm]);
+  const twice = mergeCfExecutionHistory(once, [currentDxcm]);
+  const threeTimes = mergeCfExecutionHistory(twice, [currentDxcm]);
+  assert.equal(once.length, 2);
+  assert.equal(once.find((execution) => execution.sourceKey === currentDxcm.sourceKey)?.pnl, -3);
+  assert.equal(once.find((execution) => execution.sourceKey === currentDxcm.sourceKey)?.commission, 1);
+  assert.deepEqual(twice, once);
+  assert.deepEqual(threeTimes, once);
+  assert.equal(threeTimes.reduce((sum, execution) => sum + execution.pnl, 0), -122.4);
 });
 
 test("working orders replace by current statement state without duplicates or stale removed orders", () => {

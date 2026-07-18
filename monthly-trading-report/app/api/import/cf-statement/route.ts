@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { buildCfTradesFromExecutionHistory, parseCfStatementText } from "@/lib/cf-statement";
-import { cfImportTradesEquivalent, replaceActiveWorkingOrders } from "@/lib/cf-import-idempotency";
+import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders } from "@/lib/cf-import-idempotency";
 import {
   listCfStatementTrades,
   replaceCfStatementImport,
@@ -106,7 +106,9 @@ export async function POST(request: Request) {
 
     const existingCfTrades = await listCfStatementTrades(user.id, portfolioTag);
     const existingKeys = new Set(existingCfTrades.map((trade) => trade.importRowKey));
-    const executionHistory = [...existingCfTrades, ...statementTrades].flatMap(executionHistoryFromTrade);
+    const existingExecutionHistory = existingCfTrades.flatMap(executionHistoryFromTrade);
+    const statementExecutionHistory = statementTrades.flatMap(executionHistoryFromTrade);
+    const executionHistory = mergeCfExecutionHistory(existingExecutionHistory, statementExecutionHistory);
     const rebuiltTrades = buildCfTradesFromExecutionHistory(
       executionHistory,
       parsedStatement.openPositions,
