@@ -5608,7 +5608,7 @@ export default function Home() {
                     </div>
                   </div>
                 </div>
-                <div className="trade-form-grid">
+                <div className="trade-review-row-list">
                   {([
                     ["setup", "Setup"],
                     ["entry", "Entry"],
@@ -5617,28 +5617,30 @@ export default function Home() {
                     ["didWrong", "What did I do wrong"],
                     ["general", "General review"]
                   ] as Array<[keyof TradeReviewSections, string]>).map(([key, label]) => (
-                    <label className="trade-form-notes" key={key}>
+                    <label key={key}>
                       {label}
                       <textarea
-                        className="trade-detail-notes-textarea"
+                        className="trade-review-row-textarea"
+                        rows={2}
                         value={editTradeForm.reviewSections[key]}
                         onChange={(event) => updateTradeReviewField("edit", key, event.target.value)}
                         disabled={selectedTrade.userId !== user.id}
                       />
                     </label>
                   ))}
+                  {editTradeForm.notes ? (
+                    <label>
+                      Legacy notes (preserved)
+                      <textarea
+                        className="trade-review-row-textarea"
+                        rows={3}
+                        value={editTradeForm.notes}
+                        onChange={(event) => updateEditTradeField("notes", event.target.value)}
+                        disabled={selectedTrade.userId !== user.id}
+                      />
+                    </label>
+                  ) : null}
                 </div>
-                {editTradeForm.notes ? (
-                  <label className="trade-form-notes">
-                    Legacy notes (preserved)
-                    <textarea
-                      className="trade-detail-notes-textarea"
-                      value={editTradeForm.notes}
-                      onChange={(event) => updateEditTradeField("notes", event.target.value)}
-                      disabled={selectedTrade.userId !== user.id}
-                    />
-                  </label>
-                ) : null}
               </article>
 
 	              <article className="trade-detail-section">
@@ -6283,7 +6285,7 @@ export default function Home() {
                   </div>
                 </div>
                 {renderChecklistEditor("create", tradeForm)}
-                <div className="trade-form-grid">
+                <div className="trade-review-row-list">
                   {([
                     ["setup", "Setup"],
                     ["entry", "Entry"],
@@ -6295,6 +6297,8 @@ export default function Home() {
                     <label key={key}>
                       {label}
                       <textarea
+                        className="trade-review-row-textarea"
+                        rows={2}
                         value={tradeForm.reviewSections[key]}
                         onChange={(event) => updateTradeReviewField("create", key, event.target.value)}
                       />

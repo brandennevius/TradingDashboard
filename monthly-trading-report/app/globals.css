@@ -5888,6 +5888,32 @@ th {
   min-height: 480px;
 }
 
+.trade-review-row-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.trade-review-row-list label {
+  align-items: start;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(150px, 190px) minmax(0, 1fr);
+}
+
+.trade-review-row-textarea {
+  height: 58px;
+  min-height: 58px;
+  resize: vertical;
+}
+
+@media (max-width: 760px) {
+  .trade-review-row-list label {
+    gap: 6px;
+    grid-template-columns: 1fr;
+  }
+}
+
 .trade-price-chart-toolbar {
   align-items: center;
   display: flex;
