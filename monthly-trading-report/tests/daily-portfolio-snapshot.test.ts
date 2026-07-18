@@ -57,6 +57,9 @@ test("request-body date takes precedence and preserves the selected value", () =
   assert.deepEqual(buildDailySnapshotRequestBody(" 2026-07-16 ", " CF_Statement ", false), {
     session: "2026-07-16", accountName: "CF_Statement", sendEmail: false
   });
+  assert.deepEqual(buildDailySnapshotRequestBody(" 2026-07-17 ", " CF_Statement ", true), {
+    session: "2026-07-17", accountName: "CF_Statement", sendEmail: true
+  });
 });
 
 test("snapshot status reflects final warning severity", () => {
@@ -482,6 +485,26 @@ test("server can return browser download payloads without writing deployment fil
 
 test("email is disabled by default and test transport receives no credentials", async () => {
   assert.equal(snapshotEmailConfiguration({}).configured, false);
+  assert.deepEqual(snapshotEmailConfiguration({
+    SNAPSHOT_SMTP_HOST: "smtp.gmail.com",
+    SNAPSHOT_SMTP_PORT: "465",
+    SNAPSHOT_SMTP_SECURE: "true",
+    SNAPSHOT_SMTP_USERNAME: "sender@example.test",
+    SNAPSHOT_SMTP_PASSWORD: "app-password",
+    SNAPSHOT_EMAIL_FROM: "sender@example.test",
+    SNAPSHOT_EMAIL_TO: "recipient@example.test"
+  }), {
+    configured: true,
+    values: {
+      host: "smtp.gmail.com",
+      port: 465,
+      secure: true,
+      username: "sender@example.test",
+      password: "app-password",
+      from: "sender@example.test",
+      to: "recipient@example.test"
+    }
+  });
   const snapshot = buildDailyPortfolioSnapshot(input([trade()]));
   let message: Record<string, unknown> | undefined;
   const result = await sendDailyPortfolioSnapshotEmail({

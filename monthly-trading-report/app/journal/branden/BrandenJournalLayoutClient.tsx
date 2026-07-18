@@ -156,13 +156,18 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
       const reportedLatestSession = data.datePath?.latestCompletedSession || data.diagnostic?.latestCompletedSession || "";
       if (reportedLatestSession) setLatestCompletedSnapshotSession(reportedLatestSession);
       if (!response.ok) throw new Error(formatSnapshotValidationError(data));
-      const JSZip = (await import("jszip")).default;
-      const archive = new JSZip();
-      archive.file(data.filenames.json, `${JSON.stringify(data.snapshot, null, 2)}\n`);
-      archive.file(data.filenames.markdown, data.markdown);
-      const bundle = await archive.generateAsync({ type: "blob" });
-      downloadBlob(data.filenames.json.replace(/\.json$/i, ".zip"), bundle);
-      const emailMessage = sendEmail ? ` Email: ${data.email?.status || "unknown"}.` : "";
+      if (sendEmail && data.email?.status !== "sent") {
+        throw new Error(data.email?.reason || "The snapshot was generated, but email delivery is not configured.");
+      }
+      if (!sendEmail) {
+        const JSZip = (await import("jszip")).default;
+        const archive = new JSZip();
+        archive.file(data.filenames.json, `${JSON.stringify(data.snapshot, null, 2)}\n`);
+        archive.file(data.filenames.markdown, data.markdown);
+        const bundle = await archive.generateAsync({ type: "blob" });
+        downloadBlob(data.filenames.json.replace(/\.json$/i, ".zip"), bundle);
+      }
+      const emailMessage = sendEmail ? " Email sent." : " Snapshot downloaded.";
       const unrelatedReviewRows = (data.brokerDiagnostic?.needsReviewRows || []).filter((row: SnapshotValidationDiagnostic["needsReviewRows"][number]) => !row.affectsRequestedSnapshot);
       const reviewMessage = unrelatedReviewRows.length
         ? ` ${unrelatedReviewRows.length} unrelated broker-import row${unrelatedReviewRows.length === 1 ? "" : "s"} still need review:\n${unrelatedReviewRows.map((row: SnapshotValidationDiagnostic["needsReviewRows"][number]) => `- ${row.ticker} (${row.tradeId}): ${row.status}, entry ${row.entryDate}, exit ${row.exitDate || "open"}; unrelated to this snapshot`).join("\n")}`
@@ -219,9 +224,16 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   const accountActions = [
     ...(canGenerateSnapshot ? [
       {
-        key: "generate-daily-snapshot",
-        label: isGeneratingSnapshot ? "Generating snapshot..." : "Generate Daily Snapshot",
+        key: "generate-send-daily-snapshot",
+        label: isGeneratingSnapshot ? "Generating snapshot..." : "Generate and Send Daily Snapshot",
         icon: "S",
+        disabled: isGeneratingSnapshot,
+        onClick: () => generateSnapshot(true)
+      },
+      {
+        key: "download-daily-snapshot",
+        label: "Download Snapshot Only",
+        icon: "D",
         disabled: isGeneratingSnapshot,
         onClick: () => generateSnapshot(false)
       }
