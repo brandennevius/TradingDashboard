@@ -140,8 +140,11 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
 
   async function generateSnapshot(sendEmail: boolean) {
     if (!canGenerateSnapshot) return;
-    const session = snapshotSession.trim();
+    const selectedSession = window.prompt("Snapshot session (YYYY-MM-DD)", snapshotSession.trim());
+    if (selectedSession === null) return;
+    const session = selectedSession.trim();
     if (!session) return;
+    setSnapshotSession(session);
     const accountName = window.prompt("Portfolio", defaultPortfolio.trim())?.trim();
     if (!accountName) return;
     setIsGeneratingSnapshot(true);
