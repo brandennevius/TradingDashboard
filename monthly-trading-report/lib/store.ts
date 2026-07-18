@@ -1,7 +1,8 @@
 import fs from "fs/promises";
 import crypto from "crypto";
 import path from "path";
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
+import { runAtomicCfImport, type CfWorkingOrderMetadata } from "./cf-import-idempotency";
 import type {
   ChecklistGradeBand,
   ChecklistInputType,
@@ -187,6 +188,16 @@ export type BrandenPortfolioSettings = {
       equitySource?: string;
       equityUpdatedAt?: string;
       equityStatementDate?: string;
+      workingOrders?: Array<{
+        orderId: string;
+        orderDate: string;
+        timeValue: string;
+        direction: "Buy" | "Sell";
+        shares: number;
+        symbol: string;
+        orderType: string;
+        orderPrice: number;
+      }>;
     }
   >;
 };
@@ -219,13 +230,34 @@ function normalizeBrandenPortfolioSettings(value: unknown): BrandenPortfolioSett
     const currentEquity = Number(raw.currentEquity);
     const statementEquity = Number(raw.statementEquity);
     const floatingPnl = Number(raw.floatingPnl);
+    const workingOrders = Array.isArray(raw.workingOrders)
+      ? raw.workingOrders.flatMap((value) => {
+          if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+          const order = value as Record<string, unknown>;
+          const direction = String(order.direction || "");
+          const shares = Number(order.shares);
+          const orderPrice = Number(order.orderPrice);
+          if ((direction !== "Buy" && direction !== "Sell") || !Number.isFinite(shares) || shares <= 0 || !Number.isFinite(orderPrice) || orderPrice <= 0) return [];
+          return [{
+            orderId: String(order.orderId || ""),
+            orderDate: String(order.orderDate || ""),
+            timeValue: String(order.timeValue || ""),
+            direction: direction as "Buy" | "Sell",
+            shares,
+            symbol: String(order.symbol || "").trim().toUpperCase(),
+            orderType: String(order.orderType || "").trim().toUpperCase(),
+            orderPrice
+          }];
+        })
+      : [];
     portfolioMeta[portfolio] = {
       currentEquity: Number.isFinite(currentEquity) && currentEquity > 0 ? currentEquity : undefined,
       statementEquity: Number.isFinite(statementEquity) && statementEquity > 0 ? statementEquity : undefined,
       floatingPnl: Number.isFinite(floatingPnl) ? floatingPnl : undefined,
       equitySource: String(raw.equitySource || ""),
       equityUpdatedAt: String(raw.equityUpdatedAt || ""),
-      equityStatementDate: String(raw.equityStatementDate || "")
+      equityStatementDate: String(raw.equityStatementDate || ""),
+      workingOrders
     };
   });
 
@@ -1240,6 +1272,7 @@ export async function saveBrandenPortfolioMeta(
     floatingPnl?: number;
     equitySource?: string;
     equityStatementDate?: string;
+    workingOrders?: NonNullable<BrandenPortfolioSettings["portfolioMeta"]>[string]["workingOrders"];
   }
 ) {
   const normalizedPortfolio = portfolio.trim();
@@ -1249,8 +1282,24 @@ export async function saveBrandenPortfolioMeta(
     return current;
   }
 
+  return saveBrandenPortfolioSettings(portfolioSettingsWithImportMeta(current, normalizedPortfolio, meta));
+}
+
+function portfolioSettingsWithImportMeta(
+  current: BrandenPortfolioSettings,
+  normalizedPortfolio: string,
+  meta: {
+    currentEquity?: number;
+    statementEquity?: number;
+    floatingPnl?: number;
+    equitySource?: string;
+    equityStatementDate?: string;
+    workingOrders?: CfWorkingOrderMetadata[];
+  },
+  importedAt = new Date().toISOString()
+) {
   const nextPortfolios = Array.from(new Set([...current.portfolios, normalizedPortfolio])).sort((a, b) => a.localeCompare(b));
-  return saveBrandenPortfolioSettings({
+  return normalizeBrandenPortfolioSettings({
     ...current,
     portfolios: nextPortfolios,
     portfolioMeta: {
@@ -1262,7 +1311,8 @@ export async function saveBrandenPortfolioMeta(
         floatingPnl: meta.floatingPnl,
         equitySource: meta.equitySource || "CF Import",
         equityStatementDate: meta.equityStatementDate || "",
-        equityUpdatedAt: new Date().toISOString()
+        workingOrders: meta.workingOrders || [],
+        equityUpdatedAt: importedAt
       }
     }
   });
@@ -2614,16 +2664,8 @@ export async function listCfStatementTrades(userId: string, portfolioTag: string
   return result.rows.map(rowToTrade);
 }
 
-export async function replaceCfStatementTrades(userId: string, portfolioTag: string, trades: TradeLogInput[]) {
-  const now = new Date().toISOString();
-  const db = getPool();
-
-  if (!db) {
-    const current = await readLocalTrades();
-    const retained = current.filter(
-      (trade) => !(trade.userId === userId && trade.portfolioTag === portfolioTag && trade.importSource === "cf-statement-pdf")
-    );
-    const nextTrades: TradeLogEntry[] = trades.map((trade) => ({
+function materializeCfStatementTrades(trades: TradeLogInput[], portfolioTag: string, now: string) {
+  return trades.map((trade): TradeLogEntry => ({
       ...trade,
       id: stableTradeId(trade),
       importSource: "cf-statement-pdf",
@@ -2645,15 +2687,9 @@ export async function replaceCfStatementTrades(userId: string, portfolioTag: str
       createdAt: now,
       updatedAt: now
     }));
-    await writeLocalTrades([...retained, ...nextTrades].sort(tradeLogOrder));
-    return { count: nextTrades.length };
-  }
+}
 
-  await ensureTradeTable();
-  const client = await db.connect();
-
-  try {
-    await client.query("begin");
+async function replaceCfStatementTradesWithClient(client: PoolClient, userId: string, portfolioTag: string, trades: TradeLogInput[]) {
     await client.query(
       "delete from trade_logs where user_id = $1 and portfolio_tag = $2 and import_source = 'cf-statement-pdf'",
       [userId, portfolioTag]
@@ -2717,12 +2753,95 @@ export async function replaceCfStatementTrades(userId: string, portfolioTag: str
         values
       );
     }
+}
 
-    await client.query("commit");
-    return { count: trades.length };
-  } catch (error) {
-    await client.query("rollback");
-    throw error;
+export async function replaceCfStatementTrades(userId: string, portfolioTag: string, trades: TradeLogInput[]) {
+  const now = new Date().toISOString();
+  const db = getPool();
+
+  if (!db) {
+    const current = await readLocalTrades();
+    const retained = current.filter(
+      (trade) => !(trade.userId === userId && trade.portfolioTag === portfolioTag && trade.importSource === "cf-statement-pdf")
+    );
+    const nextTrades = materializeCfStatementTrades(trades, portfolioTag, now);
+    await writeLocalTrades([...retained, ...nextTrades].sort(tradeLogOrder));
+    return { count: nextTrades.length };
+  }
+
+  await ensureTradeTable();
+  const client = await db.connect();
+
+  try {
+    return await runAtomicCfImport(
+      { begin: () => client.query("begin").then(() => undefined), commit: () => client.query("commit").then(() => undefined), rollback: () => client.query("rollback").then(() => undefined) },
+      async () => {
+        await replaceCfStatementTradesWithClient(client, userId, portfolioTag, trades);
+        return { count: trades.length };
+      }
+    );
+  } finally {
+    client.release();
+  }
+}
+
+export async function replaceCfStatementImport(
+  userId: string,
+  portfolioTag: string,
+  trades: TradeLogInput[],
+  meta: {
+    currentEquity?: number;
+    statementEquity?: number;
+    floatingPnl?: number;
+    equitySource?: string;
+    equityStatementDate?: string;
+    workingOrders?: CfWorkingOrderMetadata[];
+  },
+  replaceTrades: boolean
+) {
+  const now = new Date().toISOString();
+  const db = getPool();
+
+  if (!db) {
+    const previousTrades = await readLocalTrades();
+    const previousSettings = await readLocalSettings();
+    const currentPortfolioSettings = normalizeBrandenPortfolioSettings(previousSettings.brandenPortfolioNames);
+    const nextPortfolioSettings = portfolioSettingsWithImportMeta(currentPortfolioSettings, portfolioTag.trim(), meta, now);
+    try {
+      if (replaceTrades) {
+        const retained = previousTrades.filter(
+          (trade) => !(trade.userId === userId && trade.portfolioTag === portfolioTag && trade.importSource === "cf-statement-pdf")
+        );
+        await writeLocalTrades([...retained, ...materializeCfStatementTrades(trades, portfolioTag, now)].sort(tradeLogOrder));
+      }
+      await writeLocalSettings({ ...previousSettings, brandenPortfolioNames: nextPortfolioSettings });
+      return { count: trades.length, tradesReplaced: replaceTrades };
+    } catch (error) {
+      await writeLocalTrades(previousTrades);
+      await writeLocalSettings(previousSettings);
+      throw error;
+    }
+  }
+
+  await ensureTradeTable();
+  await ensureSettingsTable();
+  const client = await db.connect();
+  try {
+    return await runAtomicCfImport(
+      { begin: () => client.query("begin").then(() => undefined), commit: () => client.query("commit").then(() => undefined), rollback: () => client.query("rollback").then(() => undefined) },
+      async () => {
+        const settingsResult = await client.query("select value from app_settings where key = $1 for update", ["branden_portfolio_names"]);
+        const currentSettings = normalizeBrandenPortfolioSettings(settingsResult.rows[0]?.value);
+        const nextSettings = portfolioSettingsWithImportMeta(currentSettings, portfolioTag.trim(), meta, now);
+        if (replaceTrades) await replaceCfStatementTradesWithClient(client, userId, portfolioTag, trades);
+        await client.query(
+          `insert into app_settings (key, value) values ($1, $2::jsonb)
+           on conflict (key) do update set value = excluded.value, updated_at = now()`,
+          ["branden_portfolio_names", JSON.stringify(nextSettings)]
+        );
+        return { count: trades.length, tradesReplaced: replaceTrades };
+      }
+    );
   } finally {
     client.release();
   }

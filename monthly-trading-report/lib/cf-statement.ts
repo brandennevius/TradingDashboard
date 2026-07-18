@@ -28,6 +28,7 @@ type RawTransactionRow = {
   commission: number;
 };
 export type ParsedWorkingOrderRow = {
+  orderId: string;
   orderDate: string;
   timeValue: string;
   direction: "Buy" | "Sell";
@@ -427,7 +428,7 @@ function parseWorkingOrders(lines: string[]) {
       continue;
     }
 
-    const [, dateValue, timeValue, _orderId, directionValue, sizeValue, symbol, orderTypeValue, orderPriceValue] = match;
+    const [, dateValue, timeValue, orderId, directionValue, sizeValue, symbol, orderTypeValue, orderPriceValue] = match;
     const normalizedType = String(orderTypeValue).toUpperCase();
 
     if (normalizedType !== "LIMIT" && normalizedType !== "STOP") {
@@ -435,6 +436,7 @@ function parseWorkingOrders(lines: string[]) {
     }
 
     orders.push({
+      orderId,
       orderDate: isoDate(dateValue),
       timeValue,
       direction: directionValue as "Buy" | "Sell",
@@ -462,6 +464,7 @@ function transactionIdFromExecution(execution: TradeExecution) {
 
 function transactionsFromExecutions(executions: TradeExecution[]) {
   const grouped = new Map<string, RawTransactionRow>();
+  const seenExecutions = new Set<string>();
 
   for (const execution of executions) {
     const transactionId = transactionIdFromExecution(execution);
@@ -477,6 +480,9 @@ function transactionsFromExecutions(executions: TradeExecution[]) {
     const price = parseNumber(String(execution.price));
     const pnl = parseNumber(String(execution.pnl));
     const commission = Math.abs(parseNumber(String(execution.commission)));
+    const executionFingerprint = [transactionId, direction, execution.type, execution.date, execution.time, shares, price, pnl, commission].join("|");
+    if (seenExecutions.has(executionFingerprint)) continue;
+    seenExecutions.add(executionFingerprint);
 
     if (!current) {
       grouped.set(key, {

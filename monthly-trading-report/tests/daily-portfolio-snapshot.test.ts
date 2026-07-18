@@ -127,6 +127,46 @@ test("RELY planned risk remains mapped and LLY stop risk uses the remaining quan
   assert.equal(snapshot.portfolio_summary.total_initial_risk, 420);
 });
 
+test("LLY linked staged exits use effective quantities and exclude the profit limit from downside risk", () => {
+  const lly = trade({
+    id: "lly-linked", symbol: "LLY", shares: 3, avgEntry: 1100, stopPrice: 1079.96, takeProfitPrice: 1287.94, risk: 300,
+    executions: [{ ...trade().executions[0], id: "lly-linked-entry", shares: 3, price: 1100 }]
+  });
+  const rely = trade({
+    id: "rely-risk", symbol: "RELY", shares: 10, avgEntry: 90, stopPrice: 67.26, risk: 250,
+    executions: [{ ...trade().executions[0], id: "rely-risk-entry", shares: 10, price: 90 }]
+  });
+  const value = input([lly, rely]) as Parameters<typeof buildDailyPortfolioSnapshot>[0];
+  value.requestedSession = "2026-07-17";
+  value.latestCompletedMarketSession = "2026-07-17";
+  value.portfolioMeta = { ...value.portfolioMeta, equityStatementDate: "2026-07-17", workingOrders: [
+    { orderId: "lly-early-stop", orderDate: "2026-07-17", timeValue: "10:00:00", direction: "Sell", shares: 1, symbol: "LLY", orderType: "STOP", orderPrice: 1132.94 },
+    { orderId: "lly-bracket-stop", orderDate: "2026-07-17", timeValue: "10:00:01", direction: "Sell", shares: 3, symbol: "LLY", orderType: "STOP", orderPrice: 1079.96 },
+    { orderId: "lly-profit-limit", orderDate: "2026-07-17", timeValue: "10:00:02", direction: "Sell", shares: 1, symbol: "LLY", orderType: "LIMIT", orderPrice: 1287.94 }
+  ] };
+  value.prices = new Map([
+    ["LLY", { symbol: "LLY", price: 1179.11, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "stooq", priceType: "delayed_close" as const }],
+    ["RELY", { symbol: "RELY", price: 100, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "stooq", priceType: "delayed_close" as const }]
+  ]);
+
+  const snapshot = buildDailyPortfolioSnapshot(value);
+  const position = snapshot.open_positions.find((item) => item.ticker === "LLY")!;
+  assert.equal(position.stop_plan_type, "STAGED_LINKED_EXIT");
+  assert.deepEqual(position.protective_levels.map((level) => ({ price: level.price, effective_quantity: level.effective_quantity, displayed_order_quantity: level.displayed_order_quantity })), [
+    { price: 1132.94, effective_quantity: 1, displayed_order_quantity: 1 },
+    { price: 1079.96, effective_quantity: 2, displayed_order_quantity: 3 }
+  ]);
+  assert.equal(position.stop_plan_provenance?.linkage, "BROKER_BRACKET_DYNAMIC_RESIZE");
+  assert.equal(position.stop_plan_provenance?.dynamic_resize, true);
+  assert.equal(position.stop_plan_provenance?.displayed_stop_quantity, 4);
+  assert.equal(position.stop_plan_provenance?.effective_protective_quantity, 3);
+  assert.deepEqual(position.profit_taking_orders.map((order) => ({ price: order.price, quantity: order.quantity })), [{ price: 1287.94, quantity: 1 }]);
+  assert.equal(position.remaining_risk_to_stop_dollars, 244.47);
+  assert.equal(snapshot.portfolio_summary.total_remaining_risk_to_stops, 571.87);
+  assert(!position.data_warnings.some((warning) => warning.code === "POSITION_CALCULATION_MISMATCH"));
+  assert.match(renderDailyPortfolioSnapshotMarkdown(snapshot), /STAGED_LINKED_EXIT/);
+});
+
 test("includes only trades whose final exit occurred during the selected session", () => {
   const closed = trade({ status: "WIN", pnl: 100, exitDate: "2026-07-16", exitPrice: 110, executions: [
     trade().executions[0],

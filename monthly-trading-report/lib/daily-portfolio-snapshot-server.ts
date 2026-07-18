@@ -94,6 +94,16 @@ type BrokerPortfolioMeta = {
   equitySource?: string;
   equityUpdatedAt?: string;
   equityStatementDate?: string;
+  workingOrders?: Array<{
+    orderId: string;
+    orderDate: string;
+    timeValue: string;
+    direction: "Buy" | "Sell";
+    shares: number;
+    symbol: string;
+    orderType: string;
+    orderPrice: number;
+  }>;
 };
 
 const BROKER_IMPORT_SOURCE = "cf-statement-pdf";

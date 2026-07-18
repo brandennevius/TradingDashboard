@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { buildCfTradesFromExecutionHistory, parseCfStatementText } from "@/lib/cf-statement";
+import { cfImportTradesEquivalent, replaceActiveWorkingOrders } from "@/lib/cf-import-idempotency";
 import {
   listCfStatementTrades,
-  replaceCfStatementTrades,
-  saveBrandenPortfolioMeta,
+  replaceCfStatementImport,
 } from "@/lib/store";
 import type { TradeExecution, TradeLogEntry, TradeLogInput } from "@/lib/types";
 
@@ -115,22 +115,20 @@ export async function POST(request: Request) {
       portfolioTag
     ).map((trade) => applyManualFields(trade, existingCfTrades));
 
-    const saved = await replaceCfStatementTrades(user.id, portfolioTag, rebuiltTrades);
+    const tradesChanged = !cfImportTradesEquivalent(existingCfTrades, rebuiltTrades);
+    const saved = await replaceCfStatementImport(user.id, portfolioTag, rebuiltTrades, {
+      currentEquity: parsedStatement.currentEquity,
+      statementEquity: parsedStatement.statementEquity,
+      floatingPnl: parsedStatement.floatingPnl,
+      equitySource: "CF Import",
+      equityStatementDate: parsedStatement.equityStatementDate,
+      workingOrders: replaceActiveWorkingOrders(parsedStatement.workingOrders)
+    }, tradesChanged);
     const created = rebuiltTrades.filter((trade) => !existingKeys.has(trade.importRowKey)).length;
-    const updated = rebuiltTrades.length - created;
+    const updated = tradesChanged ? rebuiltTrades.length - created : 0;
     const openTrades = rebuiltTrades.filter((trade) => trade.status === "OPEN").length;
     const closedTrades = rebuiltTrades.length - openTrades;
     const needsReview = rebuiltTrades.filter((trade) => trade.customTags.includes("Needs review")).length;
-
-    if (parsedStatement.currentEquity) {
-      await saveBrandenPortfolioMeta(portfolioTag, {
-        currentEquity: parsedStatement.currentEquity,
-        statementEquity: parsedStatement.statementEquity,
-        floatingPnl: parsedStatement.floatingPnl,
-        equitySource: "CF Import",
-        equityStatementDate: parsedStatement.equityStatementDate
-      });
-    }
 
     return NextResponse.json({
       imported: rebuiltTrades.length,
@@ -140,6 +138,7 @@ export async function POST(request: Request) {
       closedTrades,
       needsReview,
       replaced: saved.count,
+      tradesChanged: saved.tradesReplaced,
       currentEquity: parsedStatement.currentEquity,
       statementEquity: parsedStatement.statementEquity,
       floatingPnl: parsedStatement.floatingPnl,

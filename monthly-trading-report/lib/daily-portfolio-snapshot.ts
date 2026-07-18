@@ -63,6 +63,16 @@ type PortfolioMeta = {
   equitySource?: string;
   equityUpdatedAt?: string;
   equityStatementDate?: string;
+  workingOrders?: Array<{
+    orderId: string;
+    orderDate: string;
+    timeValue: string;
+    direction: "Buy" | "Sell";
+    shares: number;
+    symbol: string;
+    orderType: string;
+    orderPrice: number;
+  }>;
 };
 
 type SnapshotInput = {
@@ -231,6 +241,75 @@ function documentationWarnings(trade: TradeLogEntry, grade: string | null, setup
   return warnings;
 }
 
+function protectivePlan(trade: TradeLogEntry, meta: PortfolioMeta | undefined, session: string) {
+  const exitDirection = trade.side === "LONG" ? "Sell" : "Buy";
+  const sessionOrders = meta?.equityStatementDate === session ? meta.workingOrders || [] : [];
+  const orders = sessionOrders.filter((order) =>
+    order.symbol.toUpperCase() === trade.symbol.toUpperCase()
+    && order.direction === exitDirection
+    && order.shares > 0
+    && order.orderPrice > 0
+  );
+  const stopOrders = orders.filter((order) => order.orderType === "STOP");
+  const profitTakingOrders = orders.filter((order) => order.orderType === "LIMIT").map((order) => ({
+    price: round(order.orderPrice), quantity: round(order.shares, 4), order_type: "LIMIT",
+    source: "CF_STATEMENT_WORKING_ORDER", order_id: order.orderId || null, order_date: order.orderDate || null, order_time: order.timeValue || null
+  }));
+
+  if (!stopOrders.length) {
+    return {
+      stopPlanType: trade.stopPrice ? "SINGLE_STORED_STOP" : "UNAVAILABLE",
+      protectiveLevels: trade.stopPrice ? [{
+        price: round(trade.stopPrice), effective_quantity: round(trade.shares, 4), displayed_order_quantity: round(trade.shares, 4),
+        role: "POSITION_STOP", order_type: "STOP"
+      }] : [],
+      provenance: trade.stopPrice ? {
+        source: "TRADE_LOG_STORED_STOP", linkage: null, dynamic_resize: false, statement_coverage_date: meta?.equityStatementDate || null
+      } : null,
+      profitTakingOrders
+    };
+  }
+
+  const sortedStops = [...stopOrders].sort((a, b) => trade.side === "LONG" ? b.orderPrice - a.orderPrice : a.orderPrice - b.orderPrice);
+  const bracketStop = sortedStops.at(-1)!;
+  const stagedStops = sortedStops.slice(0, -1);
+  const displayedStopQuantity = stopOrders.reduce((sum, order) => sum + order.shares, 0);
+  const stagedLinked = stagedStops.length > 0 && bracketStop.shares >= trade.shares && displayedStopQuantity > trade.shares;
+  let remainingQuantity = trade.shares;
+  const protectiveLevels: Array<Record<string, string | number | null>> = [];
+
+  for (const order of stagedStops) {
+    const effectiveQuantity = Math.min(order.shares, remainingQuantity);
+    if (effectiveQuantity <= 0) continue;
+    protectiveLevels.push({
+      price: round(order.orderPrice), effective_quantity: round(effectiveQuantity, 4), displayed_order_quantity: round(order.shares, 4),
+      role: "STAGED_RISK_REDUCTION", order_type: "STOP", order_id: order.orderId || null, order_date: order.orderDate || null, order_time: order.timeValue || null
+    });
+    remainingQuantity -= effectiveQuantity;
+  }
+  if (remainingQuantity > 0) {
+    protectiveLevels.push({
+      price: round(bracketStop.orderPrice), effective_quantity: round(remainingQuantity, 4), displayed_order_quantity: round(bracketStop.shares, 4),
+      role: stagedLinked ? "DYNAMIC_REMAINDER_BRACKET_STOP" : "REMAINING_POSITION_STOP", order_type: "STOP",
+      order_id: bracketStop.orderId || null, order_date: bracketStop.orderDate || null, order_time: bracketStop.timeValue || null
+    });
+  }
+
+  return {
+    stopPlanType: stagedLinked ? "STAGED_LINKED_EXIT" : protectiveLevels.length > 1 ? "MULTI_LEVEL_PROTECTIVE" : "SINGLE_WORKING_STOP",
+    protectiveLevels,
+    provenance: {
+      source: "CF_STATEMENT_WORKING_ORDERS",
+      linkage: stagedLinked ? "BROKER_BRACKET_DYNAMIC_RESIZE" : null,
+      dynamic_resize: stagedLinked,
+      displayed_stop_quantity: round(displayedStopQuantity, 4),
+      effective_protective_quantity: round(trade.shares, 4),
+      statement_coverage_date: meta?.equityStatementDate || null
+    },
+    profitTakingOrders
+  };
+}
+
 function timeHeld(trade: TradeLogEntry, finalExit: TradeExecution | undefined) {
   const firstEntry = sortedExecutions(trade).find((execution) => execution.type === "ENTRY");
   const start = new Date(`${firstEntry?.date || trade.entryDate}T${firstEntry?.time || trade.openTime || "00:00:00"}Z`).getTime();
@@ -277,10 +356,15 @@ export function buildDailyPortfolioSnapshot(input: SnapshotInput) {
     const openR = unrealizedPnl === null || !trade.risk ? null : unrealizedPnl / trade.risk;
     const lifecycleR = totalTradePnl === null || !trade.risk ? null : totalTradePnl / trade.risk;
     if (openR === null || lifecycleR === null) warnings.push(warning("R_MULTIPLE_UNAVAILABLE", "Open and lifecycle R multiples require current price and planned risk.", "warning", trade));
+    const stopPlan = protectivePlan(trade, input.portfolioMeta, input.requestedSession);
     let remainingRisk: number | null = null;
-    if (currentPrice !== null && trade.stopPrice) {
-      const perShare = direction === 1 ? currentPrice - trade.stopPrice : trade.stopPrice - currentPrice;
-      remainingRisk = perShare >= 0 ? perShare * trade.shares : null;
+    if (currentPrice !== null && stopPlan.protectiveLevels.length) {
+      const levelRisks = stopPlan.protectiveLevels.map((level) => {
+        const price = Number(level.price), quantity = Number(level.effective_quantity);
+        const perShare = direction === 1 ? currentPrice - price : price - currentPrice;
+        return perShare >= 0 ? perShare * quantity : null;
+      });
+      remainingRisk = levelRisks.every((value) => value !== null) ? levelRisks.reduce<number>((sum, value) => sum + Number(value), 0) : null;
       if (remainingRisk === null) warnings.push(warning("POSITION_CALCULATION_MISMATCH", "Stored stop is not on the protective side of the current price.", "critical", trade));
     }
     const exits = sortedExecutions(trade).filter((execution) => execution.type === "EXIT");
@@ -291,8 +375,10 @@ export function buildDailyPortfolioSnapshot(input: SnapshotInput) {
       shares: round(trade.shares, 4), cost_basis: round(trade.avgEntry * trade.shares), market_value: round(marketValue), position_weight_pct: marketValue !== null && accountValue ? round(Math.abs(marketValue) / accountValue * 100) : null,
       unrealized_pnl: round(unrealizedPnl), realized_pnl_to_date: round(realizedPnlToDate), total_trade_pnl: round(totalTradePnl), current_return_pct: round(currentReturn),
       open_r_multiple: round(openR), lifecycle_r_multiple: round(lifecycleR), planned_risk_dollars: trade.risk || null,
-      initial_stop: null, current_stop: trade.stopPrice || null, stop_last_updated_at: null, remaining_risk_to_stop_dollars: round(remainingRisk), remaining_risk_to_stop_pct: remainingRisk !== null && accountValue ? round(remainingRisk / accountValue * 100) : null,
-      take_profit: trade.takeProfitPrice || null, setup, grade, setup_criteria_score: score.score, setup_criteria_max: score.maximum,
+      initial_stop: null, current_stop: trade.stopPrice || null, stop_last_updated_at: null, stop_plan_type: stopPlan.stopPlanType,
+      protective_levels: stopPlan.protectiveLevels, stop_plan_provenance: stopPlan.provenance,
+      remaining_risk_to_stop_dollars: round(remainingRisk), remaining_risk_to_stop_pct: remainingRisk !== null && accountValue ? round(remainingRisk / accountValue * 100) : null,
+      take_profit: trade.takeProfitPrice || null, profit_taking_orders: stopPlan.profitTakingOrders, setup, grade, setup_criteria_score: score.score, setup_criteria_max: score.maximum,
       setup_criteria_results: trade.checklistItems, mistake_tags: trade.mistakeTags, system: trade.tradeQuality || null, notes: trade.notes || null,
       chart_links: trade.chartLinks, screenshot_references: trade.screenshots, partial_exits: exits, stop_change_history: null, earnings_date: null,
       execution_count: trade.executions.length, executions: sortedExecutions(trade), data_warnings: warnings
@@ -403,7 +489,9 @@ export function renderDailyPortfolioSnapshotMarkdown(snapshot: ReturnType<typeof
   if (!snapshot.open_positions.length) lines.push("| — | — | — | — | — | — | — | — | — | — |");
   lines.push("", "## Position details and warnings", "");
   for (const position of snapshot.open_positions) {
-    lines.push(`### ${position.ticker}`, "", `- Setup / grade: ${position.setup || "—"} / ${position.grade || "—"}`, `- P&L: unrealized ${formatMoney(position.unrealized_pnl)}; realized to date ${formatMoney(position.realized_pnl_to_date)}; lifecycle ${formatMoney(position.total_trade_pnl)}`, `- R: open ${position.open_r_multiple === null ? "—" : `${position.open_r_multiple.toFixed(2)}R`}; lifecycle ${position.lifecycle_r_multiple === null ? "—" : `${position.lifecycle_r_multiple.toFixed(2)}R`}`, `- Price: ${formatMoney(position.current_price)} at ${position.current_price_timestamp || "—"} (${position.current_price_source || "—"}, ${position.current_price_type || "—"})`, `- Criteria: ${position.setup_criteria_score ?? "—"} / ${position.setup_criteria_max ?? "—"}`, `- Notes: ${position.notes || "—"}`, `- Charts / screenshots: ${position.chart_links.length} / ${position.screenshot_references.length}`, ...position.data_warnings.map((item) => `- [${item.severity}] ${item.code}: ${item.message}`), "");
+    const protectiveLevels = position.protective_levels.map((level) => `${level.effective_quantity} @ ${formatMoney(Number(level.price))} (${level.role})`).join("; ") || "—";
+    const profitOrders = position.profit_taking_orders.map((order) => `${order.quantity} @ ${formatMoney(order.price)}`).join("; ") || "—";
+    lines.push(`### ${position.ticker}`, "", `- Setup / grade: ${position.setup || "—"} / ${position.grade || "—"}`, `- P&L: unrealized ${formatMoney(position.unrealized_pnl)}; realized to date ${formatMoney(position.realized_pnl_to_date)}; lifecycle ${formatMoney(position.total_trade_pnl)}`, `- R: open ${position.open_r_multiple === null ? "—" : `${position.open_r_multiple.toFixed(2)}R`}; lifecycle ${position.lifecycle_r_multiple === null ? "—" : `${position.lifecycle_r_multiple.toFixed(2)}R`}`, `- Price: ${formatMoney(position.current_price)} at ${position.current_price_timestamp || "—"} (${position.current_price_source || "—"}, ${position.current_price_type || "—"})`, `- Stop plan: ${position.stop_plan_type}; ${protectiveLevels}`, `- Profit-taking orders: ${profitOrders}`, `- Remaining risk: ${formatMoney(position.remaining_risk_to_stop_dollars)}`, `- Criteria: ${position.setup_criteria_score ?? "—"} / ${position.setup_criteria_max ?? "—"}`, `- Notes: ${position.notes || "—"}`, `- Charts / screenshots: ${position.chart_links.length} / ${position.screenshot_references.length}`, ...position.data_warnings.map((item) => `- [${item.severity}] ${item.code}: ${item.message}`), "");
   }
   lines.push("## Trades closed during the session", "", "| Ticker | Side | Entry | Exit | Net P&L | R | Setup | Grade |", "|---|---|---:|---:|---:|---:|---|---|");
   for (const trade of snapshot.trades_closed_during_session) lines.push(`| ${trade.ticker} | ${trade.side} | ${formatMoney(trade.average_entry)} | ${formatMoney(trade.average_exit)} | ${formatMoney(trade.net_pnl)} | ${trade.realized_r_multiple ?? "—"} | ${trade.setup || "—"} | ${trade.grade || "—"} |`);
