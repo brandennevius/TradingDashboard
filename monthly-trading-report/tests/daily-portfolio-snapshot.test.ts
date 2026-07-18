@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   buildDailyPortfolioSnapshot,
   latestCompletedMarketSession,
+  marketSessionCloseTimestamp,
   renderDailyPortfolioSnapshotMarkdown,
   resolveSnapshotSession,
   snapshotStatusFromWarnings,
@@ -64,14 +65,66 @@ test("snapshot status reflects final warning severity", () => {
   assert.equal(snapshotStatusFromWarnings([{ code: "CURRENT_PRICE_STALE", message: "Current price missing", severity: "critical" }]), "INCOMPLETE");
 });
 
+test("New York market timestamps carry the correct daylight-saving offset", () => {
+  assert.equal(marketSessionCloseTimestamp("2026-07-17"), "2026-07-17T16:00:00-04:00");
+  assert.equal(marketSessionCloseTimestamp("2026-01-16"), "2026-01-16T16:00:00-05:00");
+});
+
 test("builds current open positions without mutating stored inputs", () => {
   const trades = [trade()], before = structuredClone(trades);
   const snapshot = buildDailyPortfolioSnapshot(input(trades));
   assert.deepEqual(trades, before);
-  assert.equal(snapshot.open_positions[0].current_pnl, 100);
+  assert.equal(snapshot.open_positions[0].unrealized_pnl, 100);
+  assert.equal(snapshot.open_positions[0].realized_pnl_to_date, 0);
+  assert.equal(snapshot.open_positions[0].total_trade_pnl, 100);
   assert.equal(snapshot.portfolio_summary.gross_exposure_dollars, 1100);
-  assert.equal(snapshot.open_positions[0].current_r_multiple, 2);
+  assert.equal(snapshot.open_positions[0].open_r_multiple, 2);
+  assert.equal(snapshot.open_positions[0].lifecycle_r_multiple, 2);
   assert.deepEqual(validateDailyPortfolioSnapshot(snapshot), []);
+});
+
+test("July 17 open and lifecycle R distinguish unrealized from realized P&L", () => {
+  const partialExecutions = (symbol: string, realizedPnl: number) => [
+    { ...trade().executions[0], id: `${symbol}-entry`, date: "2026-07-15", shares: 20, sourceKey: `${symbol}-entry` },
+    { ...trade().executions[0], id: `${symbol}-exit`, type: "EXIT" as const, date: "2026-07-16", shares: 10, price: 100, pnl: realizedPnl, sourceKey: `${symbol}-exit` }
+  ];
+  const nvo = trade({ id: "nvo", symbol: "NVO", shares: 10, risk: 100, pnl: 274, executions: partialExecutions("nvo", 274) });
+  const lly = trade({ id: "lly", symbol: "LLY", shares: 10, risk: 100, pnl: -13, executions: partialExecutions("lly", -13) });
+  const value = input([nvo, lly]);
+  value.requestedSession = "2026-07-17";
+  value.latestCompletedMarketSession = "2026-07-17";
+  value.portfolioMeta.equityStatementDate = "2026-07-17";
+  value.prices = new Map([
+    ["NVO", { symbol: "NVO", price: 126.6, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "stooq", priceType: "delayed_close" as const }],
+    ["LLY", { symbol: "LLY", price: 101.4, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "stooq", priceType: "delayed_close" as const }]
+  ]);
+  const snapshot = buildDailyPortfolioSnapshot(value);
+  const nvoPosition = snapshot.open_positions.find((position) => position.ticker === "NVO")!;
+  const llyPosition = snapshot.open_positions.find((position) => position.ticker === "LLY")!;
+  assert.equal(nvoPosition.open_r_multiple, 2.66);
+  assert.equal(nvoPosition.lifecycle_r_multiple, 5.4);
+  assert.equal(llyPosition.open_r_multiple, 0.14);
+  assert.equal(llyPosition.lifecycle_r_multiple, 0.01);
+  assert.equal(llyPosition.remaining_risk_to_stop_dollars, 64);
+});
+
+test("RELY planned risk remains mapped and LLY stop risk uses the remaining quantity", () => {
+  const rely = trade({ id: "rely", symbol: "RELY", shares: 8, risk: 240, stopPrice: 92, executions: [{ ...trade().executions[0], id: "rely-entry", shares: 8 }] });
+  const lly = trade({ id: "lly-risk", symbol: "LLY", shares: 6, risk: 180, stopPrice: 96, executions: [
+    { ...trade().executions[0], id: "lly-entry", shares: 10 },
+    { ...trade().executions[0], id: "lly-partial", type: "EXIT", shares: 4, price: 103, pnl: 12 }
+  ] });
+  const value = input([rely, lly]);
+  value.prices = new Map([
+    ["RELY", { symbol: "RELY", price: 110, timestamp: "2026-07-16", provider: "test" }],
+    ["LLY", { symbol: "LLY", price: 105, timestamp: "2026-07-16", provider: "test" }]
+  ]);
+  const snapshot = buildDailyPortfolioSnapshot(value);
+  const relyPosition = snapshot.open_positions.find((position) => position.ticker === "RELY")!;
+  const llyPosition = snapshot.open_positions.find((position) => position.ticker === "LLY")!;
+  assert.equal(relyPosition.planned_risk_dollars, 240);
+  assert.equal(llyPosition.remaining_risk_to_stop_dollars, 54);
+  assert.equal(snapshot.portfolio_summary.total_initial_risk, 420);
 });
 
 test("includes only trades whose final exit occurred during the selected session", () => {
@@ -87,6 +140,18 @@ test("includes only trades whose final exit occurred during the selected session
   assert.equal(snapshot.trades_closed_during_session[0].gross_pnl, 100);
   assert.equal(snapshot.trades_closed_during_session[0].net_pnl, 97);
   assert.equal(snapshot.trades_closed_during_session[0].realized_r_multiple, 1.94);
+});
+
+test("a missing stored stop on a closed trade is a noncritical documentation warning", () => {
+  const closed = trade({ status: "LOSS", stopPrice: 0, pnl: -10, exitDate: "2026-07-16", executions: [
+    trade().executions[0],
+    { ...trade().executions[0], id: "closed-exit", type: "EXIT", date: "2026-07-16", shares: 10, price: 99, pnl: -10 }
+  ] });
+  const snapshot = buildDailyPortfolioSnapshot(input([closed]));
+  const missingStop = snapshot.trades_closed_during_session[0].documentation_warnings.find((item) => item.code === "MISSING_STOP");
+  assert.equal(missingStop?.severity, "warning");
+  assert.equal(snapshot.critical_warning_count, 0);
+  assert.equal(snapshot.snapshot_status, "COMPLETE_WITH_WARNINGS");
 });
 
 test("missing and stale inputs produce codes and null portfolio aggregates", () => {
@@ -121,11 +186,11 @@ test("a prior broker statement is stale for the requested session", () => {
   assert.equal(snapshot.metadata.broker_import_complete, true);
 });
 
-test("a newer broker statement cannot be used as historical point-in-time portfolio state", () => {
+test("a statement covering a later date satisfies requested-session coverage", () => {
   const value = input([trade()]);
   value.portfolioMeta.equityStatementDate = "2026-07-17";
   const snapshot = buildDailyPortfolioSnapshot(value);
-  assert(snapshot.warnings.some((item) => item.code === "BROKER_IMPORT_INCOMPLETE" && item.message.includes("newer than requested session")));
+  assert(!snapshot.warnings.some((item) => item.code === "BROKER_IMPORT_INCOMPLETE"));
   assert.equal(snapshot.metadata.broker_import_complete, true);
 });
 
@@ -159,6 +224,50 @@ test("server orchestration writes JSON and Markdown while data loaders remain re
   assert.deepEqual(trades, before);
   assert.equal(JSON.parse(await readFile(result.jsonPath, "utf8")).metadata.snapshot_id, result.snapshot.metadata.snapshot_id);
   assert.equal(await readFile(result.markdownPath, "utf8"), result.markdown);
+});
+
+test("snapshot preserves exact broker time and explicit delayed-close price provenance", async () => {
+  const exactBrokerTimestamp = "2026-07-17T16:00:35.000Z";
+  const exactPriceTimestamp = "2026-07-17T16:00:00-04:00";
+  const result = await generateDailyPortfolioSnapshot({
+    session: "2026-07-17", accountName: "Main", writeExports: false,
+    dependencies: {
+      now: () => new Date("2026-07-17T20:08:00Z"),
+      loadTrades: async () => [trade({ updatedAt: exactBrokerTimestamp })],
+      loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: { ...input([]).portfolioMeta, equityUpdatedAt: exactBrokerTimestamp, equityStatementDate: "2026-07-17" } } }),
+      loadPrice: async (symbol) => ({ symbol, price: 110, sessionDate: "2026-07-17", timestamp: exactPriceTimestamp, provider: "stooq", priceType: "delayed_close", retrievedAt: "2026-07-17T20:08:01.000Z" })
+    }
+  });
+  assert.equal(result.snapshot.metadata.generated_at, "2026-07-17T20:08:00.000Z");
+  assert.equal(result.snapshot.metadata.portfolio_data_as_of, exactBrokerTimestamp);
+  assert.equal(result.snapshot.metadata.broker_import_timestamp, exactBrokerTimestamp);
+  assert.equal(result.snapshot.metadata.broker_imported_at, exactBrokerTimestamp);
+  assert.equal(result.snapshot.metadata.broker_position_state_as_of, "2026-07-17");
+  assert.equal(result.snapshot.metadata.statement_coverage_date, "2026-07-17");
+  assert.equal(result.snapshot.metadata.price_timestamp, exactPriceTimestamp);
+  assert.equal(result.snapshot.metadata.price_as_of, exactPriceTimestamp);
+  assert.equal(result.snapshot.metadata.price_retrieved_at, "2026-07-17T20:08:01.000Z");
+  assert.equal(result.snapshot.metadata.price_source, "stooq");
+  assert.equal(result.snapshot.metadata.price_type, "delayed_close");
+  assert.equal(result.snapshot.metadata.valuation_context, "Broker position state reflects the imported statement. Current valuation uses post-close prices.");
+  assert.equal(result.snapshot.open_positions[0].current_price_retrieved_at, "2026-07-17T20:08:01.000Z");
+  assert(!result.snapshot.warnings.some((item) => item.code === "PORTFOLIO_DATA_STALE"));
+  assert.match(result.markdown, /Broker position state reflects the imported statement\. Current valuation uses post-close prices\./);
+});
+
+test("a pre-close broker import timestamp is informational and never blocks generation", async () => {
+  const result = await generateDailyPortfolioSnapshot({
+    session: "2026-07-17", accountName: "Main", writeExports: false,
+    dependencies: {
+      now: () => new Date("2026-07-17T20:30:00Z"),
+      loadTrades: async () => [trade({ updatedAt: "2026-07-17T16:00:35.000Z" })],
+      loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: { ...input([]).portfolioMeta, equityUpdatedAt: "2026-07-17T16:00:35.000Z", equityStatementDate: "2026-07-17" } } }),
+      loadPrice: async (symbol) => ({ symbol, price: 110, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "stooq", priceType: "delayed_close", retrievedAt: "2026-07-17T20:08:01.000Z" })
+    }
+  });
+  assert.equal(result.snapshot.metadata.broker_imported_at, "2026-07-17T16:00:35.000Z");
+  assert(!result.snapshot.warnings.some((item) => item.code === "PORTFOLIO_DATA_STALE"));
+  assert.notEqual(result.snapshot.snapshot_status, "INCOMPLETE");
 });
 
 test("July 15 and July 16 flow unchanged from selection to server evaluation", async () => {

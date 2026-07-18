@@ -3,6 +3,7 @@ import path from "node:path";
 import packageJson from "../package.json";
 import {
   buildDailyPortfolioSnapshot,
+  marketSessionCloseTimestamp,
   renderDailyPortfolioSnapshotMarkdown,
   resolveSnapshotSession,
   snapshotStatusFromWarnings,
@@ -204,8 +205,11 @@ async function loadSessionPrice(symbol: string, session: string): Promise<Snapsh
   return {
     symbol,
     price: candle?.close ?? null,
-    timestamp: candle?.time ?? null,
-    provider: result.provider
+    timestamp: candle?.time ? marketSessionCloseTimestamp(candle.time) : null,
+    sessionDate: candle?.time ?? null,
+    provider: result.provider,
+    priceType: "delayed_close",
+    retrievedAt: new Date().toISOString()
   };
 }
 
@@ -326,7 +330,7 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
   snapshot.snapshot_status = snapshotStatusFromWarnings(snapshot.warnings);
   snapshot.critical_warning_count = snapshot.warnings.filter((item) => item.severity === "critical").length;
   const invalidPrices = snapshot.open_positions
-    .filter((position) => position.current_price === null || position.current_price_timestamp !== session.resolved)
+    .filter((position) => position.current_price === null || position.current_price_session !== session.resolved)
     .map((position) => position.ticker);
   if (invalidPrices.length) {
     throw new SnapshotValidationError(
