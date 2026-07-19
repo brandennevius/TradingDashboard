@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import TradePriceChart from "@/app/components/TradePriceChart";
+import { watchlistScreenshotDisplayUrl } from "@/lib/watchlist-screenshot";
 import type {
   ChecklistGradeBand,
   SetupChecklistTemplate,
@@ -210,6 +211,7 @@ export default function WatchlistPage() {
   const [isReviewingSetup, setIsReviewingSetup] = useState(false);
   const [aiReviewByItemId, setAiReviewByItemId] = useState<Record<string, AiWatchlistReview>>({});
   const [maximizedScreenshot, setMaximizedScreenshot] = useState("");
+  const [failedScreenshots, setFailedScreenshots] = useState<Record<string, true>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -666,24 +668,35 @@ export default function WatchlistPage() {
                     {canEdit ? <label className="watchlist-upload">Add screenshots<input type="file" accept="image/*" multiple onChange={(event) => addScreenshots(selectedItem, event.target.files)} /></label> : null}
                   </div>
                   <div className="watchlist-screenshot-grid">
-                    {selectedItem.screenshots.map((screenshot, index) => (
-                      <figure key={`${selectedItem.id}-${index}`}>
-                        <button
-                          className="watchlist-screenshot-preview"
-                          type="button"
-                          onClick={() => setMaximizedScreenshot(screenshot)}
-                          aria-label={`Maximize ${selectedItem.symbol || "watchlist"} screenshot ${index + 1}`}
-                        >
-                          <img
-                            src={screenshot}
-                            alt={`${selectedItem.symbol} watchlist screenshot ${index + 1}`}
-                            loading="lazy"
-                            decoding="async"
-                          />
-                        </button>
-                        {canEdit ? <button type="button" onClick={() => updateItem(selectedItem.id, { screenshots: selectedItem.screenshots.filter((_, imageIndex) => imageIndex !== index) })}>Remove</button> : null}
-                      </figure>
-                    ))}
+                    {selectedItem.screenshots.map((screenshot, index) => {
+                      const displayUrl = watchlistScreenshotDisplayUrl(screenshot);
+                      const failed = Boolean(failedScreenshots[displayUrl]);
+                      return (
+                        <figure key={`${selectedItem.id}-${index}`}>
+                          <button
+                            className="watchlist-screenshot-preview"
+                            type="button"
+                            onClick={() => !failed && setMaximizedScreenshot(displayUrl)}
+                            aria-label={`Maximize ${selectedItem.symbol || "watchlist"} screenshot ${index + 1}`}
+                            disabled={failed}
+                            style={{ minHeight: "150px", width: "100%" }}
+                          >
+                            {failed ? (
+                              <span role="alert">Screenshot could not be displayed. Remove it and upload a PNG or JPEG copy.</span>
+                            ) : (
+                              <img
+                                src={displayUrl}
+                                alt={`${selectedItem.symbol} watchlist screenshot ${index + 1}`}
+                                loading="lazy"
+                                decoding="async"
+                                onError={() => setFailedScreenshots((current) => ({ ...current, [displayUrl]: true }))}
+                              />
+                            )}
+                          </button>
+                          {canEdit ? <button type="button" onClick={() => updateItem(selectedItem.id, { screenshots: selectedItem.screenshots.filter((_, imageIndex) => imageIndex !== index) })}>Remove</button> : null}
+                        </figure>
+                      );
+                    })}
                     {!selectedItem.screenshots.length ? <p className="muted">No screenshots attached.</p> : null}
                   </div>
                 </article>

@@ -22,9 +22,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    return NextResponse.json(
-      await saveCamJournalScreenshot("watchlist-item", itemId, file.name, file.type, Buffer.from(await file.arrayBuffer()))
-    );
+    const saved = await saveCamJournalScreenshot("watchlist-item", itemId, file.name, file.type, Buffer.from(await file.arrayBuffer()));
+    return NextResponse.json({
+      ...saved,
+      url: `/api/watchlists/screenshots/${encodeURIComponent(saved.id)}`
+    });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not save screenshot." },
