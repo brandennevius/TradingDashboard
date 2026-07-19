@@ -727,7 +727,7 @@ export default function WatchlistPage() {
                   <div className="watchlist-screenshot-grid">
                     {selectedItem.screenshots.map((screenshot, index) => {
                       return (
-                        <figure key={`${selectedItem.id}-${index}`}>
+                        <figure key={`${selectedItem.id}-${index}`} style={{ maxWidth: "420px", width: "100%" }}>
                           <WatchlistScreenshotPreview
                             sourceUrl={screenshot}
                             onMaximize={setMaximizedScreenshot}
