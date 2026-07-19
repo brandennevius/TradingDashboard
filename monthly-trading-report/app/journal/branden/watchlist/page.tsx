@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import TradePriceChart from "@/app/components/TradePriceChart";
-import { watchlistScreenshotDisplayUrl } from "@/lib/watchlist-screenshot";
+import { watchlistScreenshotFetchUrl } from "@/lib/watchlist-screenshot";
 import type {
   ChecklistGradeBand,
   SetupChecklistTemplate,
@@ -142,7 +142,7 @@ function WatchlistScreenshotPreview({
     setBlobUrl("");
     setFailed(false);
 
-    fetch(watchlistScreenshotDisplayUrl(sourceUrl), { cache: "no-store" })
+    fetch(watchlistScreenshotFetchUrl(sourceUrl), { cache: "no-store" })
       .then(async (response) => {
         if (!response.ok) throw new Error("Screenshot response failed.");
         const image = await response.blob();

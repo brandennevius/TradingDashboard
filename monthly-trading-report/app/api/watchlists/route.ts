@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { getWeeklyWatchlists, saveWeeklyWatchlists } from "@/lib/store";
+import { getCamJournalScreenshot, getWeeklyWatchlists, saveWeeklyWatchlists } from "@/lib/store";
 import type { WatchlistItem, WeeklyWatchlist } from "@/lib/types";
 
 function isoWeek(date = new Date()) {
@@ -55,9 +55,24 @@ function createWatchlist(ownerId: string, week: ReturnType<typeof isoWeek>) {
   } satisfies WeeklyWatchlist;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+
+  const screenshotId = new URL(request.url).searchParams.get("screenshotId");
+  if (screenshotId) {
+    const screenshot = await getCamJournalScreenshot(screenshotId);
+    if (!screenshot || screenshot.entityType !== "watchlist-item") {
+      return NextResponse.json({ error: "Watchlist screenshot not found." }, { status: 404 });
+    }
+    return new NextResponse(new Uint8Array(screenshot.imageData), {
+      headers: {
+        "Content-Type": screenshot.mimeType,
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff"
+      }
+    });
+  }
 
   const ownerId = user.journalOwnerId || user.id;
   try {
