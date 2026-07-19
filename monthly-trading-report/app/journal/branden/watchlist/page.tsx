@@ -122,6 +122,64 @@ function checklistFromTemplate(template: SetupChecklistTemplate): TradeChecklist
   );
 }
 
+function WatchlistScreenshotPreview({
+  sourceUrl,
+  alt,
+  ariaLabel,
+  onMaximize
+}: {
+  sourceUrl: string;
+  alt: string;
+  ariaLabel: string;
+  onMaximize: (url: string) => void;
+}) {
+  const [blobUrl, setBlobUrl] = useState("");
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let createdUrl = "";
+    setBlobUrl("");
+    setFailed(false);
+
+    fetch(watchlistScreenshotDisplayUrl(sourceUrl), { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Screenshot response failed.");
+        const image = await response.blob();
+        if (!image.size || !image.type.startsWith("image/")) throw new Error("Screenshot response was not an image.");
+        createdUrl = URL.createObjectURL(image);
+        if (!cancelled) setBlobUrl(createdUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [sourceUrl]);
+
+  return (
+    <button
+      className="watchlist-screenshot-preview"
+      type="button"
+      onClick={() => blobUrl && onMaximize(blobUrl)}
+      aria-label={ariaLabel}
+      disabled={!blobUrl}
+      style={{ minHeight: "150px", width: "100%" }}
+    >
+      {failed ? (
+        <span role="alert">Screenshot could not be displayed. Remove it and upload a PNG or JPEG copy.</span>
+      ) : blobUrl ? (
+        <img src={blobUrl} alt={alt} onError={() => setFailed(true)} />
+      ) : (
+        <span>Loading screenshot...</span>
+      )}
+    </button>
+  );
+}
+
 function newItem(): WatchlistItem {
   const now = new Date().toISOString();
   return {
@@ -211,7 +269,6 @@ export default function WatchlistPage() {
   const [isReviewingSetup, setIsReviewingSetup] = useState(false);
   const [aiReviewByItemId, setAiReviewByItemId] = useState<Record<string, AiWatchlistReview>>({});
   const [maximizedScreenshot, setMaximizedScreenshot] = useState("");
-  const [failedScreenshots, setFailedScreenshots] = useState<Record<string, true>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -669,30 +726,14 @@ export default function WatchlistPage() {
                   </div>
                   <div className="watchlist-screenshot-grid">
                     {selectedItem.screenshots.map((screenshot, index) => {
-                      const displayUrl = watchlistScreenshotDisplayUrl(screenshot);
-                      const failed = Boolean(failedScreenshots[displayUrl]);
                       return (
                         <figure key={`${selectedItem.id}-${index}`}>
-                          <button
-                            className="watchlist-screenshot-preview"
-                            type="button"
-                            onClick={() => !failed && setMaximizedScreenshot(displayUrl)}
-                            aria-label={`Maximize ${selectedItem.symbol || "watchlist"} screenshot ${index + 1}`}
-                            disabled={failed}
-                            style={{ minHeight: "150px", width: "100%" }}
-                          >
-                            {failed ? (
-                              <span role="alert">Screenshot could not be displayed. Remove it and upload a PNG or JPEG copy.</span>
-                            ) : (
-                              <img
-                                src={displayUrl}
-                                alt={`${selectedItem.symbol} watchlist screenshot ${index + 1}`}
-                                loading="lazy"
-                                decoding="async"
-                                onError={() => setFailedScreenshots((current) => ({ ...current, [displayUrl]: true }))}
-                              />
-                            )}
-                          </button>
+                          <WatchlistScreenshotPreview
+                            sourceUrl={screenshot}
+                            onMaximize={setMaximizedScreenshot}
+                            ariaLabel={`Maximize ${selectedItem.symbol || "watchlist"} screenshot ${index + 1}`}
+                            alt={`${selectedItem.symbol} watchlist screenshot ${index + 1}`}
+                          />
                           {canEdit ? <button type="button" onClick={() => updateItem(selectedItem.id, { screenshots: selectedItem.screenshots.filter((_, imageIndex) => imageIndex !== index) })}>Remove</button> : null}
                         </figure>
                       );
