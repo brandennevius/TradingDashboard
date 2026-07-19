@@ -17,6 +17,12 @@ import { generateDailyPortfolioSnapshot, SnapshotValidationError } from "../lib/
 import { sendDailyPortfolioSnapshotEmail, snapshotEmailConfiguration } from "../lib/snapshot-email";
 import { reviewSectionsFromLegacyNotes } from "../lib/trade-review";
 import type { TradeLogEntry } from "../lib/types";
+import {
+  createUserDefinedWeeklyFocus,
+  normalizeWeeklyFocus,
+  weeklyFocusFromSnapshot,
+  weeklyFocusWeekStart
+} from "../lib/weekly-focus";
 
 function trade(overrides: Partial<TradeLogEntry> = {}): TradeLogEntry {
   return {
@@ -61,6 +67,80 @@ test("request-body date takes precedence and preserves the selected value", () =
   assert.deepEqual(buildDailySnapshotRequestBody(" 2026-07-17 ", " CF_Statement ", true), {
     session: "2026-07-17", accountName: "CF_Statement", sendEmail: true
   });
+});
+
+test("weekly focus week start follows New York weekday and weekend rules", () => {
+  assert.equal(weeklyFocusWeekStart(new Date("2026-07-18T16:00:00Z")), "2026-07-20");
+  assert.equal(weeklyFocusWeekStart(new Date("2026-07-19T16:00:00Z")), "2026-07-20");
+  assert.equal(weeklyFocusWeekStart(new Date("2026-07-22T16:00:00Z")), "2026-07-20");
+  assert.equal(weeklyFocusWeekStart(new Date("2026-07-20T03:30:00Z")), "2026-07-20");
+});
+
+test("weekly focus preserves user wording and normalizes empty legacy values", () => {
+  const focus = createUserDefinedWeeklyFocus({
+    summary: "Structure first; size second.",
+    focusItems: ["Let trades earn adds", "Require confirmation before re-entry"]
+  }, new Date("2026-07-19T16:00:00Z"));
+  assert.deepEqual(focus, {
+    status: "AVAILABLE",
+    week_start: "2026-07-20",
+    updated_at: "2026-07-19T12:00:00-04:00",
+    source: "USER_DEFINED_WEEKLY_REVIEW",
+    summary: "Structure first; size second.",
+    focus_items: ["Let trades earn adds", "Require confirmation before re-entry"]
+  });
+  assert.equal(createUserDefinedWeeklyFocus({ summary: "", focusItems: [] }, new Date("2026-07-19T16:00:00Z")).status, "CLEARED");
+  const clearedSnapshot = buildDailyPortfolioSnapshot({
+    ...input([trade()]),
+    weeklyFocus: createUserDefinedWeeklyFocus({ summary: "", focusItems: [] }, new Date("2026-07-19T16:00:00Z"))
+  });
+  assert.match(renderDailyPortfolioSnapshotMarkdown(clearedSnapshot), /weekly focus has been cleared/);
+  assert.deepEqual(normalizeWeeklyFocus({ summary: "", focus_items: [] }), {
+    status: "NOT_SET", week_start: null, updated_at: null, source: null, summary: null, focus_items: []
+  });
+});
+
+test("snapshots export matching user-defined weekly focus in JSON and Markdown", () => {
+  const weeklyFocus = createUserDefinedWeeklyFocus({
+    summary: "Structure first and size second.",
+    focusItems: ["Structure first and size second", "Stay inside the defined system"]
+  }, new Date("2026-07-19T16:00:00Z"));
+  const snapshot = buildDailyPortfolioSnapshot({ ...input([trade()]), weeklyFocus });
+  const markdown = renderDailyPortfolioSnapshotMarkdown(snapshot);
+  assert.deepEqual(snapshot.weekly_focus, weeklyFocus);
+  assert.match(markdown, /## Weekly Process Focus/);
+  assert.match(markdown, /\*\*Week of:\*\* July 20, 2026/);
+  assert.match(markdown, /Structure first and size second\./);
+  assert.match(markdown, /- Stay inside the defined system/);
+});
+
+test("missing and legacy weekly focus remain readable as NOT_SET", () => {
+  const snapshot = buildDailyPortfolioSnapshot(input([trade()]));
+  assert.deepEqual(snapshot.weekly_focus, {
+    status: "NOT_SET", week_start: null, updated_at: null, source: null, summary: null, focus_items: []
+  });
+  assert.match(renderDailyPortfolioSnapshotMarkdown(snapshot), /No user-defined weekly focus is currently available\./);
+  assert.deepEqual(weeklyFocusFromSnapshot({ metadata: { schema_version: "daily-portfolio-snapshot-v1" } }), snapshot.weekly_focus);
+});
+
+test("replacing weekly focus affects future snapshots without mutating historical exports", () => {
+  const firstFocus = createUserDefinedWeeklyFocus({ summary: "First wording", focusItems: ["First item"] }, new Date("2026-07-12T16:00:00Z"));
+  const firstSnapshot = buildDailyPortfolioSnapshot({ ...input([trade()]), weeklyFocus: firstFocus });
+  const frozenHistoricalJson = JSON.stringify(firstSnapshot);
+  const replacement = createUserDefinedWeeklyFocus({ summary: "Replacement wording", focusItems: ["Replacement item"] }, new Date("2026-07-19T16:00:00Z"));
+  const futureSnapshot = buildDailyPortfolioSnapshot({ ...input([trade()]), weeklyFocus: replacement });
+  assert.equal(futureSnapshot.weekly_focus.summary, "Replacement wording");
+  assert.equal(JSON.stringify(firstSnapshot), frozenHistoricalJson);
+  assert.equal(firstSnapshot.weekly_focus.summary, "First wording");
+});
+
+test("snapshot generator never derives weekly focus from trade notes or mistakes", () => {
+  const snapshot = buildDailyPortfolioSnapshot(input([trade({
+    notes: "Next week I should reduce size.",
+    mistakeTags: ["Oversized position"]
+  })]));
+  assert.equal(snapshot.weekly_focus.status, "NOT_SET");
+  assert(!JSON.stringify(snapshot.weekly_focus).includes("reduce size"));
 });
 
 test("snapshot status reflects final warning severity", () => {
@@ -497,17 +577,21 @@ test("server does not write exports when a current price is stale", async () => 
 
 test("server can return browser download payloads without writing deployment files", async () => {
   const outputDirectory = await mkdtemp(path.join(os.tmpdir(), "snapshot-browser-test-"));
+  const weeklyFocus = createUserDefinedWeeklyFocus({ summary: "Follow my written plan.", focusItems: ["Let trades earn adds"] }, new Date("2026-07-12T16:00:00Z"));
   const result = await generateDailyPortfolioSnapshot({
     session: "2026-07-16", accountName: "Main", outputDirectory, writeExports: false,
     dependencies: {
       now: () => new Date("2026-07-17T00:00:00Z"),
       loadTrades: async () => [trade()],
       loadPortfolioSettings: async () => ({ portfolios: ["Main"], defaultPortfolio: "Main", portfolioMeta: { Main: input([]).portfolioMeta } }),
+      loadWeeklyFocus: async () => weeklyFocus,
       loadPrice: async (symbol, session) => ({ symbol, price: 110, timestamp: session, provider: "test" })
     }
   });
   assert.equal(result.snapshot.open_positions.length, 1);
+  assert.deepEqual(result.snapshot.weekly_focus, weeklyFocus);
   assert.match(result.markdown, /TEST/);
+  assert.match(result.markdown, /Let trades earn adds/);
   assert.deepEqual(await readdir(outputDirectory), []);
 });
 

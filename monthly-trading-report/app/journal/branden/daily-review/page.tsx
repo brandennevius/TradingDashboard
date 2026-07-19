@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { TradeExecution, TradeLogEntry, TraderUser } from "@/lib/types";
+import type { WeeklyFocus } from "@/lib/weekly-focus";
 
 type PortfolioMeta = {
   currentEquity?: number;
@@ -243,13 +244,24 @@ export default function DailyReviewPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMarket, setIsLoadingMarket] = useState(false);
   const [error, setError] = useState("");
+  const [weeklyFocus, setWeeklyFocus] = useState<WeeklyFocus | null>(null);
+  const [weeklyFocusSummary, setWeeklyFocusSummary] = useState("");
+  const [weeklyFocusItems, setWeeklyFocusItems] = useState("");
+  const [weeklyFocusMessage, setWeeklyFocusMessage] = useState("");
+  const [isSavingWeeklyFocus, setIsSavingWeeklyFocus] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadPage() {
-      const reviewResponse = await fetch("/api/journal/branden/daily-review", { cache: "no-store" });
-      const reviewData = await reviewResponse.json().catch(() => ({}));
+      const [reviewResponse, focusResponse] = await Promise.all([
+        fetch("/api/journal/branden/daily-review", { cache: "no-store" }),
+        fetch("/api/settings/weekly-focus", { cache: "no-store" })
+      ]);
+      const [reviewData, focusData] = await Promise.all([
+        reviewResponse.json().catch(() => ({})),
+        focusResponse.json().catch(() => ({}))
+      ]);
 
       if (cancelled) {
         return;
@@ -274,6 +286,14 @@ export default function DailyReviewPage() {
       setPortfolioMeta(reviewData.portfolioMeta || {});
       setActivePortfolio(String(reviewData.defaultPortfolio || ""));
       setSelectedDate(params.get("date") || latestExecutionDate || new Date().toISOString().slice(0, 10));
+      if (focusResponse.ok && focusData.focus) {
+        const focus = focusData.focus as WeeklyFocus;
+        setWeeklyFocus(focus);
+        setWeeklyFocusSummary(focus.summary || "");
+        setWeeklyFocusItems(focus.focus_items.join("\n"));
+      } else if (!focusResponse.ok) {
+        setWeeklyFocusMessage(focusData.error || "Could not load the saved weekly focus.");
+      }
       setIsLoading(false);
     }
 
@@ -444,6 +464,32 @@ export default function DailyReviewPage() {
   const updatedActivities = activities.filter((activity) => activity.kind === "added" || activity.kind === "reduced");
   const selectedPortfolioEquity = activePortfolio ? portfolioMeta[activePortfolio]?.currentEquity : undefined;
 
+  async function saveWeeklyFocus(clear = false) {
+    setIsSavingWeeklyFocus(true);
+    setWeeklyFocusMessage("");
+    try {
+      const response = await fetch("/api/settings/weekly-focus", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          summary: clear ? "" : weeklyFocusSummary,
+          focusItems: clear ? [] : weeklyFocusItems.split("\n").map((item) => item.trim()).filter(Boolean)
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.focus) throw new Error(data.error || "Could not save the weekly focus.");
+      const focus = data.focus as WeeklyFocus;
+      setWeeklyFocus(focus);
+      setWeeklyFocusSummary(focus.summary || "");
+      setWeeklyFocusItems(focus.focus_items.join("\n"));
+      setWeeklyFocusMessage(clear ? "Weekly focus cleared." : "Weekly focus saved.");
+    } catch (saveError) {
+      setWeeklyFocusMessage(saveError instanceof Error ? saveError.message : "Could not save the weekly focus.");
+    } finally {
+      setIsSavingWeeklyFocus(false);
+    }
+  }
+
   return (
     <div className="branden-journal-content daily-review-page">
         <header className="branden-route-header">
@@ -467,6 +513,53 @@ export default function DailyReviewPage() {
 
         {!isLoading && !error ? (
           <>
+            <section className="daily-review-card">
+              <div className="daily-card-heading">
+                <div>
+                  <p className="eyebrow">Weekend review</p>
+                  <h2>Weekly Process Focus</h2>
+                </div>
+                <span>{weeklyFocus?.status || "NOT_SET"}</span>
+              </div>
+              <p>
+                This is copied exactly into each daily snapshot until you replace or clear it.
+                {weeklyFocus?.week_start ? ` Active week starts ${formatDate(weeklyFocus.week_start)}.` : ""}
+              </p>
+              <div style={{ display: "grid", gap: "0.75rem" }}>
+                <label>
+                  Summary
+                  <textarea
+                    rows={2}
+                    value={weeklyFocusSummary}
+                    onChange={(event) => setWeeklyFocusSummary(event.target.value)}
+                    disabled={Boolean(user?.readOnly)}
+                    placeholder="Enter the weekly process focus in your own words."
+                  />
+                </label>
+                <label>
+                  Ordered focus items (one per line)
+                  <textarea
+                    rows={5}
+                    value={weeklyFocusItems}
+                    onChange={(event) => setWeeklyFocusItems(event.target.value)}
+                    disabled={Boolean(user?.readOnly)}
+                    placeholder="Structure first and size second"
+                  />
+                </label>
+                {!user?.readOnly ? (
+                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                    <button type="button" onClick={() => saveWeeklyFocus(false)} disabled={isSavingWeeklyFocus}>
+                      {isSavingWeeklyFocus ? "Saving..." : "Save weekly focus"}
+                    </button>
+                    <button type="button" className="secondary" onClick={() => saveWeeklyFocus(true)} disabled={isSavingWeeklyFocus}>
+                      Clear focus
+                    </button>
+                  </div>
+                ) : null}
+                {weeklyFocusMessage ? <p className="status">{weeklyFocusMessage}</p> : null}
+              </div>
+            </section>
+
             <section className="daily-review-hero">
               <div>
                 <span>Tracked daily return</span>
