@@ -90,14 +90,8 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   const [user, setUser] = useState<TraderUser | null>(null);
   const [defaultPortfolio, setDefaultPortfolio] = useState("");
   const [snapshotSession, setSnapshotSession] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()));
-  const [lastSubmittedSnapshotSession, setLastSubmittedSnapshotSession] = useState("");
-  const [latestCompletedSnapshotSession, setLatestCompletedSnapshotSession] = useState("");
   const [mtdMonth, setMtdMonth] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit" }).format(new Date()));
   const [mtdAsOfDate, setMtdAsOfDate] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()));
-  const [mtdStatus, setMtdStatus] = useState("Not generated");
-  const [mtdWarningCount, setMtdWarningCount] = useState<number | null>(null);
-  const [mtdFilenames, setMtdFilenames] = useState<string[]>([]);
-  const [lastMtdDownload, setLastMtdDownload] = useState<{ snapshot: unknown; markdown: string; filenames: { json: string; markdown: string; zip: string } } | null>(null);
   const [mtdEmailConfigured, setMtdEmailConfigured] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [isGeneratingSnapshot, setIsGeneratingSnapshot] = useState(false);
@@ -159,7 +153,6 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
     const accountName = window.prompt("Portfolio", defaultPortfolio.trim())?.trim();
     if (!accountName) return;
     setIsGeneratingSnapshot(true);
-    setLastSubmittedSnapshotSession(session);
     try {
       const response = await fetch("/api/journal/branden/daily-snapshot", {
         method: "POST",
@@ -167,8 +160,6 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         body: JSON.stringify(buildDailySnapshotRequestBody(session, accountName, sendEmail))
       });
       const data = await response.json().catch(() => ({}));
-      const reportedLatestSession = data.datePath?.latestCompletedSession || data.diagnostic?.latestCompletedSession || "";
-      if (reportedLatestSession) setLatestCompletedSnapshotSession(reportedLatestSession);
       if (!response.ok) throw new Error(formatSnapshotValidationError(data));
       if (sendEmail && data.email?.status !== "sent") {
         throw new Error(data.email?.reason || "The snapshot was generated, but email delivery is not configured.");
@@ -196,44 +187,40 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
 
   async function generateMtdSnapshot(sendEmail: boolean) {
     if (!canGenerateSnapshot || isGeneratingMtdSnapshot) return;
-    if (!/^\d{4}-\d{2}$/.test(mtdMonth) || !/^\d{4}-\d{2}-\d{2}$/.test(mtdAsOfDate)) {
+    const selectedMonth = window.prompt("MTD snapshot month (YYYY-MM)", mtdMonth)?.trim();
+    if (!selectedMonth) return;
+    const selectedAsOfDate = window.prompt("MTD snapshot as-of date (YYYY-MM-DD)", mtdAsOfDate)?.trim();
+    if (!selectedAsOfDate) return;
+    if (!/^\d{4}-\d{2}$/.test(selectedMonth) || !/^\d{4}-\d{2}-\d{2}$/.test(selectedAsOfDate)) {
       window.alert("Choose a valid month and as-of date.");
       return;
     }
-    if (!mtdAsOfDate.startsWith(`${mtdMonth}-`)) {
+    if (!selectedAsOfDate.startsWith(`${selectedMonth}-`)) {
       window.alert("The as-of date must fall within the selected month.");
       return;
     }
+    setMtdMonth(selectedMonth);
+    setMtdAsOfDate(selectedAsOfDate);
     const portfolioName = defaultPortfolio.trim();
     if (!portfolioName) {
       window.alert("Select a default portfolio in Portfolio settings first.");
       return;
     }
     setIsGeneratingMtdSnapshot(true);
-    setMtdStatus("Generating");
-    setMtdWarningCount(null);
-    setMtdFilenames([]);
-    setLastMtdDownload(null);
     try {
       const response = await fetch("/api/journal/branden/mtd-snapshot", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ month: mtdMonth, asOfDate: mtdAsOfDate, portfolioName, sendEmail })
+        body: JSON.stringify({ month: selectedMonth, asOfDate: selectedAsOfDate, portfolioName, sendEmail })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(`${data.code ? `${data.code}: ` : ""}${data.error || "Could not generate the MTD snapshot."}`);
       if (sendEmail && data.email?.status !== "sent") throw new Error(data.email?.reason || "The MTD snapshot was generated, but email delivery is not configured.");
-      const filenames = [data.filenames?.json, data.filenames?.markdown].filter(Boolean);
-      setMtdStatus(data.snapshot.status);
-      setMtdWarningCount(data.snapshot.diagnostics?.length || 0);
-      setMtdFilenames(filenames);
-      setLastMtdDownload({ snapshot: data.snapshot, markdown: data.markdown, filenames: data.filenames });
       if (!sendEmail) {
         await downloadMtdBundle({ snapshot: data.snapshot, markdown: data.markdown, filenames: data.filenames });
       }
       window.alert(`MTD snapshot generated with status ${data.snapshot.status}.${sendEmail ? " Email sent." : " ZIP downloaded."}`);
     } catch (error) {
-      setMtdStatus("BLOCKED");
       window.alert(error instanceof Error ? error.message : "Could not generate the MTD snapshot.");
     } finally {
       setIsGeneratingMtdSnapshot(false);
@@ -349,55 +336,6 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         }}
       />
       <BrandenSidebar activeHref={pathname || "/journal/branden/dashboard"} accountActions={accountActions} />
-      {canGenerateSnapshot ? (
-        <section
-          aria-label="Month-to-date snapshot controls"
-          style={{ position: "fixed", right: 18, bottom: 168, zIndex: 40, width: 300, padding: 12, border: "1px solid rgba(74,222,128,.35)", borderRadius: 10, background: "rgba(15,23,42,.96)", color: "#e2e8f0", boxShadow: "0 12px 32px rgba(0,0,0,.3)" }}
-        >
-          <strong style={{ display: "block", fontSize: 12, marginBottom: 8 }}>Month-to-Date Snapshot</strong>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
-              Month
-              <input type="month" value={mtdMonth} onChange={(event) => setMtdMonth(event.currentTarget.value)} style={{ width: "100%", padding: "6px 7px", borderRadius: 6 }} />
-            </label>
-            <label style={{ display: "grid", gap: 4, fontSize: 11 }}>
-              As-of date
-              <input type="date" value={mtdAsOfDate} onChange={(event) => setMtdAsOfDate(event.currentTarget.value)} style={{ width: "100%", padding: "6px 7px", borderRadius: 6 }} />
-            </label>
-          </div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
-            <button type="button" disabled={isGeneratingMtdSnapshot} onClick={() => generateMtdSnapshot(false)} style={{ padding: "7px", borderRadius: 6 }}>Generate</button>
-            <button type="button" disabled={isGeneratingMtdSnapshot || !mtdEmailConfigured} onClick={() => generateMtdSnapshot(true)} style={{ padding: "7px", borderRadius: 6 }}>{mtdEmailConfigured ? "Generate + Send" : "Email unavailable"}</button>
-          </div>
-          <div style={{ display: "grid", gap: 2, marginTop: 8, fontSize: 10, color: "#94a3b8" }}>
-            <span>Portfolio: {defaultPortfolio || "not selected"}</span>
-            <span>Status: {mtdStatus}{mtdWarningCount === null ? "" : ` · ${mtdWarningCount} warnings`}</span>
-            {mtdFilenames.map((filename) => <span key={filename}>{filename}</span>)}
-          </div>
-          {lastMtdDownload ? <button type="button" onClick={() => downloadMtdBundle(lastMtdDownload)} style={{ width: "100%", marginTop: 7, padding: "6px", borderRadius: 6 }}>Download generated ZIP</button> : null}
-        </section>
-      ) : null}
-      {canGenerateSnapshot ? (
-        <section
-          aria-label="Daily snapshot date selection"
-          style={{ position: "fixed", right: 18, bottom: 18, zIndex: 40, width: 270, padding: 12, border: "1px solid rgba(148,163,184,.35)", borderRadius: 10, background: "rgba(15,23,42,.96)", color: "#e2e8f0", boxShadow: "0 12px 32px rgba(0,0,0,.3)" }}
-        >
-          <label style={{ display: "grid", gap: 6, fontSize: 12 }}>
-            <strong>Daily snapshot date</strong>
-            <input
-              type="date"
-              value={snapshotSession}
-              onChange={(event) => setSnapshotSession(event.currentTarget.value)}
-              style={{ width: "100%", padding: "7px 8px", borderRadius: 6 }}
-            />
-          </label>
-          <div style={{ display: "grid", gap: 3, marginTop: 8, fontSize: 11, color: "#94a3b8" }}>
-            <span>Selected date: {snapshotSession || "—"}</span>
-            <span>Date submitted: {lastSubmittedSnapshotSession || "—"}</span>
-            <span>Latest completed session: {latestCompletedSnapshotSession || "shown after submission"}</span>
-          </div>
-        </section>
-      ) : null}
       {children}
     </main>
   );
