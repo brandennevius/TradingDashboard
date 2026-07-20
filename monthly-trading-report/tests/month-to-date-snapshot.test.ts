@@ -248,6 +248,42 @@ test("current-session MTD generation requests the latest completed close", async
   assert.equal(result.snapshot.trades[0].prices.current_price_timestamp, "2026-07-17T16:00:00-04:00");
 });
 
+test("final validation exposes safe trade-level blocking diagnostics", async () => {
+  await assert.rejects(
+    generateMonthToDateSnapshot({
+      month: "2026-07",
+      asOfDate: "2026-07-17",
+      writeExports: false,
+      dependencies: {
+        loadTrades: async () => [trade({ stopPrice: 0 })],
+        loadPortfolioSettings: async () => ({
+          portfolios: ["Branden Log"],
+          defaultPortfolio: "Branden Log",
+          portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: "2026-07-17" } }
+        }),
+        loadWeeklyFocus: async () => createUserDefinedWeeklyFocus({}, new Date("2026-07-12T16:00:00Z")),
+        loadPrice: async (symbol: string, session: string) => ({ symbol, price: 110, sessionDate: session, timestamp: `${session}T16:00:00-04:00`, provider: "test" }),
+        now: () => new Date("2026-07-18T01:00:00Z")
+      }
+    }),
+    (error: unknown) => {
+      assert(error instanceof MonthToDateSnapshotValidationError);
+      assert.equal(error.code, "SNAPSHOT_VALIDATION_FAILED");
+      const blocking = error.diagnostic?.blockingDiagnostics as Array<{ code: string; symbol: string; field: string }>;
+      assert.deepEqual(blocking[0], {
+        code: "CURRENT_STOP_UNAVAILABLE",
+        severity: "critical",
+        message: "No current protective stop is stored for this open position.",
+        blocking: true,
+        trade_id: "trade-1",
+        symbol: "TEST",
+        field: "prices.current_stop"
+      });
+      return true;
+    }
+  );
+});
+
 test("email attaches JSON and Markdown with the selected period and does not send blocked output", async () => {
   const snapshot = buildMonthToDateSnapshot(snapshotInput([trade()]));
   const messages: Array<Record<string, unknown>> = [];

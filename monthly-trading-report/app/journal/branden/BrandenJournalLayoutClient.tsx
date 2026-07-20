@@ -85,6 +85,34 @@ function formatSnapshotValidationError(data: { error?: string; codes?: string[];
   return lines.join("\n");
 }
 
+type MtdBlockingDiagnostic = {
+  code?: string;
+  symbol?: string;
+  field?: string;
+  message?: string;
+};
+
+function formatMtdSnapshotValidationError(data: {
+  error?: string;
+  code?: string;
+  diagnostic?: { portfolio?: string; validationErrors?: string[]; blockingDiagnostics?: MtdBlockingDiagnostic[] };
+}) {
+  const lines = [data.code ? `${data.code}: ${data.error || "MTD snapshot validation failed."}` : data.error || "Could not generate the MTD snapshot."];
+  const diagnostic = data.diagnostic;
+  if (diagnostic?.portfolio) lines.push("", `Portfolio: ${diagnostic.portfolio}`);
+  if (diagnostic?.blockingDiagnostics?.length) {
+    lines.push("", "Blocking data issues:");
+    diagnostic.blockingDiagnostics.forEach((item) => {
+      const context = [item.symbol, item.field].filter(Boolean).join(" · ");
+      lines.push(`- ${item.code || "VALIDATION_ERROR"}${context ? ` (${context})` : ""}: ${item.message || "Required data are unavailable."}`);
+    });
+  }
+  if (diagnostic?.validationErrors?.length) {
+    lines.push("", "Schema validation:", ...diagnostic.validationErrors.map((item) => `- ${item}`));
+  }
+  return lines.join("\n");
+}
+
 export default function BrandenJournalLayoutClient({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [user, setUser] = useState<TraderUser | null>(null);
@@ -214,7 +242,7 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         body: JSON.stringify({ month: selectedMonth, asOfDate: selectedAsOfDate, portfolioName, sendEmail })
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(`${data.code ? `${data.code}: ` : ""}${data.error || "Could not generate the MTD snapshot."}`);
+      if (!response.ok) throw new Error(formatMtdSnapshotValidationError(data));
       if (sendEmail && data.email?.status !== "sent") throw new Error(data.email?.reason || "The MTD snapshot was generated, but email delivery is not configured.");
       if (!sendEmail) {
         await downloadMtdBundle({ snapshot: data.snapshot, markdown: data.markdown, filenames: data.filenames });
