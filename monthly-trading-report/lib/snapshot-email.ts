@@ -1,7 +1,7 @@
 import type { buildDailyPortfolioSnapshot } from "./daily-portfolio-snapshot";
 
 export type SnapshotEmailTransport = {
-  sendMail(message: { from: string; to: string; subject: string; text: string; attachments: Array<{ filename: string; content: string; contentType: string }> }): Promise<unknown>;
+  sendMail(message: { from: string; to: string; subject: string; text: string; attachments: Array<{ filename: string; content: string | Buffer; contentType: string }> }): Promise<unknown>;
 };
 
 type Snapshot = ReturnType<typeof buildDailyPortfolioSnapshot>;

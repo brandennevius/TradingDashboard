@@ -9,6 +9,7 @@
     "lint": "next lint",
     "snapshot:daily": "tsx scripts/generate-daily-portfolio-snapshot.ts",
     "test:daily-snapshot": "tsx --test tests/daily-portfolio-snapshot.test.ts",
+    "test:mtd-snapshot": "tsx --test tests/month-to-date-snapshot.test.ts",
     "test:cf-import": "tsx --test tests/cf-statement-import.test.ts"
   },
   "dependencies": {
