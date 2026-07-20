@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { getCamJournalScreenshot, getWeeklyWatchlists, saveWeeklyWatchlists } from "@/lib/store";
+import { applyWatchlistItemOrder } from "@/lib/watchlist-order";
 import type { WatchlistItem, WeeklyWatchlist } from "@/lib/types";
 
 function isoWeek(date = new Date()) {
@@ -113,8 +114,9 @@ export async function PATCH(request: Request) {
   const body = await request.json();
   const incomingWatchlist = body.watchlist as Partial<WeeklyWatchlist> | undefined;
   const incomingItem = body.item as WatchlistItem | undefined;
+  const orderedItemIds = Array.isArray(body.orderedItemIds) ? body.orderedItemIds.map(String) : null;
   const weekKey = String(body.weekKey || incomingWatchlist?.weekKey || "");
-  if (!weekKey || !incomingItem?.id) {
+  if (!weekKey || (!incomingItem?.id && !orderedItemIds)) {
     return NextResponse.json({ error: "A week and watchlist item are required." }, { status: 400 });
   }
 
@@ -123,6 +125,21 @@ export async function PATCH(request: Request) {
     const now = new Date().toISOString();
     const current = await getWeeklyWatchlists(ownerId);
     const existingWeek = current.find((watchlist) => watchlist.weekKey === weekKey);
+    if (orderedItemIds) {
+      if (!existingWeek) return NextResponse.json({ error: "Could not find that watchlist week." }, { status: 404 });
+      const reorderedItems = applyWatchlistItemOrder(existingWeek.items, orderedItemIds);
+      if (!reorderedItems) {
+        return NextResponse.json({ error: "The priority order must include every saved ticker exactly once." }, { status: 400 });
+      }
+      const reorderedWeek = { ...existingWeek, items: reorderedItems, updatedAt: now };
+      const saved = await saveWeeklyWatchlists(ownerId, current.map((watchlist) =>
+        watchlist.weekKey === weekKey ? reorderedWeek : watchlist
+      ));
+      return NextResponse.json({ watchlist: saved.find((watchlist) => watchlist.weekKey === weekKey) });
+    }
+    if (!incomingItem) {
+      return NextResponse.json({ error: "A watchlist item is required." }, { status: 400 });
+    }
     const fallbackWeek = incomingWatchlist;
     if (!existingWeek && (!fallbackWeek?.year || !fallbackWeek.weekNumber)) {
       return NextResponse.json({ error: "Could not find that watchlist week." }, { status: 404 });

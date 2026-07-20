@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import TradePriceChart from "@/app/components/TradePriceChart";
 import { watchlistScreenshotFetchUrl } from "@/lib/watchlist-screenshot";
+import { reorderWatchlistItems } from "@/lib/watchlist-order";
 import type {
   ChecklistGradeBand,
   SetupChecklistTemplate,
@@ -269,6 +270,9 @@ export default function WatchlistPage() {
   const [isReviewingSetup, setIsReviewingSetup] = useState(false);
   const [aiReviewByItemId, setAiReviewByItemId] = useState<Record<string, AiWatchlistReview>>({});
   const [maximizedScreenshot, setMaximizedScreenshot] = useState("");
+  const [draggedItemId, setDraggedItemId] = useState("");
+  const [dragTargetItemId, setDragTargetItemId] = useState("");
+  const [isReordering, setIsReordering] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -324,6 +328,38 @@ export default function WatchlistPage() {
         item.id === itemId ? { ...item, ...updates, updatedAt: new Date().toISOString() } : item
       )
     }));
+  }
+
+  async function reorderItems(draggedId: string, targetId: string) {
+    if (!activeWatchlist || isReordering || draggedId === targetId) return;
+    const previousIds = activeWatchlist.items.map((item) => item.id);
+    const nextItems = reorderWatchlistItems(activeWatchlist.items, draggedId, targetId);
+    if (nextItems === activeWatchlist.items) return;
+
+    updateActiveWatchlist((watchlist) => ({ ...watchlist, items: nextItems, updatedAt: new Date().toISOString() }));
+    setIsReordering(true);
+    setStatus("Saving priority order...");
+    try {
+      const response = await fetch("/api/watchlists", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ weekKey: activeWatchlist.weekKey, orderedItemIds: nextItems.map((item) => item.id) })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not save priority order.");
+      setStatus("Priority order saved.");
+    } catch (reorderError) {
+      updateActiveWatchlist((watchlist) => {
+        const currentById = new Map(watchlist.items.map((item) => [item.id, item]));
+        const restored = previousIds.map((id) => currentById.get(id)).filter(Boolean) as WatchlistItem[];
+        return restored.length === watchlist.items.length ? { ...watchlist, items: restored } : watchlist;
+      });
+      setStatus(reorderError instanceof Error ? reorderError.message : "Could not save priority order.");
+    } finally {
+      setIsReordering(false);
+      setDraggedItemId("");
+      setDragTargetItemId("");
+    }
   }
 
   function chooseSetup(item: WatchlistItem, setupTag: string) {
@@ -517,15 +553,47 @@ export default function WatchlistPage() {
           <div className="watchlist-workspace">
             <aside className="watchlist-ticker-list">
               <div className="trade-chart-heading"><h3>Tickers</h3><span>{activeWatchlist.items.length}</span></div>
-              {activeWatchlist.items.map((item) => (
+              {activeWatchlist.items.map((item, index) => (
                 <button
                   className={selectedItem?.id === item.id ? "active" : ""}
                   key={item.id}
                   type="button"
                   onClick={() => setSelectedItemId(item.id)}
+                  draggable={canEdit && !isReordering}
+                  onDragStart={(event) => {
+                    setDraggedItemId(item.id);
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", item.id);
+                  }}
+                  onDragEnter={() => draggedItemId && setDragTargetItemId(item.id)}
+                  onDragOver={(event) => {
+                    if (!draggedItemId) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const sourceId = draggedItemId || event.dataTransfer.getData("text/plain");
+                    void reorderItems(sourceId, item.id);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedItemId("");
+                    setDragTargetItemId("");
+                  }}
+                  aria-label={`Priority ${index + 1}: ${item.symbol || "New ticker"}`}
+                  style={{
+                    alignItems: "center",
+                    borderStyle: dragTargetItemId === item.id && draggedItemId !== item.id ? "dashed" : "solid",
+                    cursor: canEdit ? "grab" : "pointer",
+                    gridTemplateColumns: "30px minmax(0, 1fr) auto"
+                  }}
                 >
-                  <strong>{item.symbol || "New ticker"}</strong>
-                  <span>{item.setupTag || "No setup"}</span>
+                  <strong style={{ alignItems: "center", background: "rgba(111, 143, 95, 0.15)", borderRadius: "999px", display: "flex", height: "26px", justifyContent: "center", width: "26px" }}>{index + 1}</strong>
+                  <span style={{ display: "grid", gap: "3px" }}>
+                    <strong>{item.symbol || "New ticker"}</strong>
+                    <span>{item.setupTag || "No setup"}</span>
+                  </span>
+                  {canEdit ? <span aria-hidden="true" style={{ fontSize: "1rem" }}>↕</span> : null}
                 </button>
               ))}
               {!activeWatchlist.items.length ? <p className="muted">Add the first ticker for this week.</p> : null}
