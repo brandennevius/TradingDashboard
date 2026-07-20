@@ -3,7 +3,7 @@ import path from "node:path";
 import packageJson from "../package.json";
 import { latestCompletedMarketSession, marketSessionCloseTimestamp, type SnapshotPrice } from "./daily-portfolio-snapshot";
 import { getMarketCandlesWithProvider } from "./market-data";
-import { buildMonthToDateSnapshot, renderMonthToDateSnapshotMarkdown, resolveMtdPeriod, validateMonthToDateSnapshot } from "./month-to-date-snapshot";
+import { buildMonthToDateSnapshot, renderMonthToDateSnapshotMarkdown, resolveMtdPeriod, summarizeMtdDiagnostics, validateMonthToDateSnapshot } from "./month-to-date-snapshot";
 import { getBrandenPortfolioSettings, getWeeklyProcessFocus, listBrandenVisibleTrades } from "./store";
 import type { TradeLogEntry } from "./types";
 import type { WeeklyFocus } from "./weekly-focus";
@@ -35,6 +35,10 @@ export class MonthToDateSnapshotValidationError extends Error {
 
 function nyDate(now: Date) {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+}
+
+function calendarGapDays(earlier: string, later: string) {
+  return Math.max(0, Math.round((Date.parse(`${later}T12:00:00Z`) - Date.parse(`${earlier}T12:00:00Z`)) / 86_400_000));
 }
 
 function executionAsOfQuantity(trade: TradeLogEntry, asOfDate: string) {
@@ -103,12 +107,24 @@ export async function generateMonthToDateSnapshot(options: GenerateMonthToDateSn
     throw new MonthToDateSnapshotValidationError("AUTHORITATIVE_EQUITY_UNAVAILABLE", "Authoritative account equity is required before an MTD snapshot can be generated.", { portfolio: portfolioName });
   }
   const coverage = String(portfolioMeta.equityStatementDate || "").slice(0, 10);
-  const requiredMarketStateDate = latestCompletedMarketSession(new Date(period.end));
-  if (!coverage || coverage < requiredMarketStateDate) {
+  if (!coverage || coverage < period.asOfDate) {
     throw new MonthToDateSnapshotValidationError("BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT", "The latest broker statement does not cover the selected as-of date.", {
-      portfolio: portfolioName, requestedAsOfDate: period.asOfDate, requiredMarketStateDate, statementCoverageDate: coverage || null
+      portfolio: portfolioName,
+      requested_as_of_date: period.asOfDate,
+      effective_broker_coverage_date: coverage || null,
+      coverage_gap_days: coverage ? calendarGapDays(coverage, period.asOfDate) : null,
+      snapshot_status: "BLOCKED",
+      current_equity: null,
+      current_open_positions: null,
+      current_gross_exposure: null,
+      current_net_exposure: null,
+      current_unrealized_pnl: null,
+      current_planned_downside_risk: null,
+      execution_based_report_available_through: coverage || null,
+      weekly_focus: weeklyFocus
     });
   }
+  const requiredMarketStateDate = latestCompletedMarketSession(new Date(period.end));
   const trades = allTrades.filter((trade) => !trade.hidden && trade.portfolioTag === portfolioName);
   const included = trades.filter((trade) => {
     const hasExecution = trade.executions.some((item) => item.date <= period.asOfDate && item.date >= `${period.month}-01`);
@@ -139,8 +155,16 @@ export async function generateMonthToDateSnapshot(options: GenerateMonthToDateSn
   const expectedPriceSession = requiredMarketStateDate;
   const missingPrices = loadedPrices.filter((price) => price.price === null || price.sessionDate !== expectedPriceSession);
   if (missingPrices.length) {
-    throw new MonthToDateSnapshotValidationError("CURRENT_PRICES_INVALID", "Current valuation prices are missing or invalid for one or more open positions.", {
-      portfolio: portfolioName, expectedPriceSession, symbols: missingPrices.map((price) => price.symbol)
+    throw new MonthToDateSnapshotValidationError("CURRENT_POSITION_VALUATION_UNAVAILABLE", "Current position valuation is unavailable for one or more open positions.", {
+      portfolio: portfolioName,
+      requested_as_of_date: period.asOfDate,
+      effective_broker_coverage_date: coverage,
+      expected_price_session: expectedPriceSession,
+      symbols: missingPrices.map((price) => price.symbol),
+      current_gross_exposure: null,
+      current_net_exposure: null,
+      current_unrealized_pnl: null,
+      current_planned_downside_risk: null
     });
   }
   const snapshot = buildMonthToDateSnapshot({
@@ -167,6 +191,7 @@ export async function generateMonthToDateSnapshot(options: GenerateMonthToDateSn
       message: `${unrelatedNeedsReview.length} historical broker-import row${unrelatedNeedsReview.length === 1 ? "" : "s"} require review but do not affect this MTD snapshot: ${unrelatedNeedsReview.slice(0, 5).map((trade) => `${trade.symbol} (${trade.id})`).join(", ")}.`,
       blocking: false
     });
+    snapshot.diagnostic_summary = summarizeMtdDiagnostics(snapshot.diagnostics);
   }
   const validationErrors = validateMonthToDateSnapshot(snapshot);
   if (validationErrors.length || snapshot.status === "BLOCKED") {

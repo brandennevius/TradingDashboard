@@ -13,6 +13,7 @@ import {
 } from "../lib/month-to-date-snapshot";
 import { sendMonthToDateSnapshotEmail } from "../lib/month-to-date-snapshot-email";
 import { generateMonthToDateSnapshot, MonthToDateSnapshotValidationError } from "../lib/month-to-date-snapshot-server";
+import { generateDailyPortfolioSnapshot } from "../lib/daily-portfolio-snapshot-server";
 import type { TradeExecution, TradeLogEntry } from "../lib/types";
 import { createUserDefinedWeeklyFocus } from "../lib/weekly-focus";
 
@@ -219,10 +220,23 @@ test("server blocks relevant needs-review rows, missing executions, and insuffic
   const settings = (coverage: string) => async () => ({ portfolios: ["Branden Log"], defaultPortfolio: "Branden Log", portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: coverage } } });
   await assert.rejects(generateMonthToDateSnapshot({ month: "2026-07", asOfDate: "2026-07-17", writeExports: false, dependencies: { ...baseDependencies, loadTrades: async () => [trade({ customTags: ["Needs review"] })], loadPortfolioSettings: settings("2026-07-17") } }), (error: unknown) => error instanceof MonthToDateSnapshotValidationError && error.code === "BROKER_IMPORT_NEEDS_REVIEW");
   await assert.rejects(generateMonthToDateSnapshot({ month: "2026-07", asOfDate: "2026-07-17", writeExports: false, dependencies: { ...baseDependencies, loadTrades: async () => [trade({ executions: [] })], loadPortfolioSettings: settings("2026-07-17") } }), (error: unknown) => error instanceof MonthToDateSnapshotValidationError && error.code === "BROKER_IMPORT_MISSING_EXECUTIONS");
-  await assert.rejects(generateMonthToDateSnapshot({ month: "2026-07", asOfDate: "2026-07-17", writeExports: false, dependencies: { ...baseDependencies, loadTrades: async () => [trade()], loadPortfolioSettings: settings("2026-07-16") } }), (error: unknown) => error instanceof MonthToDateSnapshotValidationError && error.code === "BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT");
+  await assert.rejects(generateMonthToDateSnapshot({ month: "2026-07", asOfDate: "2026-07-17", writeExports: false, dependencies: { ...baseDependencies, loadTrades: async () => [trade()], loadPortfolioSettings: settings("2026-07-16") } }), (error: unknown) => {
+    assert(error instanceof MonthToDateSnapshotValidationError);
+    assert.equal(error.code, "BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT");
+    assert.equal(error.diagnostic?.portfolio, "Branden Log");
+    assert.equal(error.diagnostic?.requested_as_of_date, "2026-07-17");
+    assert.equal(error.diagnostic?.effective_broker_coverage_date, "2026-07-16");
+    assert.equal(error.diagnostic?.coverage_gap_days, 1);
+    assert.equal(error.diagnostic?.snapshot_status, "BLOCKED");
+    assert.equal(error.diagnostic?.current_equity, null);
+    assert.equal(error.diagnostic?.current_gross_exposure, null);
+    assert.equal(error.diagnostic?.current_unrealized_pnl, null);
+    assert.equal((error.diagnostic?.weekly_focus as { status: string }).status, "CLEARED");
+    return true;
+  });
 });
 
-test("current-session MTD generation requests the latest completed close", async () => {
+test("current-session MTD generation with current broker coverage requests the latest completed close", async () => {
   const requestedPriceSessions: string[] = [];
   const result = await generateMonthToDateSnapshot({
     month: "2026-07",
@@ -233,7 +247,7 @@ test("current-session MTD generation requests the latest completed close", async
       loadPortfolioSettings: async () => ({
         portfolios: ["Branden Log"],
         defaultPortfolio: "Branden Log",
-        portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: "2026-07-17", equitySource: "CF_STATEMENT" } }
+        portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: "2026-07-20", equitySource: "CF_STATEMENT" } }
       }),
       loadWeeklyFocus: async () => createUserDefinedWeeklyFocus({}, new Date("2026-07-19T16:00:00Z")),
       loadPrice: async (symbol: string, session: string) => {
@@ -242,6 +256,9 @@ test("current-session MTD generation requests the latest completed close", async
       },
       now: () => new Date("2026-07-20T16:08:00Z")
     }
+  }).catch((error: unknown) => {
+    if (error instanceof MonthToDateSnapshotValidationError) assert.fail(JSON.stringify(error.diagnostic));
+    throw error;
   });
   assert.deepEqual(requestedPriceSessions, ["2026-07-17"]);
   assert.equal(result.snapshot.period.asOfDate, "2026-07-20");
@@ -284,7 +301,7 @@ test("final validation exposes safe trade-level blocking diagnostics", async () 
   );
 });
 
-test("closed pre-period execution mismatches remain visible but do not block MTD generation", () => {
+test("import updated_at does not include a historical trade without period activity", () => {
   const historical = trade({
     id: "historical-upst",
     symbol: "UPST",
@@ -296,12 +313,68 @@ test("closed pre-period execution mismatches remain visible but do not block MTD
     executions: [execution({ id: "historical-exit", type: "EXIT", date: "2026-06-02", shares: 5, pnl: -10, sourceKey: "historical-exit" })]
   });
   const snapshot = buildMonthToDateSnapshot(snapshotInput([historical], { prices: new Map() }));
-  const mismatch = snapshot.diagnostics.find((item) => item.code === "EXECUTION_QUANTITY_MISMATCH");
-  assert.equal(snapshot.trades.length, 1);
-  assert.equal(mismatch?.symbol, "UPST");
-  assert.equal(mismatch?.severity, "warning");
-  assert.equal(mismatch?.blocking, false);
+  assert.equal(snapshot.trades.length, 0);
+  assert.equal(snapshot.diagnostics.some((item) => item.symbol === "UPST"), false);
   assert.equal(snapshot.status, "COMPLETE_WITH_WARNINGS");
+});
+
+test("unknown open-position valuation produces null aggregates and a blocking diagnostic", () => {
+  const snapshot = buildMonthToDateSnapshot(snapshotInput([trade()], { prices: new Map() }));
+  assert.equal(snapshot.open_positions.length, 1);
+  assert.equal(snapshot.account_summary.current_unrealized_pnl, null);
+  assert.equal(snapshot.risk_summary.current_gross_exposure, null);
+  assert.equal(snapshot.risk_summary.current_net_exposure, null);
+  assert.equal(snapshot.risk_summary.current_planned_downside_risk, null);
+  assert(snapshot.diagnostics.some((item) => item.code === "CURRENT_POSITION_VALUATION_UNAVAILABLE" && item.blocking));
+  assert.equal(snapshot.status, "BLOCKED");
+});
+
+test("open partial exits reconcile separately from fully closed realized P&L", () => {
+  const closedTrade = trade({
+    id: "closed", symbol: "CLOSED", status: "WIN", exitDate: "2026-07-17", closeTime: "15:00:00", shares: 10,
+    executions: [execution({ id: "closed-entry", sourceKey: "closed-entry" }), execution({ id: "closed-exit", type: "EXIT", date: "2026-07-17", shares: 10, pnl: 50, commission: 1, sourceKey: "closed-exit" })]
+  });
+  const openPartial = trade({
+    id: "open-partial", symbol: "OPEN", shares: 5,
+    executions: [execution({ id: "open-entry", shares: 10, sourceKey: "open-entry" }), execution({ id: "open-exit", type: "EXIT", date: "2026-07-17", shares: 5, pnl: 20, commission: 1, sourceKey: "open-exit" })]
+  });
+  const snapshot = buildMonthToDateSnapshot(snapshotInput([closedTrade, openPartial], {
+    prices: new Map([["OPEN", { symbol: "OPEN", price: 110, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "test" }]])
+  }));
+  assert.equal(snapshot.performance_summary.realized_pnl_closed_trades, 48);
+  assert.equal(snapshot.performance_summary.realized_pnl_partial_exits_on_open_trades, 18);
+  assert.equal(snapshot.performance_summary.total_realized_mtd_pnl, 66);
+  assert.equal(snapshot.performance_summary.gross_profit, 48);
+  assert.equal(snapshot.performance_summary.closed_trade_statistics_population, "FULLY_CLOSED_DURING_PERIOD");
+  assert.equal(snapshot.performance_summary.metric_populations.mtd_realized_trades, 2);
+});
+
+test("Markdown aggregates repetitive nonblocking diagnostics by code", () => {
+  const closed = (id: string, symbol: string) => trade({
+    id, symbol, status: "WIN", exitDate: "2026-07-17", closeTime: "15:00:00", chartLinks: [],
+    executions: [execution({ id: `${id}-entry`, sourceKey: `${id}-entry` }), execution({ id: `${id}-exit`, type: "EXIT", date: "2026-07-17", shares: 10, pnl: 10, sourceKey: `${id}-exit` })]
+  });
+  const markdown = renderMonthToDateSnapshotMarkdown(buildMonthToDateSnapshot(snapshotInput([closed("one", "ONE"), closed("two", "TWO")], { prices: new Map() })));
+  assert.match(markdown, /CHART_LINKS_UNAVAILABLE: 2 trades: 2/);
+  assert.match(markdown, /STOP_HISTORY_UNAVAILABLE: 2 trades: 2/);
+  assert.equal((markdown.match(/CHART_LINKS_UNAVAILABLE/g) || []).length, 1);
+});
+
+test("Daily and MTD server workflows return the same persisted weekly focus object", async () => {
+  const focus = createUserDefinedWeeklyFocus({ summary: "Same source", focusItems: ["One process"] }, new Date("2026-07-12T16:00:00Z"));
+  const shared = {
+    loadTrades: async () => [trade()],
+    loadPortfolioSettings: async () => ({ portfolios: ["Branden Log"], defaultPortfolio: "Branden Log", portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: "2026-07-17" } } }),
+    loadWeeklyFocus: async () => focus,
+    loadPrice: async (symbol: string) => ({ symbol, price: 110, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "test" }),
+    now: () => new Date("2026-07-18T01:00:00Z")
+  };
+  const [daily, mtd] = await Promise.all([
+    generateDailyPortfolioSnapshot({ session: "2026-07-17", accountName: "Branden Log", writeExports: false, dependencies: shared }),
+    generateMonthToDateSnapshot({ month: "2026-07", asOfDate: "2026-07-17", writeExports: false, dependencies: shared })
+  ]);
+  assert.deepEqual(daily.snapshot.weekly_focus, focus);
+  assert.deepEqual(mtd.snapshot.weekly_focus, daily.snapshot.weekly_focus);
 });
 
 test("email attaches JSON and Markdown with the selected period and does not send blocked output", async () => {

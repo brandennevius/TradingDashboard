@@ -1,5 +1,5 @@
 import { snapshotEmailConfiguration, type SnapshotEmailTransport } from "./snapshot-email";
-import type { buildMonthToDateSnapshot } from "./month-to-date-snapshot";
+import { aggregateMtdDiagnostics, type buildMonthToDateSnapshot } from "./month-to-date-snapshot";
 
 type Snapshot = ReturnType<typeof buildMonthToDateSnapshot>;
 type Environment = Record<string, string | undefined>;
@@ -27,6 +27,7 @@ export async function sendMonthToDateSnapshotEmail(input: {
     { filename: `${input.baseName}.md`, content: input.markdown, contentType: "text/markdown" }
   ];
   if (input.zip) attachments.push({ filename: `${input.baseName}.zip`, content: input.zip, contentType: "application/zip" });
+  const diagnosticSummary = aggregateMtdDiagnostics(input.snapshot.diagnostics);
   const body = [
     `Portfolio: ${input.snapshot.portfolio.portfolio_name}`,
     `Period: ${input.snapshot.period.month} through ${input.snapshot.period.asOfDate}`,
@@ -37,6 +38,7 @@ export async function sendMonthToDateSnapshotEmail(input: {
     `Current planned downside risk: ${input.snapshot.risk_summary.current_planned_downside_risk ?? "unavailable"}`,
     `Included trades: ${input.snapshot.performance_summary.total_included_trades}`,
     `Warning count: ${input.snapshot.diagnostics.length}`,
+    `Warnings by code: ${diagnosticSummary.map((item) => `${item.code}=${item.count}`).join(", ") || "none"}`,
     `Attachments: ${attachments.map((item) => item.filename).join(", ")}`
   ].join("\n");
   await transport.sendMail({

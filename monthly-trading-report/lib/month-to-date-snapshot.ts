@@ -23,6 +23,28 @@ export function mtdStatusFromDiagnostics(diagnostics: MtdDiagnostic[]): MtdSnaps
   return diagnostics.length ? "COMPLETE_WITH_WARNINGS" : "COMPLETE";
 }
 
+export function aggregateMtdDiagnostics(diagnostics: MtdDiagnostic[]) {
+  const groups = new Map<string, { code: string; severity: MtdDiagnostic["severity"]; blocking: boolean; count: number; trade_count: number }>();
+  for (const item of diagnostics) {
+    const key = `${item.severity}:${item.blocking}:${item.code}`;
+    const group = groups.get(key) || { code: item.code, severity: item.severity, blocking: item.blocking, count: 0, trade_count: 0 };
+    group.count += 1;
+    if (item.trade_id) group.trade_count += 1;
+    groups.set(key, group);
+  }
+  return Array.from(groups.values()).sort((a, b) => Number(b.blocking) - Number(a.blocking) || b.count - a.count || a.code.localeCompare(b.code));
+}
+
+export function summarizeMtdDiagnostics(diagnostics: MtdDiagnostic[]) {
+  const bySeverity = { critical: 0, warning: 0, info: 0 };
+  const byCode: Record<string, number> = {};
+  diagnostics.forEach((item) => {
+    bySeverity[item.severity] += 1;
+    byCode[item.code] = (byCode[item.code] || 0) + 1;
+  });
+  return { total: diagnostics.length, by_severity: bySeverity, by_code: byCode };
+}
+
 type PortfolioMeta = {
   currentEquity?: number;
   statementEquity?: number;
@@ -229,8 +251,10 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
     const eligibleExecutions = trade.executions.filter((item) => beforeOrAt(executionTimestamp(item), period.end));
     const { opened, closed } = tradeTimestamps(trade);
     const activeDuringPeriod = Boolean(opened && new Date(opened).getTime() <= new Date(period.end).getTime() && (!closed || new Date(closed).getTime() >= new Date(period.start).getTime()));
-    const updatedDuringPeriod = isBetween(trade.updatedAt || null, period.start, period.end);
-    return activeDuringPeriod || updatedDuringPeriod || eligibleExecutions.some((item) => isBetween(executionTimestamp(item), period.start, period.end));
+    // Generic created_at/updated_at values are import synchronization metadata,
+    // not proof of user-authored MTD activity. The repository does not persist
+    // independent field-change history, so only lifecycle and executions qualify.
+    return activeDuringPeriod || eligibleExecutions.some((item) => isBetween(executionTimestamp(item), period.start, period.end));
   });
 
   const asOfTradeStates = relevantTrades.map((trade) => {
@@ -238,6 +262,14 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
     const q = quantities(executions);
     return { ...trade, executions, shares: q.current, status: q.current > 0.000001 ? "OPEN" as const : trade.status };
   });
+  // Reuse Daily Snapshot's quantity-aware stop and valuation calculations. An
+  // MTD as-of date may be the current open session while valuation intentionally
+  // uses the latest completed close, so adapt only the internal session key and
+  // preserve the source price timestamp in the exported fields.
+  const projectionPrices = new Map(Array.from(input.prices.entries()).map(([symbol, price]) => [
+    symbol,
+    { ...price, sessionDate: period.asOfDate }
+  ]));
   const dailyProjection = buildDailyPortfolioSnapshot({
     requestedSession: period.asOfDate,
     latestCompletedMarketSession: period.asOfDate,
@@ -246,7 +278,7 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
     portfolioMeta: input.portfolioMeta,
     trades: asOfTradeStates,
     setupTemplates: [],
-    prices: input.prices,
+    prices: projectionPrices,
     sourceEnvironment: input.sourceEnvironment,
     applicationVersion: input.applicationVersion,
     weeklyFocus: input.weeklyFocus
@@ -361,6 +393,7 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
         remaining_downside_risk: position?.remaining_risk_to_stop_dollars ?? null
       },
       period_activity: {
+        active_during_period: activeDuringPeriod,
         execution_count: inPeriod.length,
         exit_execution_count: periodExits.length,
         closed_during_period: q.current <= 0.000001 && Boolean(exits.at(-1) && isBetween(executionTimestamp(exits.at(-1)!), period.start, period.end))
@@ -442,6 +475,7 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
   diagnostics.push(diagnostic("CASH_MOVEMENT_LEDGER_UNAVAILABLE", "Deposits, withdrawals, and account adjustments are not persisted in a dedicated ledger.", "warning", undefined, "account_summary"));
   diagnostics.push(diagnostic("WEEKLY_FOCUS_HISTORY_UNAVAILABLE", "Only the current weekly focus is stored; historical focus changes are unavailable.", "info", undefined, "weekly_focus_history"));
   diagnostics.push(diagnostic("FUNDAMENTAL_CLASSIFICATION_UNAVAILABLE", "Sector, industry group, catalyst, and earnings-date fields are not stored on Trade Detail records.", "info"));
+  diagnostics.push(diagnostic("USER_AUTHORED_CHANGE_HISTORY_UNAVAILABLE", "User-authored field-change history is not persisted independently; generic import updated_at timestamps are excluded from MTD activity.", "info"));
 
   const closed = trades.filter((trade) => trade.period_activity.closed_during_period);
   const wins = closed.filter((trade) => Number(trade.financials.realized_mtd_pnl) > 0);
@@ -449,14 +483,19 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
   const breakeven = closed.filter((trade) => Number(trade.financials.realized_mtd_pnl) === 0);
   const grossProfit = wins.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_pnl), 0);
   const grossLoss = losses.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_pnl), 0);
-  const realizedMtd = trades.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_pnl), 0);
-  const realizedMtdR = trades.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_r || 0), 0);
-  const unrealized = trades.reduce((sum, trade) => sum + Number(trade.financials.unrealized_pnl || 0), 0);
   const openTrades = trades.filter((trade) => trade.status === "OPEN");
+  const realizedTrades = trades.filter((trade) => trade.period_activity.exit_execution_count > 0);
+  const realizedClosedTrades = closed.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_pnl), 0);
+  const realizedOpenPartialExits = openTrades.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_pnl), 0);
+  const realizedMtd = realizedClosedTrades + realizedOpenPartialExits;
+  const realizedMtdR = realizedTrades.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_r || 0), 0);
+  const openValuationsComplete = openTrades.every((trade) => typeof trade.financials.unrealized_pnl === "number" && typeof trade.prices.current_price === "number");
+  const unrealized = openValuationsComplete ? openTrades.reduce((sum, trade) => sum + Number(trade.financials.unrealized_pnl), 0) : null;
+  if (openTrades.length && !openValuationsComplete) diagnostics.unshift(diagnostic("CURRENT_POSITION_VALUATION_UNAVAILABLE", "One or more open positions lack a valid current quantity or price; current exposure and unrealized P&L are unavailable.", "critical", undefined, "risk_summary"));
   const openRiskValues = openTrades.map((trade) => trade.financials.remaining_downside_risk).filter((value): value is number => typeof value === "number");
   const currentRisk = openRiskValues.length === openTrades.length ? openRiskValues.reduce((sum, value) => sum + value, 0) : null;
-  const currentGross = openTrades.reduce((sum, trade) => sum + Math.abs(Number(trade.prices.current_price || 0) * Number(trade.quantities.current_quantity)), 0);
-  const currentNet = openTrades.reduce((sum, trade) => sum + Number(trade.prices.current_price || 0) * Number(trade.quantities.current_quantity) * (trade.direction === "SHORT" ? -1 : 1), 0);
+  const currentGross = openValuationsComplete ? openTrades.reduce((sum, trade) => sum + Math.abs(Number(trade.prices.current_price) * Number(trade.quantities.current_quantity)), 0) : null;
+  const currentNet = openValuationsComplete ? openTrades.reduce((sum, trade) => sum + Number(trade.prices.current_price) * Number(trade.quantities.current_quantity) * (trade.direction === "SHORT" ? -1 : 1), 0) : null;
   const cushion = currentEquity === null ? null : currentEquity - ACCOUNT_LOSS_THRESHOLD_DOLLARS;
   const completedNotes = trades.filter((trade) => Object.values(trade.review).some(Boolean)).length;
   const withScreenshots = trades.filter((trade) => trade.screenshots.length > 0).length;
@@ -557,6 +596,14 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
       maximum_mtd_drawdown: null
     },
     performance_summary: {
+      metric_populations: {
+        mtd_realized_trades: realizedTrades.length,
+        fully_closed_during_period: closed.length,
+        trades_active_during_period: trades.filter((trade) => trade.period_activity.active_during_period).length,
+        trades_opened_during_period: trades.filter((trade) => isBetween(trade.opened_at, period.start, period.end)).length,
+        all_included_lifecycle_trades: trades.length,
+        trades_with_in_period_executions: trades.filter((trade) => trade.period_activity.execution_count > 0).length
+      },
       total_included_trades: trades.length,
       trades_opened_during_period: trades.filter((trade) => isBetween(trade.opened_at, period.start, period.end)).length,
       trades_closed_during_period: closed.length,
@@ -565,9 +612,13 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
       losing_closed_trades: losses.length,
       breakeven_trades: breakeven.length,
       win_rate_pct: closed.length ? round(wins.length / closed.length * 100) : null,
+      closed_trade_statistics_population: "FULLY_CLOSED_DURING_PERIOD",
       gross_profit: round(grossProfit),
       gross_loss: round(grossLoss),
       profit_factor: grossLoss < 0 ? round(grossProfit / Math.abs(grossLoss)) : null,
+      realized_pnl_closed_trades: round(realizedClosedTrades),
+      realized_pnl_partial_exits_on_open_trades: round(realizedOpenPartialExits),
+      total_realized_mtd_pnl: round(realizedMtd),
       realized_mtd_pnl: round(realizedMtd),
       realized_mtd_r: round(realizedMtdR),
       unrealized_pnl: round(unrealized),
@@ -576,8 +627,8 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
       average_winner_r: wins.length ? round(wins.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_r || 0), 0) / wins.length) : null,
       average_loser_r: losses.length ? round(losses.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_r || 0), 0) / losses.length) : null,
       payoff_ratio: wins.length && losses.length ? round((grossProfit / wins.length) / Math.abs(grossLoss / losses.length)) : null,
-      expectancy_per_trade: closed.length ? round(realizedMtd / closed.length) : null,
-      expectancy_r: closed.length ? round(realizedMtdR / closed.length) : null,
+      expectancy_per_trade: closed.length ? round(realizedClosedTrades / closed.length) : null,
+      expectancy_r: closed.length ? round(closed.reduce((sum, trade) => sum + Number(trade.financials.realized_mtd_r || 0), 0) / closed.length) : null,
       largest_winner: wins.length ? round(Math.max(...wins.map((trade) => Number(trade.financials.realized_mtd_pnl)))) : null,
       largest_loser: losses.length ? round(Math.min(...losses.map((trade) => Number(trade.financials.realized_mtd_pnl)))) : null,
       largest_risk_overrun: riskOverruns.length ? round(Math.max(...riskOverruns)) : null,
@@ -587,14 +638,17 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
       maximum_consecutive_losses: streak.maximumLosses,
       current_losing_streak: streak.currentLosingStreak,
       maximum_mtd_drawdown: null,
-      results_by_setup: groupSummary(trades, (trade) => trade.classification.setup, (trade) => Number(trade.financials.realized_mtd_pnl)),
-      results_by_user_assigned_grade: groupSummary(trades, (trade) => trade.classification.user_assigned_grade, (trade) => Number(trade.financials.realized_mtd_pnl)),
-      results_by_criteria_derived_grade: groupSummary(trades, (trade) => trade.criteria_evaluation.derived_grade, (trade) => Number(trade.financials.realized_mtd_pnl)),
-      results_by_sector: groupSummary(trades, (trade) => trade.classification.sector, (trade) => Number(trade.financials.realized_mtd_pnl)),
-      results_by_industry_group: groupSummary(trades, (trade) => trade.classification.industry_group, (trade) => Number(trade.financials.realized_mtd_pnl)),
-      results_by_theme: groupSummary(trades, (trade) => trade.classification.theme, (trade) => Number(trade.financials.realized_mtd_pnl)),
-      results_by_mistake_tag: multiGroupSummary(trades, (trade) => trade.classification.mistake_tags, (trade) => Number(trade.financials.realized_mtd_pnl)),
-      results_by_side: groupSummary(trades, (trade) => trade.direction, (trade) => Number(trade.financials.realized_mtd_pnl)),
+      grouped_results_population: "MTD_REALIZED_TRADES",
+      results_by_setup: groupSummary(realizedTrades, (trade) => trade.classification.setup, (trade) => Number(trade.financials.realized_mtd_pnl)),
+      results_by_user_assigned_grade: groupSummary(realizedTrades, (trade) => trade.classification.user_assigned_grade, (trade) => Number(trade.financials.realized_mtd_pnl)),
+      results_by_criteria_derived_grade: groupSummary(realizedTrades, (trade) => trade.criteria_evaluation.derived_grade, (trade) => Number(trade.financials.realized_mtd_pnl)),
+      results_by_sector: groupSummary(realizedTrades, (trade) => trade.classification.sector, (trade) => Number(trade.financials.realized_mtd_pnl)),
+      results_by_industry_group: groupSummary(realizedTrades, (trade) => trade.classification.industry_group, (trade) => Number(trade.financials.realized_mtd_pnl)),
+      results_by_theme: groupSummary(realizedTrades, (trade) => trade.classification.theme, (trade) => Number(trade.financials.realized_mtd_pnl)),
+      results_by_mistake_tag: multiGroupSummary(realizedTrades, (trade) => trade.classification.mistake_tags, (trade) => Number(trade.financials.realized_mtd_pnl)),
+      results_by_side: groupSummary(realizedTrades, (trade) => trade.direction, (trade) => Number(trade.financials.realized_mtd_pnl)),
+      documentation_metrics_population: "ALL_INCLUDED_LIFECYCLE_TRADES",
+      documentation_metrics_denominator: trades.length,
       notes_completion_pct: trades.length ? round(completedNotes / trades.length * 100) : null,
       screenshot_coverage_pct: trades.length ? round(withScreenshots / trades.length * 100) : null,
       actual_loss_exceeded_planned_risk_pct: closed.length ? round(lossOverrunCount / closed.length * 100) : null,
@@ -609,7 +663,8 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
     open_positions: openTrades,
     trades,
     image_manifest: imageManifest,
-    diagnostics
+    diagnostics,
+    diagnostic_summary: summarizeMtdDiagnostics(diagnostics)
   };
 }
 
@@ -672,10 +727,23 @@ export function renderMonthToDateSnapshotMarkdown(snapshot: ReturnType<typeof bu
     `- Win rate: ${metric(p.win_rate_pct, "%")}`,
     `- Gross profit / loss: ${money(p.gross_profit)} / ${money(p.gross_loss)}`,
     `- Profit factor: ${metric(p.profit_factor)}`,
+    `- Closed-trade statistics population: ${p.closed_trade_statistics_population}`,
+    `- Realized P&L from fully closed trades: ${money(p.realized_pnl_closed_trades)}`,
+    `- Realized P&L from partial exits on open trades: ${money(p.realized_pnl_partial_exits_on_open_trades)}`,
+    `- Total realized MTD P&L: ${money(p.total_realized_mtd_pnl)}`,
     `- Expectancy: ${money(p.expectancy_per_trade)} (${metric(p.expectancy_r, "R")})`,
     `- Realized R: ${metric(p.realized_mtd_r, "R")}`,
     `- Average winner / loser: ${money(p.average_winner)} / ${money(p.average_loser)}`,
-    `- Largest winner / loss: ${money(p.largest_winner)} / ${money(p.largest_loser)}`, ""
+    `- Largest winner / loss: ${money(p.largest_winner)} / ${money(p.largest_loser)}`, "",
+    "## Metric Populations", "",
+    `- MTD realized trades: ${p.metric_populations.mtd_realized_trades}`,
+    `- Fully closed during period: ${p.metric_populations.fully_closed_during_period}`,
+    `- Active during period: ${p.metric_populations.trades_active_during_period}`,
+    `- Opened during period: ${p.metric_populations.trades_opened_during_period}`,
+    `- With in-period executions: ${p.metric_populations.trades_with_in_period_executions}`,
+    `- All included lifecycle trades: ${p.metric_populations.all_included_lifecycle_trades}`,
+    `- Grouped result tables use: ${p.grouped_results_population}`,
+    `- Documentation percentages use: ${p.documentation_metrics_population} (n=${p.documentation_metrics_denominator})`, ""
   ];
   const table = (title: string, rows: Array<{ label: string; count: number; realized_mtd_pnl: number | null }>) => {
     lines.push(`## ${title}`, "", "| Group | Trades | Realized MTD P&L |", "|---|---:|---:|");
@@ -702,7 +770,14 @@ export function renderMonthToDateSnapshotMarkdown(snapshot: ReturnType<typeof bu
     lines.push(`- Week start: ${snapshot.weekly_focus.week_start || "—"}`, `- Summary: ${snapshot.weekly_focus.summary || "—"}`, ...snapshot.weekly_focus.focus_items.map((item) => `- ${item}`));
   } else lines.push(`- Status: ${snapshot.weekly_focus.status}`);
   lines.push("", "## Data-Quality Warnings", "");
-  snapshot.diagnostics.forEach((item) => lines.push(`- [${item.severity}] ${item.code}${item.symbol ? ` (${item.symbol})` : ""}: ${item.message}`));
+  const diagnosticGroups = aggregateMtdDiagnostics(snapshot.diagnostics);
+  lines.push("### Counts by code", "");
+  diagnosticGroups.forEach((item) => lines.push(`- [${item.severity}] ${item.code}: ${item.count}${item.trade_count ? ` trades: ${item.trade_count}` : ""}${item.blocking ? " (blocking)" : ""}`));
+  const individualDiagnostics = snapshot.diagnostics.filter((item) => item.blocking || diagnosticGroups.find((group) => group.code === item.code && group.severity === item.severity && group.blocking === item.blocking)?.count === 1);
+  if (individualDiagnostics.length) {
+    lines.push("", "### Blocking and unusual details", "");
+    individualDiagnostics.forEach((item) => lines.push(`- [${item.severity}] ${item.code}${item.symbol ? ` (${item.symbol})` : ""}: ${item.message}`));
+  }
   if (!snapshot.diagnostics.length) lines.push("- None.");
   return `${lines.join("\n")}\n`;
 }

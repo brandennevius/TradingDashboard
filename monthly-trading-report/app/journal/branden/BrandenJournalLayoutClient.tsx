@@ -95,11 +95,25 @@ type MtdBlockingDiagnostic = {
 function formatMtdSnapshotValidationError(data: {
   error?: string;
   code?: string;
-  diagnostic?: { portfolio?: string; validationErrors?: string[]; blockingDiagnostics?: MtdBlockingDiagnostic[] };
+  diagnostic?: {
+    portfolio?: string;
+    requested_as_of_date?: string;
+    effective_broker_coverage_date?: string | null;
+    coverage_gap_days?: number | null;
+    snapshot_status?: string;
+    weekly_focus?: { status?: string; summary?: string | null };
+    validationErrors?: string[];
+    blockingDiagnostics?: MtdBlockingDiagnostic[];
+  };
 }) {
   const lines = [data.code ? `${data.code}: ${data.error || "MTD snapshot validation failed."}` : data.error || "Could not generate the MTD snapshot."];
   const diagnostic = data.diagnostic;
   if (diagnostic?.portfolio) lines.push("", `Portfolio: ${diagnostic.portfolio}`);
+  if (diagnostic?.snapshot_status) lines.push(`Status: ${diagnostic.snapshot_status}`);
+  if (diagnostic?.requested_as_of_date) lines.push(`Requested as-of date: ${diagnostic.requested_as_of_date}`);
+  if (diagnostic?.effective_broker_coverage_date !== undefined) lines.push(`Effective broker coverage date: ${diagnostic.effective_broker_coverage_date || "unavailable"}`);
+  if (diagnostic?.coverage_gap_days !== undefined && diagnostic.coverage_gap_days !== null) lines.push(`Coverage gap: ${diagnostic.coverage_gap_days} day${diagnostic.coverage_gap_days === 1 ? "" : "s"}`);
+  if (diagnostic?.weekly_focus?.status) lines.push(`Weekly focus: ${diagnostic.weekly_focus.status}${diagnostic.weekly_focus.summary ? ` — ${diagnostic.weekly_focus.summary}` : ""}`);
   if (diagnostic?.blockingDiagnostics?.length) {
     lines.push("", "Blocking data issues:");
     diagnostic.blockingDiagnostics.forEach((item) => {
