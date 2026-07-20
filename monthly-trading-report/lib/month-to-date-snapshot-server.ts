@@ -132,7 +132,9 @@ export async function generateMonthToDateSnapshot(options: GenerateMonthToDateSn
     });
   }
   const openSymbols = Array.from(new Set(included.filter((trade) => executionAsOfQuantity(trade, period.asOfDate) > 0.000001).map((trade) => trade.symbol))).sort();
-  const loadedPrices = await mapWithConcurrency(openSymbols, 4, (symbol) => dependencies.loadPrice(symbol, period.asOfDate));
+  // An MTD snapshot may be generated during the current open session. Valuation
+  // must use the latest completed close, never an incomplete same-day candle.
+  const loadedPrices = await mapWithConcurrency(openSymbols, 4, (symbol) => dependencies.loadPrice(symbol, requiredMarketStateDate));
   const prices = new Map(loadedPrices.map((price) => [price.symbol, price]));
   const expectedPriceSession = requiredMarketStateDate;
   const missingPrices = loadedPrices.filter((price) => price.price === null || price.sessionDate !== expectedPriceSession);

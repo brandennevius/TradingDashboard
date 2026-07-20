@@ -222,6 +222,32 @@ test("server blocks relevant needs-review rows, missing executions, and insuffic
   await assert.rejects(generateMonthToDateSnapshot({ month: "2026-07", asOfDate: "2026-07-17", writeExports: false, dependencies: { ...baseDependencies, loadTrades: async () => [trade()], loadPortfolioSettings: settings("2026-07-16") } }), (error: unknown) => error instanceof MonthToDateSnapshotValidationError && error.code === "BROKER_IMPORT_DATE_COVERAGE_INSUFFICIENT");
 });
 
+test("current-session MTD generation requests the latest completed close", async () => {
+  const requestedPriceSessions: string[] = [];
+  const result = await generateMonthToDateSnapshot({
+    month: "2026-07",
+    asOfDate: "2026-07-20",
+    writeExports: false,
+    dependencies: {
+      loadTrades: async () => [trade()],
+      loadPortfolioSettings: async () => ({
+        portfolios: ["Branden Log"],
+        defaultPortfolio: "Branden Log",
+        portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: "2026-07-17", equitySource: "CF_STATEMENT" } }
+      }),
+      loadWeeklyFocus: async () => createUserDefinedWeeklyFocus({}, new Date("2026-07-19T16:00:00Z")),
+      loadPrice: async (symbol: string, session: string) => {
+        requestedPriceSessions.push(session);
+        return { symbol, price: 110, sessionDate: session, timestamp: `${session}T16:00:00-04:00`, provider: "test", priceType: "official_close" as const };
+      },
+      now: () => new Date("2026-07-20T16:08:00Z")
+    }
+  });
+  assert.deepEqual(requestedPriceSessions, ["2026-07-17"]);
+  assert.equal(result.snapshot.period.asOfDate, "2026-07-20");
+  assert.equal(result.snapshot.trades[0].prices.current_price_timestamp, "2026-07-17T16:00:00-04:00");
+});
+
 test("email attaches JSON and Markdown with the selected period and does not send blocked output", async () => {
   const snapshot = buildMonthToDateSnapshot(snapshotInput([trade()]));
   const messages: Array<Record<string, unknown>> = [];
