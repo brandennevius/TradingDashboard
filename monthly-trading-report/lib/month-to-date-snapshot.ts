@@ -276,7 +276,18 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
     const tradeDiagnostics: MtdDiagnostic[] = [];
     const activeDuringPeriod = Boolean(opened && new Date(opened).getTime() <= new Date(period.end).getTime() && (!closed || new Date(closed).getTime() >= new Date(period.start).getTime()));
     if (!allExecutions.length) tradeDiagnostics.push(diagnostic("MISSING_EXECUTIONS", "No broker executions are stored for this included trade.", activeDuringPeriod ? "critical" : "warning", trade, "executions"));
-    if (q.rawCurrent < -0.0001) tradeDiagnostics.push(diagnostic("EXECUTION_QUANTITY_MISMATCH", "Exit quantity exceeds entry quantity as of the selected timestamp.", "critical", trade, "quantities.current_quantity"));
+    if (q.rawCurrent < -0.0001) {
+      const affectsPeriodCalculations = activeDuringPeriod || inPeriod.length > 0;
+      tradeDiagnostics.push(diagnostic(
+        "EXECUTION_QUANTITY_MISMATCH",
+        affectsPeriodCalculations
+          ? "Exit quantity exceeds entry quantity as of the selected timestamp."
+          : "Historical exit quantity exceeds stored entry quantity, but the trade was closed before this month and has no in-period executions.",
+        affectsPeriodCalculations ? "critical" : "warning",
+        trade,
+        "quantities.current_quantity"
+      ));
+    }
     if (!trade.risk) tradeDiagnostics.push(diagnostic("PLANNED_RISK_UNAVAILABLE", "Planned risk is not stored; R metrics are unavailable.", q.current > 0 ? "critical" : "warning", trade, "financials.planned_risk"));
     if (q.current > 0 && !trade.stopPrice && !position?.protective_levels.length) tradeDiagnostics.push(diagnostic("CURRENT_STOP_UNAVAILABLE", "No current protective stop is stored for this open position.", "critical", trade, "prices.current_stop"));
     if (!trade.screenshots.length) tradeDiagnostics.push(diagnostic("SCREENSHOTS_UNAVAILABLE", "No screenshot references are stored.", "info", trade, "screenshots"));

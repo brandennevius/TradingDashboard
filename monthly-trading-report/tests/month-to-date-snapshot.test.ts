@@ -284,6 +284,26 @@ test("final validation exposes safe trade-level blocking diagnostics", async () 
   );
 });
 
+test("closed pre-period execution mismatches remain visible but do not block MTD generation", () => {
+  const historical = trade({
+    id: "historical-upst",
+    symbol: "UPST",
+    status: "LOSS",
+    entryDate: "2026-06-01",
+    exitDate: "2026-06-02",
+    closeTime: "15:00:00",
+    updatedAt: "2026-07-17T20:00:00Z",
+    executions: [execution({ id: "historical-exit", type: "EXIT", date: "2026-06-02", shares: 5, pnl: -10, sourceKey: "historical-exit" })]
+  });
+  const snapshot = buildMonthToDateSnapshot(snapshotInput([historical], { prices: new Map() }));
+  const mismatch = snapshot.diagnostics.find((item) => item.code === "EXECUTION_QUANTITY_MISMATCH");
+  assert.equal(snapshot.trades.length, 1);
+  assert.equal(mismatch?.symbol, "UPST");
+  assert.equal(mismatch?.severity, "warning");
+  assert.equal(mismatch?.blocking, false);
+  assert.equal(snapshot.status, "COMPLETE_WITH_WARNINGS");
+});
+
 test("email attaches JSON and Markdown with the selected period and does not send blocked output", async () => {
   const snapshot = buildMonthToDateSnapshot(snapshotInput([trade()]));
   const messages: Array<Record<string, unknown>> = [];
