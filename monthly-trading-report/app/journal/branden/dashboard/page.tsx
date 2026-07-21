@@ -21,6 +21,7 @@ import {
   YAxis
 } from "recharts";
 import type { SetupChecklistTemplate, TradeLogEntry, TraderUser } from "@/lib/types";
+import { hasCompletedTradeReview } from "@/lib/trade-review";
 
 const LegacyTradeDetailHost = dynamic(() => import("@/app/page"), {
   ssr: false
@@ -158,7 +159,7 @@ function tradeNeedsReview(trade: TradeLogEntry, setupTemplates: SetupChecklistTe
     ? template.groups.flatMap((group) => group.criteria || []).reduce((total, item) => total + (Number.isFinite(Number(item.points)) ? Number(item.points) : 0), 0)
     : (trade.checklistItems || []).reduce((total, item) => total + (Number.isFinite(Number(item.points)) ? Number(item.points) : 0), 0);
 
-  return !trade.risk || !trade.notes.trim() || (!trade.screenshots.length && !(trade.chartLinks || []).length) || !totalChecklistPoints;
+  return !trade.risk || !hasCompletedTradeReview(trade.reviewSections, trade.notes) || (!trade.screenshots.length && !(trade.chartLinks || []).length) || !totalChecklistPoints;
 }
 
 function longestTradeStreak(trades: TradeLogEntry[], status: "WIN" | "LOSS") {

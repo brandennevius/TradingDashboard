@@ -37,7 +37,7 @@ import type {
   TraderUser
 } from "@/lib/types";
 import { displayTradeReturnPercent, tradeReturnLabel } from "@/lib/trade-return";
-import { emptyTradeReviewSections, hasTradeReviewContent, resolvedTradeReviewSections } from "@/lib/trade-review";
+import { emptyTradeReviewSections, hasCompletedTradeReview, resolvedTradeReviewSections } from "@/lib/trade-review";
 import BrandenSidebar from "./components/BrandenSidebar";
 
 const BottomToBullChecklist = dynamic(() => import("./components/BottomToBullChecklist"), {
@@ -1453,10 +1453,9 @@ function parseBrokerStatementTrades(csvText: string): TradeFormState[] {
 }
 
 function tradeNeedsReview(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
-  const hasReview = hasTradeReviewContent(resolvedTradeReviewSections(trade.reviewSections, trade.notes));
   return (
     !numberValue(trade.risk) ||
-    (!trade.notes.trim() && !hasReview) ||
+    !hasCompletedTradeReview(trade.reviewSections, trade.notes) ||
     (!trade.screenshots.length && !(trade.chartLinks || []).length) ||
     !resolvedTradeChecklistItems(trade, templates).length
   );

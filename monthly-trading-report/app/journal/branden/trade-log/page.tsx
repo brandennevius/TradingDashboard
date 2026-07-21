@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import type { SetupChecklistTemplate, TradeLogEntry, TraderUser } from "@/lib/types";
+import { hasCompletedTradeReview } from "@/lib/trade-review";
 
 type PortfolioSettingsResponse = {
   portfolios?: string[];
@@ -231,7 +232,7 @@ function checklistScore(trade: TradeLogEntry, templates: SetupChecklistTemplate[
 }
 
 function tradeNeedsReview(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
-  return !trade.risk || !trade.notes.trim() || (!trade.screenshots.length && !(trade.chartLinks || []).length) || !checklistScore(trade, templates).total;
+  return !trade.risk || !hasCompletedTradeReview(trade.reviewSections, trade.notes) || (!trade.screenshots.length && !(trade.chartLinks || []).length) || !checklistScore(trade, templates).total;
 }
 
 function longestStreak(trades: TradeLogEntry[], status: TradeLogEntry["status"]) {

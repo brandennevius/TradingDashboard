@@ -25,6 +25,22 @@ export function hasTradeReviewContent(value: TradeReviewSections) {
   return Object.values(value).some((section) => section.trim().length > 0);
 }
 
+export const minimumCompletedTradeReviewSections = 3;
+
+export function completedTradeReviewSectionCount(value: unknown) {
+  return Object.values(normalizeTradeReviewSections(value))
+    .filter((section) => section.trim().length > 0)
+    .length;
+}
+
+export function hasCompletedTradeReview(value: unknown, legacyNotes = "") {
+  const completedSections = completedTradeReviewSectionCount(value);
+  if (completedSections >= minimumCompletedTradeReviewSections) return true;
+
+  // Preserve completion for older trades that only have the legacy free-form notes field.
+  return completedSections === 0 && String(legacyNotes || "").trim().length > 0;
+}
+
 const legacyLabels: Array<{ label: string; key: keyof TradeReviewSections }> = [
   { label: "What did I do right", key: "didRight" },
   { label: "What did I do wrong", key: "didWrong" },
