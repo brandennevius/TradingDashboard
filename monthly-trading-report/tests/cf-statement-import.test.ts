@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCfTradesFromExecutionHistory, type ParsedOpenPositionRow } from "../lib/cf-statement";
+import { buildCfTradesFromExecutionHistory, parseCfStatementText, type ParsedOpenPositionRow } from "../lib/cf-statement";
 import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders, runAtomicCfImport, type CfWorkingOrderMetadata } from "../lib/cf-import-idempotency";
 import type { TradeLogEntry, TradeLogInput } from "../lib/types";
 
@@ -122,4 +122,43 @@ test("a working-order persistence failure rolls back the entire import transacti
   }), /metadata write failed/);
   assert.equal(durable.trades[0].shares, 3);
   assert.deepEqual(durable.orders, llyOrders());
+});
+
+test("statement coverage uses the period end instead of an older working-order date", () => {
+  const parsed = parseCfStatementText([
+    "21/07/2026 09:31 12659050 Sell 2.00 LLY STOP 1,130.22 1,164.09 GTC — —",
+    "Created 22/07/2026 17:14 GMT-4",
+    "21 Jul 2026 18:00 — 22 Jul 2026 17:14",
+    "1659201:391119 22/07/2026 09:30:05.065 Sell 50.00 RELY 23.50 14070296 -67.00 0.35"
+  ].join("\n"), "branden", "CF_Statement");
+
+  assert.equal(parsed.equityStatementDate, "2026-07-22");
+});
+
+test("statement coverage falls back to the labeled Created date", () => {
+  const parsed = parseCfStatementText([
+    "21/07/2026 09:31 12659050 Sell 2.00 LLY STOP 1,130.22 1,164.09 GTC — —",
+    "Created 22/07/2026 17:14 GMT-4"
+  ].join("\n"), "branden", "CF_Statement");
+
+  assert.equal(parsed.equityStatementDate, "2026-07-22");
+});
+
+test("statement coverage handles a period ending in a new month", () => {
+  const parsed = parseCfStatementText(
+    "31 Jul 2026 18:00 - 01 Aug 2026 17:14",
+    "branden",
+    "CF_Statement"
+  );
+
+  assert.equal(parsed.equityStatementDate, "2026-08-01");
+});
+
+test("statement coverage does not guess from transaction or working-order dates", () => {
+  const parsed = parseCfStatementText([
+    "21/07/2026 09:31 12659050 Sell 2.00 LLY STOP 1,130.22 1,164.09 GTC — —",
+    "1659201:391119 22/07/2026 09:30:05.065 Sell 50.00 RELY 23.50 14070296 -67.00 0.35"
+  ].join("\n"), "branden", "CF_Statement");
+
+  assert.equal(parsed.equityStatementDate, "");
 });

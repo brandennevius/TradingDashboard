@@ -125,13 +125,38 @@ function parseLabeledMoney(line: string, labels: string[]) {
   return Number.isFinite(value) ? value : 0;
 }
 
+const statementMonthNumbers: Record<string, string> = {
+  jan: "01",
+  feb: "02",
+  mar: "03",
+  apr: "04",
+  may: "05",
+  jun: "06",
+  jul: "07",
+  aug: "08",
+  sep: "09",
+  oct: "10",
+  nov: "11",
+  dec: "12"
+};
+
+function namedStatementDate(day: string, month: string, year: string) {
+  const monthNumber = statementMonthNumbers[month.toLowerCase()];
+  if (!monthNumber) return "";
+  return `${year}-${monthNumber}-${day.padStart(2, "0")}`;
+}
+
 function parseStatementDate(lines: string[]) {
   for (const line of lines) {
-    const match = line.match(/\b(\d{2}\/\d{2}\/\d{4})\b/);
+    const period = line.match(
+      /\b\d{1,2}\s+([A-Z]{3})\s+\d{4}\s+\d{1,2}:\d{2}\s*[—–-]\s*(\d{1,2})\s+([A-Z]{3})\s+(\d{4})\s+\d{1,2}:\d{2}\b/i
+    );
+    if (period) return namedStatementDate(period[2], period[3], period[4]);
+  }
 
-    if (match) {
-      return isoDate(match[1]);
-    }
+  for (const line of lines) {
+    const created = line.match(/^Created\s+(\d{2}\/\d{2}\/\d{4})\b/i);
+    if (created) return isoDate(created[1]);
   }
 
   return "";
