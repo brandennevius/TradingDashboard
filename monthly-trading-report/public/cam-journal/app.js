@@ -6,6 +6,12 @@ const REVIEWS_KEY = 'tradeJournalMonthlyReviewsV1';
 const WATCHLIST_KEY = 'tradeJournalWatchlistV1';
 const LEGACY_TRADE_KEYS = ['tradeJournalTradesV2','tradeJournalTradesV1','tradeJournalTrades'];
 const REMOTE_STATE_ENDPOINT = '/api/cam-journal';
+const {
+  parseCsv,
+  statementExecutions,
+  groupExecutionsIntoTrades,
+  upsertImportedTrades
+} = globalThis.CamBrokerCsvParser;
 let journalReadOnly = false;
 let remoteSaveTimer = null;
 let currentSessionUser = null;
@@ -2393,42 +2399,36 @@ if ($('backupImportInput')) $('backupImportInput').addEventListener('change', ev
   reader.readAsText(file);
 });
 
-function clearReportAndTradeLogFiltersForImport() {
-  [
-    'reportStartDate', 'reportEndDate', 'reportDirection', 'reportResult',
-    'logReportStartDate', 'logReportEndDate', 'logReportDirection', 'logReportResult'
-  ].forEach(id => {
-    if ($(id)) $(id).value = '';
-  });
-  if ($('search')) $('search').value = '';
-  if ($('setupFilter')) $('setupFilter').value = '';
-  if (typeof MULTI_SELECT_IDS !== 'undefined') {
-    MULTI_SELECT_IDS.forEach(id => setSelectValues(id, []));
-  }
-  updateDatePickerLabels();
-  refreshAllMultiSelectUI();
-}
-
 async function importBrokerCsvFile(file) {
   if (!file) return;
   try {
     const rows = parseCsv(await file.text());
-    const executions = statementExecutions(rows);
+    const { executions, skippedTradeRows } = statementExecutions(rows);
+    const skippedWarning = skippedTradeRows.length
+      ? `<br><span class="small"><strong>Warning:</strong> ${skippedTradeRows.length} broker trade row${skippedTradeRows.length === 1 ? ' was' : 's were'} not recognized and were not imported: ${skippedTradeRows
+          .slice(0, 5)
+          .map(row => escapeHtml(`${row.date} ${row.description}`))
+          .join('; ')}${skippedTradeRows.length > 5 ? `; and ${skippedTradeRows.length - 5} more` : ''}.</span>`
+      : '';
     if (!executions.length) {
-      showImportStatus('<strong>No broker trades found.</strong><br><span class="small">This importer looks for Thinkorswim/Schwab account statement rows with TYPE = TRD. If this file has trades, send the CSV format so another parser can be added.</span>');
+      showImportStatus(`<strong>No broker trades found.</strong><br><span class="small">This importer looks for Thinkorswim/Schwab account statement rows with TYPE = TRD. If this file has trades, send the CSV format so another parser can be added.</span>${skippedWarning}`);
       return;
     }
 
     const importedTrades = groupExecutionsIntoTrades(executions);
-    const result = upsertImportedTrades(importedTrades);
-    clearReportAndTradeLogFiltersForImport();
+    const upsert = upsertImportedTrades(trades, importedTrades);
+    trades = upsert.trades;
+    const result = upsert.result;
+    const ambiguousWarning = result.ambiguous
+      ? `<br><span class="small"><strong>Warning:</strong> ${result.ambiguous} imported trade${result.ambiguous === 1 ? ' was' : 's were'} not added because more than one existing lifecycle matched. Review the journal before retrying.</span>`
+      : '';
     selectedTradeIds.clear();
     save();
     renderAll();
     const closed = importedTrades.filter(trade => trade.status === 'Closed').length;
     const open = importedTrades.filter(trade => trade.status === 'Open').length;
     const totalPL = importedTrades.reduce((sum, trade) => sum + Number(trade.pl || 0), 0);
-    showImportStatus(`<strong>Import complete:</strong> ${executions.length} executions were checked against your journal. New: ${result.added}. Updated: ${result.updated}. Duplicates ignored: ${result.ignored}. Open trades closed by this upload: ${result.closedOpen}.<br><span class="small">This upload contained ${importedTrades.length} grouped trades. Closed in file: ${closed}. Open in file: ${open}. File P/L: ${money(totalPL)}. Your setup, grade, checklist, emotion, and custom notes are preserved when an imported trade is updated.</span>`);
+    showImportStatus(`<strong>Import complete:</strong> ${executions.length} executions were checked against your journal. New: ${result.added}. Updated: ${result.updated}. Duplicates ignored: ${result.ignored}. Open trades closed by this upload: ${result.closedOpen}.<br><span class="small">This upload contained ${importedTrades.length} grouped trades. Closed in file: ${closed}. Open in file: ${open}. File P/L: ${money(totalPL)}. Your setup, grade, checklist, emotion, custom notes, screenshots, and current filters were preserved.</span>${skippedWarning}${ambiguousWarning}`);
   } catch (error) {
     console.error('Broker CSV import failed', error);
     showImportStatus(`<strong>Broker CSV import failed.</strong><br><span class="small">${escapeHtml(error?.message || String(error))}</span>`);
@@ -2440,391 +2440,6 @@ if ($('settingsImportInput')) $('settingsImportInput').addEventListener('change'
   await importBrokerCsvFile(file);
   event.target.value = '';
 });
-
-function parseCsv(text) {
-  text = text.replace(/^\uFEFF/, '');
-  const rows = [];
-  let row = [], cell = '', inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    const next = text[i + 1];
-    if (ch === '"') {
-      if (inQuotes && next === '"') { cell += '"'; i++; }
-      else { inQuotes = !inQuotes; }
-    } else if (ch === ',' && !inQuotes) {
-      row.push(cell); cell = '';
-    } else if ((ch === '\n' || ch === '\r') && !inQuotes) {
-      if (ch === '\r' && next === '\n') i++;
-      row.push(cell); rows.push(row); row = []; cell = '';
-    } else {
-      cell += ch;
-    }
-  }
-  if (cell.length || row.length) { row.push(cell); rows.push(row); }
-  return rows.filter(r => r.some(c => String(c).trim() !== ''));
-}
-
-function cleanNumber(value) {
-  if (value === undefined || value === null) return 0;
-  const cleaned = String(value).replace(/[$,()]/g, '').trim();
-  if (!cleaned || cleaned === '--') return 0;
-  const sign = String(value).includes('(') && String(value).includes(')') ? -1 : 1;
-  const n = Number(cleaned);
-  return Number.isFinite(n) ? n * sign : 0;
-}
-
-function normalizeDate(mmddyy) {
-  const parts = String(mmddyy).split('/');
-  if (parts.length !== 3) return mmddyy;
-  const [m, d, yy] = parts.map(x => x.padStart(2, '0'));
-  const year = Number(yy) < 70 ? '20' + yy : '19' + yy;
-  return `${year}-${m}-${d}`;
-}
-
-function parseTradeDescription(description) {
-  const text = String(description || '').trim();
-  const match = text.match(/^(BOT|SOLD)\s+([+-]?\d+)\s+(.+?)\s+@(\.?\d+(?:\.\d+)?)/i);
-  if (!match) return null;
-  const action = match[1].toUpperCase();
-  const qty = Math.abs(Number(match[2]));
-  const instrument = match[3].trim();
-  const price = Number(match[4]);
-  const ticker = (instrument.split(/\s+/)[0] || '').toUpperCase();
-  const isOption = /\b(CALL|PUT)\b/i.test(instrument);
-  const signedQty = action === 'BOT' ? qty : -qty;
-  return { action, qty, signedQty, instrument, ticker, price, isOption };
-}
-
-function statementExecutions(rows) {
-  const executions = [];
-  let header = null;
-  for (const row of rows) {
-    const firstCell = String(row[0] || '').trim();
-    const secondCell = String(row[1] || '').trim();
-    const typeCell = String(row[2] || '').trim().toUpperCase();
-    if (firstCell === 'Futures Statements') break;
-    if (firstCell.toUpperCase() === 'DATE' && secondCell.toUpperCase() === 'TIME' && typeCell === 'TYPE') {
-      header = row;
-      continue;
-    }
-    if (!header || typeCell !== 'TRD') continue;
-    const desc = parseTradeDescription(row[4]);
-    if (!desc) continue;
-    executions.push({
-      date: normalizeDate(row[0]),
-      time: row[1] || '',
-      type: row[2],
-      ref: row[3] || '',
-      description: row[4] || '',
-      miscFees: cleanNumber(row[5]),
-      commissions: cleanNumber(row[6]),
-      amount: cleanNumber(row[7]),
-      balance: cleanNumber(row[8]),
-      ...desc,
-      executionKey: [normalizeDate(row[0]), row[1] || '', row[3] || '', row[4] || '', row[7] || ''].join('|')
-    });
-  }
-  return executions;
-}
-
-function summarizeRoundTrip(key, execs, closed=true) {
-  const first = execs[0];
-  const last = execs[execs.length - 1];
-  const openingSign = Math.sign(first.signedQty);
-  const direction = openingSign > 0 ? 'Long' : 'Short';
-  const buys = execs.filter(e => e.action === 'BOT');
-  const sells = execs.filter(e => e.action === 'SOLD');
-  const boughtQty = buys.reduce((s,e)=>s+e.qty,0);
-  const soldQty = sells.reduce((s,e)=>s+e.qty,0);
-  const openingExecs = direction === 'Long' ? buys : sells;
-  const closingExecs = direction === 'Long' ? sells : buys;
-  const openingQty = openingExecs.reduce((s,e)=>s+e.qty,0);
-  const closingQty = closingExecs.reduce((s,e)=>s+e.qty,0);
-  const entry = openingQty ? openingExecs.reduce((s,e)=>s+e.qty*e.price,0) / openingQty : '';
-  const exit = closingQty ? closingExecs.reduce((s,e)=>s+e.qty*e.price,0) / closingQty : '';
-  const totalCash = execs.reduce((s,e)=>s+e.amount+e.miscFees+e.commissions,0);
-  const pl = closed ? totalCash : '';
-  const sourceLines = execs.map(e => `${e.date} ${e.time} ${e.description} amount ${money(e.amount)}`).join('\n');
-  const executionKeys = execs.map(e => e.executionKey);
-  const openingKeys = openingExecs.map(e => e.executionKey);
-  return {
-    id: crypto.randomUUID(),
-    date: first.date,
-    entryTime: first.time,
-    exitDate: closed ? last.date : '',
-    exitTime: closed ? last.time : '',
-    ticker: first.ticker,
-    instrument: first.instrument,
-    setup: 'Other',
-    grade: '',
-    direction,
-    entry: numberOrBlank(entry),
-    exit: numberOrBlank(exit),
-    stop: '',
-    size: Math.max(boughtQty, soldQty),
-    risk: '',
-    pl: closed ? Number(pl.toFixed(2)) : '',
-    rMultiple: '',
-    portfolioTag: '',
-    emotion: '',
-    status: closed ? 'Closed' : 'Open',
-    checklist: '',
-    notes: '',
-    source: 'Broker CSV import',
-    screenshots: [],
-    importOpenKey: `${first.instrument}|${direction}|${openingKeys.join('~')}`,
-    importTradeKey: `${first.instrument}|${executionKeys.join('~')}`,
-    executionKeys,
-    rawExecutions: execs.map(execution => ({
-      date: execution.date,
-      time: execution.time,
-      action: execution.action,
-      qty: Number(execution.qty || 0),
-      signedQty: Number(execution.signedQty || 0),
-      price: Number(execution.price || 0),
-      instrument: execution.instrument,
-      ticker: execution.ticker,
-      amount: Number(execution.amount || 0),
-      miscFees: Number(execution.miscFees || 0),
-      commissions: Number(execution.commissions || 0),
-      description: execution.description || '',
-      executionKey: execution.executionKey || [execution.date, execution.time, execution.description, execution.amount].join('|')
-    }))
-  };
-}
-
-function preserveManualFields(existing, imported) {
-  const manualFields = ['setup','grade','stop','target','risk','stfAtr','rMultiple','portfolioTag','secondaryTag','mistakeTag','emotion','checklist'];
-  const merged = { ...imported, id: existing.id || imported.id };
-  manualFields.forEach(field => {
-    if (existing[field] !== undefined && existing[field] !== null && String(existing[field]).trim() !== '' && !(field === 'setup' && existing[field] === 'Other')) {
-      merged[field] = existing[field];
-    }
-  });
-  if (existing.notes !== undefined && existing.notes !== null) {
-    merged.notes = cleanBrokerImportNoteText(existing.notes);
-  }
-  return merged;
-}
-
-function syntheticExecutionsFromTrade(trade) {
-  if (Array.isArray(trade.rawExecutions) && trade.rawExecutions.length) {
-    return trade.rawExecutions.map(execution => ({ ...execution }));
-  }
-
-  const instrument = trade.instrument || trade.ticker || trade.symbol || '';
-  const ticker = trade.ticker || trade.symbol || String(instrument).split(/\s+/)[0] || '';
-  const qty = Math.abs(Number(trade.size || trade.quantity || trade.shares || trade.qty || 0));
-  const entry = Number(trade.entry || 0);
-  const exit = Number(trade.exit || 0);
-  if (!qty || !entry) return [];
-
-  const isLong = String(trade.direction || 'Long').toLowerCase() !== 'short';
-  const openAction = isLong ? 'BOT' : 'SOLD';
-  const closeAction = isLong ? 'SOLD' : 'BOT';
-  const executions = [{
-    date: trade.date || '',
-    time: trade.entryTime || '',
-    action: openAction,
-    qty,
-    signedQty: isLong ? qty : -qty,
-    price: entry,
-    instrument,
-    ticker,
-    amount: isLong ? -(qty * entry) : qty * entry,
-    miscFees: 0,
-    commissions: 0,
-    description: `${openAction} ${isLong ? '+' : '-'}${qty} ${instrument} @${entry}`,
-    executionKey: trade.executionKeys?.[0] || `legacy-open|${trade.id}`
-  }];
-
-  if (String(trade.status || '').toLowerCase() === 'closed' && exit) {
-    executions.push({
-      date: trade.exitDate || trade.date || '',
-      time: trade.exitTime || '',
-      action: closeAction,
-      qty,
-      signedQty: isLong ? -qty : qty,
-      price: exit,
-      instrument,
-      ticker,
-      amount: isLong ? qty * exit : -(qty * exit),
-      miscFees: 0,
-      commissions: 0,
-      description: `${closeAction} ${isLong ? '-' : '+'}${qty} ${instrument} @${exit}`,
-      executionKey: trade.executionKeys?.[1] || `legacy-close|${trade.id}`
-    });
-  }
-
-  return executions;
-}
-
-function dedupeExecutions(executions) {
-  const seen = new Set();
-  return (executions || []).filter(execution => {
-    const key = execution.executionKey || [
-      execution.date,
-      execution.time,
-      execution.action,
-      execution.qty,
-      execution.instrument,
-      execution.price,
-      execution.amount
-    ].join('|');
-    if (seen.has(key)) return false;
-    seen.add(key);
-    execution.executionKey = key;
-    return true;
-  }).sort((a, b) => ((a.date || '') + (a.time || '')).localeCompare((b.date || '') + (b.time || '')));
-}
-
-function netExecutionPosition(executions) {
-  return (executions || []).reduce((sum, execution) => {
-    const signedQty = Number(execution.signedQty);
-    if (Number.isFinite(signedQty) && signedQty !== 0) return sum + signedQty;
-    return sum + (String(execution.action).toUpperCase() === 'BOT' ? Number(execution.qty || 0) : -Number(execution.qty || 0));
-  }, 0);
-}
-
-function reconcileWithExistingOpen(imported) {
-  const importedExecutions = imported.rawExecutions || [];
-  if (!importedExecutions.length) return imported;
-
-  const candidateIndex = trades.findIndex(trade => {
-    if (String(trade.status || '').toLowerCase() !== 'open') return false;
-    const sameInstrument = trade.instrument && imported.instrument && trade.instrument === imported.instrument;
-    const sameTicker = String(trade.ticker || trade.symbol || '').toUpperCase() === String(imported.ticker || '').toUpperCase();
-    const bothHaveInstruments = Boolean(trade.instrument && imported.instrument);
-    if (bothHaveInstruments ? !sameInstrument : !sameTicker) return false;
-    const existingExecutions = syntheticExecutionsFromTrade(trade);
-    if (!existingExecutions.length) return false;
-    const existingNet = netExecutionPosition(existingExecutions);
-    const incomingNet = netExecutionPosition(importedExecutions);
-    return existingNet !== 0 && incomingNet !== 0;
-  });
-  if (candidateIndex === -1) return imported;
-
-  const existing = trades[candidateIndex];
-  const combined = dedupeExecutions([...syntheticExecutionsFromTrade(existing), ...importedExecutions]);
-  const netPosition = netExecutionPosition(combined);
-  const rebuilt = summarizeRoundTrip(imported.instrument || existing.instrument || imported.ticker, combined, netPosition === 0);
-  const merged = preserveManualFields(existing, rebuilt);
-  merged.id = existing.id;
-  merged.screenshots = existing.screenshots || [];
-  merged.notes = existing.notes || merged.notes || '';
-  merged.setupScore = existing.setupScore;
-  merged.playbookScreenshotIndex = existing.playbookScreenshotIndex;
-  merged._reconciledExistingIndex = candidateIndex;
-  return merged;
-}
-
-function upsertImportedTrades(importedTrades) {
-  let added = 0, updated = 0, ignored = 0, closedOpen = 0;
-
-  function executionOverlapInfo(existing, importedKeys) {
-    const existingKeys = new Set(existing.executionKeys || []);
-    if (!existingKeys.size || !importedKeys.size) return { overlap: 0, existingKeys };
-    let overlap = 0;
-    importedKeys.forEach(key => { if (existingKeys.has(key)) overlap++; });
-    return { overlap, existingKeys };
-  }
-
-  function rebuildExistingWithImported(existing, imported) {
-    const combined = dedupeExecutions([
-      ...syntheticExecutionsFromTrade(existing),
-      ...(imported.rawExecutions || [])
-    ]);
-    const netPosition = netExecutionPosition(combined);
-    const rebuilt = summarizeRoundTrip(
-      existing.instrument || imported.instrument || existing.ticker || imported.ticker,
-      combined,
-      netPosition === 0
-    );
-    const merged = preserveManualFields(existing, rebuilt);
-    merged.id = existing.id;
-    merged.screenshots = existing.screenshots || [];
-    merged.setupScore = existing.setupScore;
-    merged.playbookScreenshotIndex = existing.playbookScreenshotIndex;
-    if (String(existing.status || '').toLowerCase() === 'open' && String(merged.status || '').toLowerCase() === 'closed') closedOpen++;
-    return merged;
-  }
-
-  for (let imported of importedTrades) {
-    imported = reconcileWithExistingOpen(imported);
-    const importedKeys = new Set(imported.executionKeys || []);
-    const reconciledExistingIndex = Number.isInteger(imported._reconciledExistingIndex)
-      ? imported._reconciledExistingIndex
-      : null;
-    let index = reconciledExistingIndex ?? trades.findIndex(trade => trade.importTradeKey && trade.importTradeKey === imported.importTradeKey);
-    if (imported._reconciledExistingIndex !== undefined) delete imported._reconciledExistingIndex;
-
-    if (index === -1 && imported.importOpenKey) {
-      index = trades.findIndex(t => t.importOpenKey && t.importOpenKey === imported.importOpenKey);
-      if (index !== -1 && trades[index].status === 'Open' && imported.status === 'Closed') closedOpen++;
-    }
-
-    if (index === -1 && importedKeys.size) {
-      index = trades.findIndex(t => {
-        const info = executionOverlapInfo(t, importedKeys);
-        return info.overlap > 0;
-      });
-    }
-
-    if (index !== -1 && importedKeys.size) {
-      const existing = trades[index];
-      const { overlap, existingKeys } = executionOverlapInfo(existing, importedKeys);
-      if (overlap === importedKeys.size && existingKeys.size >= importedKeys.size) {
-        ignored++;
-        continue;
-      }
-      if (overlap > 0 || reconciledExistingIndex !== null) {
-        const before = JSON.stringify(existing);
-        trades[index] = rebuildExistingWithImported(existing, imported);
-        if (before === JSON.stringify(trades[index])) ignored++;
-        else updated++;
-        continue;
-      }
-    }
-
-    if (index === -1) {
-      trades.push(imported);
-      added++;
-    } else {
-      const before = JSON.stringify(trades[index]);
-      trades[index] = preserveManualFields(trades[index], imported);
-      if (before === JSON.stringify(trades[index])) ignored++;
-      else updated++;
-    }
-  }
-  return { added, updated, ignored, closedOpen };
-}
-
-function groupExecutionsIntoTrades(executions) {
-  const byInstrument = new Map();
-  executions.forEach(e => {
-    const key = e.instrument;
-    if (!byInstrument.has(key)) byInstrument.set(key, []);
-    byInstrument.get(key).push(e);
-  });
-  const imported = [];
-  for (const [key, list] of byInstrument.entries()) {
-    list.sort((a,b) => (a.date + a.time).localeCompare(b.date + b.time));
-    let position = 0;
-    let bucket = [];
-    for (const e of list) {
-      const before = position;
-      position += e.signedQty;
-      bucket.push(e);
-      if (before !== 0 && position === 0) {
-        imported.push(summarizeRoundTrip(key, bucket, true));
-        bucket = [];
-      }
-    }
-    if (bucket.length) imported.push(summarizeRoundTrip(key, bucket, false));
-  }
-  imported.sort((a,b) => ((a.date || '') + (a.entryTime || '')).localeCompare((b.date || '') + (b.entryTime || '')));
-  return imported;
-}
 
 function showImportStatus(message) {
   const box = $('importStatus');
