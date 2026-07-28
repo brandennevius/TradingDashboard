@@ -10,7 +10,9 @@ const {
   parseCsv,
   statementExecutions,
   groupExecutionsIntoTrades,
-  upsertImportedTrades
+  upsertImportedTrades,
+  syntheticExecutionsFromTrade,
+  dedupeExecutions
 } = globalThis.CamBrokerCsvParser;
 let journalReadOnly = false;
 let remoteSaveTimer = null;

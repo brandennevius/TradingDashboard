@@ -42,6 +42,8 @@ type CamBrokerCsvParser = {
       ambiguous: number;
     };
   };
+  syntheticExecutionsFromTrade(trade: Record<string, unknown>): Array<Record<string, unknown>>;
+  dedupeExecutions(executions: Array<Record<string, unknown>>): Array<Record<string, unknown>>;
 };
 
 const require = createRequire(import.meta.url);
@@ -243,4 +245,21 @@ test("ambiguous legacy lifecycle matches are not duplicated or silently merged",
 
 test("CAM import no longer resets report or trade-log filters", () => {
   assert.doesNotMatch(appSource, /clearReportAndTradeLogFiltersForImport/);
+});
+
+test("imported trade execution helpers remain available to the trade dialog", () => {
+  const importedQubt = importedTradesFrom(reportedStatementRows, "dialog").find((trade) => trade.ticker === "QUBT");
+  assert.ok(importedQubt);
+
+  const executions = parser.dedupeExecutions(parser.syntheticExecutionsFromTrade(importedQubt));
+
+  assert.equal(executions.length, 2);
+  assert.match(
+    appSource,
+    /const\s*\{[\s\S]*syntheticExecutionsFromTrade,[\s\S]*dedupeExecutions[\s\S]*\}\s*=\s*globalThis\.CamBrokerCsvParser/
+  );
+  assert.match(
+    appSource,
+    /renderExecutionTable\(trade\)[\s\S]*dedupeExecutions\(syntheticExecutionsFromTrade\(trade\)\)/
+  );
 });

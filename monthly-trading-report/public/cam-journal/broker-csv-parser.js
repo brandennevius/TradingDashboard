@@ -582,6 +582,8 @@
     groupExecutionsIntoTrades,
     preserveManualFields,
     lifecycleMatches,
-    upsertImportedTrades
+    upsertImportedTrades,
+    syntheticExecutionsFromTrade,
+    dedupeExecutions
   };
 });
