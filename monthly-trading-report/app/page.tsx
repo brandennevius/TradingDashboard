@@ -377,7 +377,8 @@ const fieldGroups = [
     title: "Performance",
     fields: [
       ["accountSize", "Account size", "$"],
-      ["netPnl", "Net P&L", "$"]
+      ["netPnl", "Net P&L", "$"],
+      ["totalR", "Total net R multiple", "R"]
     ]
   },
   {
@@ -434,7 +435,7 @@ function calculateDerivedMetrics(input: FormState): FormState {
   const avgRisk = numberValue(input.avgRisk);
   const avgWinR = numberValue(input.avgWinR);
   const avgLossR = numberValue(input.avgLossR);
-  const totalR = avgRisk ? netPnl / avgRisk : 0;
+  const totalR = numberValue(input.totalR);
   const percentReturn = accountSize ? (netPnl / accountSize) * 100 : 0;
   const avgR = totalTrades ? totalR / totalTrades : 0;
   const winRate = Math.min(Math.max(numberValue(input.winRate) / 100, 0), 1);
@@ -4698,8 +4699,9 @@ export default function Home() {
                 <dd>{pct(numberValue(derivedPreview.percentReturn))}</dd>
               </div>
               <div>
-                <dt>Total R</dt>
+                <dt>Total net R multiple</dt>
                 <dd>{numberValue(derivedPreview.totalR).toFixed(2)}R</dd>
+                <small>Entered manually for the selected monthly report.</small>
               </div>
               <div>
                 <dt>Avg R</dt>
@@ -5012,6 +5014,7 @@ export default function Home() {
                     <th>Net P&L</th>
                     <th>% Return</th>
                     <th>Avg R</th>
+                    <th>Total net R</th>
                     <th>EV</th>
                     <th>Avg Win</th>
                     <th>Avg Loss</th>
@@ -5028,6 +5031,7 @@ export default function Home() {
                       <td>{money(report.netPnl)}</td>
                       <td>{pct(report.percentReturn)}</td>
                       <td>{report.avgR.toFixed(2)}R</td>
+                      <td>{report.totalR.toFixed(2)}R</td>
                       <td>{report.expectedValueR.toFixed(2)}R</td>
                       <td>{money(report.avgWin)}</td>
                       <td>{money(report.avgLoss)}</td>
@@ -5051,7 +5055,7 @@ export default function Home() {
                   ))}
                   {!reports.length ? (
                     <tr>
-                      <td colSpan={11} className="empty-cell">
+                      <td colSpan={12} className="empty-cell">
                         No monthly reports saved yet.
                       </td>
                     </tr>
@@ -5087,6 +5091,7 @@ export default function Home() {
                   <th>Net P&L</th>
                   <th>% Return</th>
                   <th>Avg R</th>
+                  <th>Total net R</th>
                   <th>EV</th>
                   <th>Avg Win</th>
                   <th>Avg Loss</th>
@@ -5103,6 +5108,7 @@ export default function Home() {
                     <td>{money(report.netPnl)}</td>
                     <td>{pct(report.percentReturn)}</td>
                     <td>{report.avgR.toFixed(2)}R</td>
+                    <td>{report.totalR.toFixed(2)}R</td>
                     <td>{report.expectedValueR.toFixed(2)}R</td>
                     <td>{money(report.avgWin)}</td>
                     <td>{money(report.avgLoss)}</td>
@@ -5126,7 +5132,7 @@ export default function Home() {
                 ))}
                 {!reports.length ? (
                   <tr>
-                    <td colSpan={11} className="empty-cell">
+                    <td colSpan={12} className="empty-cell">
                       No monthly reports saved yet.
                     </td>
                   </tr>
