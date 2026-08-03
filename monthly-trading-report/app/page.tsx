@@ -568,6 +568,8 @@ function buildTraderMonthlyReview(reports: MonthlyReport[]) {
       camPercentReturn: cam?.percentReturn || 0,
       brandenAvgR: branden?.avgR || 0,
       camAvgR: cam?.avgR || 0,
+      brandenTotalR: branden?.totalR || 0,
+      camTotalR: cam?.totalR || 0,
       brandenWinRate: branden?.winRate || 0,
       camWinRate: cam?.winRate || 0,
       brandenTrades: branden?.totalTrades || 0,
@@ -4992,6 +4994,48 @@ export default function Home() {
                   ) : null}
                   {showsTrader(chartFilter, "cam") ? (
                     <Bar dataKey="camWinRate" name="Cam" fill={camColor} radius={[6, 6, 0, 0]} />
+                  ) : null}
+                </BarChart>
+              </ResponsiveContainer>
+            </article>
+
+            <article className="chart-panel">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">Outcome</p>
+                  <h2>Total Net R Multiple</h2>
+                </div>
+              </div>
+              <ResponsiveContainer width="100%" height={secondaryChartHeight}>
+                <BarChart
+                  data={traderMonthly}
+                  margin={responsiveChartMargin}
+                  barGap={isPhoneViewport ? 3 : 8}
+                  barCategoryGap={isPhoneViewport ? "18%" : "28%"}
+                >
+                  <CartesianGrid strokeDasharray="4 6" stroke={chartGridColor} vertical={false} />
+                  <XAxis
+                    dataKey="label"
+                    axisLine={false}
+                    interval={xAxisInterval}
+                    minTickGap={isPhoneViewport ? 18 : 5}
+                    tickLine={false}
+                    tick={{ fill: chartAxisColor, fontSize: isPhoneViewport ? 11 : 12 }}
+                  />
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fill: chartAxisColor, fontSize: isPhoneViewport ? 11 : 12 }}
+                    tickFormatter={(value) => `${Number(value).toFixed(1)}R`}
+                    width={isPhoneViewport ? 42 : 60}
+                  />
+                  <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => `${Number(value).toFixed(2)}R`} />
+                  <Legend iconType="circle" wrapperStyle={chartLegendStyle} />
+                  {showsTrader(chartFilter, "branden") ? (
+                    <Bar dataKey="brandenTotalR" name="Branden" fill={brandenColor} radius={[6, 6, 0, 0]} />
+                  ) : null}
+                  {showsTrader(chartFilter, "cam") ? (
+                    <Bar dataKey="camTotalR" name="Cam" fill={camColor} radius={[6, 6, 0, 0]} />
                   ) : null}
                 </BarChart>
               </ResponsiveContainer>
