@@ -4595,17 +4595,17 @@ export default function Home() {
           <nav className="app-tabs" aria-label="Monthly report sections">
             <button
               type="button"
-              className={activeTab === "entry" ? "active" : ""}
-              onClick={() => setActiveTab("entry")}
-            >
-              Enter Data
-            </button>
-            <button
-              type="button"
               className={activeTab === "dashboard" ? "active" : ""}
               onClick={() => setActiveTab("dashboard")}
             >
               Dashboard
+            </button>
+            <button
+              type="button"
+              className={activeTab === "entry" ? "active" : ""}
+              onClick={() => setActiveTab("entry")}
+            >
+              Enter Data
             </button>
             <button
               type="button"
