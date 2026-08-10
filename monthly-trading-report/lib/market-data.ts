@@ -18,6 +18,32 @@ export function cleanMarketSymbol(value: string) {
     .toUpperCase();
 }
 
+export function marketProviderSymbols(value: string) {
+  const raw = value.trim().replace(/^#/, "").toUpperCase();
+  const forexPair = raw.match(/^([A-Z]{3})\s*\/\s*([A-Z]{3})$/);
+
+  if (forexPair) {
+    const base = forexPair[1];
+    const quote = forexPair[2];
+    return {
+      symbol: `${base}/${quote}`,
+      stooq: `${base}${quote}`.toLowerCase(),
+      yahoo: `${base}${quote}=X`
+    };
+  }
+
+  const symbol = cleanMarketSymbol(value);
+  return {
+    symbol,
+    stooq: !symbol || symbol.startsWith("^")
+      ? null
+      : symbol.includes(".") || symbol.includes("=")
+        ? symbol.toLowerCase()
+        : `${symbol.toLowerCase()}.us`,
+    yahoo: symbol
+  };
+}
+
 function numberValue(value: string) {
   const number = Number(value);
   return Number.isFinite(number) ? number : null;
@@ -142,14 +168,14 @@ function aggregateFourHourCandles(candles: MarketCandle[]) {
     .sort((a, b) => a.time.localeCompare(b.time));
 }
 
-async function fetchStooqCandles(symbol: string, timeframe: MarketTimeframe) {
+async function fetchStooqCandles(symbolValue: string, timeframe: MarketTimeframe) {
   if (timeframe !== "1d") {
     return [];
   }
-  if (symbol.startsWith("^")) return [];
+  const symbol = marketProviderSymbols(symbolValue).stooq;
+  if (!symbol) return [];
 
-  const stooqSymbol = symbol.includes(".") || symbol.includes("=") ? symbol.toLowerCase() : `${symbol.toLowerCase()}.us`;
-  const response = await fetch(`https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSymbol)}&i=d`, {
+  const response = await fetch(`https://stooq.com/q/d/l/?s=${encodeURIComponent(symbol)}&i=d`, {
     next: { revalidate: 60 * 60 * 6 }
   });
 
@@ -161,7 +187,7 @@ async function fetchStooqCandles(symbol: string, timeframe: MarketTimeframe) {
 }
 
 export async function getYahooMarketCandles(symbolValue: string, timeframe: MarketTimeframe = "1d") {
-  const symbol = cleanMarketSymbol(symbolValue);
+  const symbol = marketProviderSymbols(symbolValue).yahoo;
   if (!symbol) return [];
   const now = Math.floor(Date.now() / 1000);
   const start = now - lookbackSeconds(timeframe);
@@ -179,7 +205,7 @@ export async function getYahooMarketCandles(symbolValue: string, timeframe: Mark
 }
 
 export async function getMarketCandlesWithProvider(symbolValue: string, timeframe: MarketTimeframe) {
-  const symbol = cleanMarketSymbol(symbolValue);
+  const symbol = marketProviderSymbols(symbolValue).symbol;
   if (!symbol) {
     return { symbol, timeframe, provider: "unavailable" as MarketDataProvider, candles: [] as MarketCandle[] };
   }
