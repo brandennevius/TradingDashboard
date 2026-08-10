@@ -1,6 +1,7 @@
 "use client";
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
+import { useBrandenSnapshotActions } from "../BrandenSnapshotActionsContext";
 import type { TraderUser } from "@/lib/types";
 
 type BrandenTradeColumnKey =
@@ -122,6 +123,13 @@ function columnLabel(key: BrandenTradeColumnKey) {
 }
 
 export default function BrandenSettingsPage() {
+  const {
+    canGenerateSnapshot,
+    generateDailySnapshot,
+    generateMtdSnapshot,
+    isGeneratingDailySnapshot,
+    isGeneratingMtdSnapshot
+  } = useBrandenSnapshotActions();
   const backupInputRef = useRef<HTMLInputElement | null>(null);
   const [user, setUser] = useState<TraderUser | null>(null);
   const [portfolios, setPortfolios] = useState<string[]>([]);
@@ -311,6 +319,29 @@ export default function BrandenSettingsPage() {
           <section className="column-settings-panel">
             {!canEdit && user ? <p className="muted">Read-only access. Settings cannot be changed.</p> : null}
             <div className="branden-settings-grid">
+              <article className="branden-settings-card">
+                <span className="eyebrow">Reports</span>
+                <h4>Snapshot downloads</h4>
+                <p>Generate a Daily or Month-to-Date snapshot for download without sending an email.</p>
+                <div className="branden-settings-actions">
+                  <button
+                    className="trade-muted-button"
+                    type="button"
+                    disabled={!canGenerateSnapshot || isGeneratingDailySnapshot}
+                    onClick={generateDailySnapshot}
+                  >
+                    {isGeneratingDailySnapshot ? "Generating Daily Snapshot..." : "Generate Daily Snapshot"}
+                  </button>
+                  <button
+                    className="trade-muted-button"
+                    type="button"
+                    disabled={!canGenerateSnapshot || isGeneratingMtdSnapshot}
+                    onClick={generateMtdSnapshot}
+                  >
+                    {isGeneratingMtdSnapshot ? "Generating MTD Snapshot..." : "Generate MTD Snapshot"}
+                  </button>
+                </div>
+              </article>
               <article className="branden-settings-card">
                 <span className="eyebrow">Backup</span>
                 <h4>Full journal backup</h4>
