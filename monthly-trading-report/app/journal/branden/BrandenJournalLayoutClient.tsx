@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import BrandenSidebar from "@/app/components/BrandenSidebar";
+import { BrandenSnapshotActionsProvider } from "./BrandenSnapshotActionsContext";
 import { buildDailySnapshotRequestBody } from "@/lib/daily-portfolio-snapshot-request";
 import type { TraderUser } from "@/lib/types";
 
@@ -322,13 +323,6 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   const accountActions = [
     ...(canGenerateSnapshot ? [
       {
-        key: "generate-mtd-snapshot",
-        label: isGeneratingMtdSnapshot ? "Generating MTD snapshot..." : "Generate MTD Snapshot",
-        icon: "M",
-        disabled: isGeneratingMtdSnapshot,
-        onClick: () => generateMtdSnapshot(false)
-      },
-      {
         key: "generate-send-mtd-snapshot",
         label: "Generate and Send MTD Snapshot",
         icon: "E",
@@ -341,13 +335,6 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         icon: "S",
         disabled: isGeneratingSnapshot,
         onClick: () => generateSnapshot(true)
-      },
-      {
-        key: "download-daily-snapshot",
-        label: "Download Snapshot Only",
-        icon: "D",
-        disabled: isGeneratingSnapshot,
-        onClick: () => generateSnapshot(false)
       }
     ] : []),
     ...(canEditBrandenJournal ? [
@@ -378,7 +365,17 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         }}
       />
       <BrandenSidebar activeHref={pathname || "/journal/branden/dashboard"} accountActions={accountActions} />
-      {children}
+      <BrandenSnapshotActionsProvider
+        value={{
+          canGenerateSnapshot,
+          isGeneratingDailySnapshot: isGeneratingSnapshot,
+          isGeneratingMtdSnapshot,
+          generateDailySnapshot: () => generateSnapshot(false),
+          generateMtdSnapshot: () => generateMtdSnapshot(false)
+        }}
+      >
+        {children}
+      </BrandenSnapshotActionsProvider>
     </main>
   );
 }
