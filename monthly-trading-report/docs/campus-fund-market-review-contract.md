@@ -13,7 +13,7 @@ Dashboard environment:
 - `DASHBOARD_WORKER_SECRET`: reusable shared secret; the identical value is stored only as a GitHub Actions secret in `DailyMarketChartPipeline`.
 - `MARKET_REVIEW_GITHUB_TOKEN`: fine-grained GitHub token with Actions write access for the pipeline repository.
 - `MARKET_REVIEW_GITHUB_REPOSITORY`: defaults to `brandennevius/DailyMarketChartPipeline`.
-- `MARKET_REVIEW_GITHUB_WORKFLOW`: defaults to `dashboard-review.yml`.
+- `MARKET_REVIEW_GITHUB_WORKFLOW`: defaults to the existing Campus-specific `daily-review.yml`; an explicit environment value still overrides it.
 - `MARKET_REVIEW_GITHUB_REF`: defaults to `main`.
 - `MARKET_REVIEW_BASE_URL`: canonical deployed dashboard origin.
 

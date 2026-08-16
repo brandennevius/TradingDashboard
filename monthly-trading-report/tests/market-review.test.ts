@@ -17,7 +17,7 @@ import {
   type MarketReviewCallbackPayload,
   type MarketReviewRun
 } from "../lib/market-review-contract";
-import { buildMarketReviewWorkerDispatch, verifyDashboardWorkerSecret } from "../lib/market-review-service";
+import { buildMarketReviewWorkerDispatch, getMarketReviewGithubConfig, verifyDashboardWorkerSecret } from "../lib/market-review-service";
 
 const hashes = {
   marketsurge_pdf_sha256: "a".repeat(64),
@@ -39,7 +39,7 @@ function run(overrides: Partial<MarketReviewRun> = {}): MarketReviewRun {
     source_expires_at: "2026-08-16T00:00:00.000Z",
     source_deleted_at: null,
     github_repository: "brandennevius/DailyMarketChartPipeline",
-    github_workflow: "dashboard-review.yml",
+    github_workflow: "daily-review.yml",
     github_ref: "main",
     github_run_id: null,
     github_run_attempt: null,
@@ -160,6 +160,19 @@ test("worker shared secret is presented outside public dispatch inputs", { concu
   assert(!serialized.includes("account_scope"));
   assert(!serialized.includes("consumer"));
   assert(!serialized.includes("chart_manifest"));
+});
+
+test("GitHub workflow defaults to daily-review.yml and preserves the environment override", { concurrency: false }, () => {
+  const previous = process.env.MARKET_REVIEW_GITHUB_WORKFLOW;
+  try {
+    delete process.env.MARKET_REVIEW_GITHUB_WORKFLOW;
+    assert.equal(getMarketReviewGithubConfig().workflow, "daily-review.yml");
+    process.env.MARKET_REVIEW_GITHUB_WORKFLOW = "custom-review.yml";
+    assert.equal(getMarketReviewGithubConfig().workflow, "custom-review.yml");
+  } finally {
+    if (previous === undefined) delete process.env.MARKET_REVIEW_GITHUB_WORKFLOW;
+    else process.env.MARKET_REVIEW_GITHUB_WORKFLOW = previous;
+  }
 });
 
 test("callbacks require exact run, date, attempt, and all three source hashes", () => {

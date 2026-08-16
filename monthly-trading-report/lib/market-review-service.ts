@@ -39,7 +39,7 @@ export function getMarketReviewGithubConfig(): MarketReviewGithubConfig {
   return {
     token: String(process.env.MARKET_REVIEW_GITHUB_TOKEN || "").trim(),
     repository: String(process.env.MARKET_REVIEW_GITHUB_REPOSITORY || "brandennevius/DailyMarketChartPipeline").trim(),
-    workflow: String(process.env.MARKET_REVIEW_GITHUB_WORKFLOW || "dashboard-review.yml").trim(),
+    workflow: String(process.env.MARKET_REVIEW_GITHUB_WORKFLOW || "daily-review.yml").trim(),
     ref: String(process.env.MARKET_REVIEW_GITHUB_REF || "main").trim()
   };
 }
