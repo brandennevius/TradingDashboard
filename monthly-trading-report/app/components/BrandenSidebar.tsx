@@ -35,6 +35,7 @@ const brandenSidebarGroups = [
     items: [
       { href: "/journal/branden/dashboard", label: "Dashboard", icon: "D" },
       { href: "/journal/branden/daily-review", label: "Daily Review", icon: "R" },
+      { href: "/journal/branden/market-review", label: "Market Review", icon: "M" },
       { href: "/journal/branden/calendar", label: "Calendar", icon: "C" },
       { href: "/journal/branden/open-positions", label: "Open Positions", icon: "H" },
       { href: "/journal/branden/watchlist", label: "Watchlist", icon: "W" },
