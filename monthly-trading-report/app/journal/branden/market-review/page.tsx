@@ -70,6 +70,7 @@ export default function MarketReviewPage() {
   const [actionRunId, setActionRunId] = useState("");
   const [error, setError] = useState("");
   const [correctionsText, setCorrectionsText] = useState("[]");
+  const [correctionsReviewed, setCorrectionsReviewed] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   async function loadRuns(silent = false) {
@@ -104,7 +105,16 @@ export default function MarketReviewPage() {
 
   useEffect(() => {
     const items = selectedRun?.ocr && Array.isArray(selectedRun.ocr.items) ? selectedRun.ocr.items : [];
-    setCorrectionsText(JSON.stringify(items, null, 2));
+    setCorrectionsText(JSON.stringify(items.map((item) => {
+      const page = item as Record<string, unknown>;
+      return {
+        pdf_page: page.pdf_page,
+        label: page.label,
+        tickers: page.tickers,
+        reviewed: false
+      };
+    }), null, 2));
+    setCorrectionsReviewed(false);
   }, [selectedRun?.run_id, selectedRun?.ocr]);
 
   async function startReview(event: FormEvent) {
@@ -192,10 +202,12 @@ export default function MarketReviewPage() {
     try {
       const corrections = JSON.parse(correctionsText);
       if (!Array.isArray(corrections)) throw new Error("OCR corrections must be a JSON array.");
+      if (!correctionsReviewed) throw new Error("Confirm that you reviewed every page before saving corrections.");
+      const reviewedCorrections = corrections.map((item) => ({ ...item, reviewed: true }));
       const response = await fetch(`/api/journal/branden/market-review/runs/${run.run_id}/ocr-corrections`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expected_version: Number(run.ocr?.version || 0), corrections })
+        body: JSON.stringify({ expected_version: Number(run.ocr?.version || 0), corrections: reviewedCorrections })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(errorMessage(data));
@@ -303,6 +315,10 @@ export default function MarketReviewPage() {
                   {selectedRun.status === "NEEDS_REVIEW" ? (
                     <>
                       <label>Corrections JSON<textarea rows={8} value={correctionsText} onChange={(event) => setCorrectionsText(event.target.value)} /></label>
+                      <label className="market-review-ocr-confirm">
+                        <input type="checkbox" checked={correctionsReviewed} onChange={(event) => setCorrectionsReviewed(event.target.checked)} />
+                        I reviewed every PDF page, its section label, and every corrected ticker.
+                      </label>
                       <button type="button" disabled={actionRunId === selectedRun.run_id} onClick={() => saveCorrections(selectedRun)}>Save OCR Corrections</button>
                     </>
                   ) : null}

@@ -672,6 +672,18 @@
   resize: vertical;
 }
 
+.market-review-ocr .market-review-ocr-confirm {
+  align-items: center;
+  display: flex;
+  flex-direction: row;
+}
+
+.market-review-ocr-confirm input {
+  accent-color: #6f8f5f;
+  height: 18px;
+  width: 18px;
+}
+
 .market-review-results > div {
   display: flex;
   flex-wrap: wrap;

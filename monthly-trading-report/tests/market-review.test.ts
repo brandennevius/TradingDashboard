@@ -12,6 +12,7 @@ import {
   signMarketReviewToken,
   validateCallbackCorrelation,
   validateMarketSurgePdf,
+  validateMarketReviewOcrCorrections,
   validateWorkerInputCorrelation,
   verifyMarketReviewToken,
   type MarketReviewCallbackPayload,
@@ -33,6 +34,7 @@ import {
   validateMarketReviewBlobReference
 } from "../lib/market-review-upload";
 import { buildMarketReviewCreatePayload, type MarketReviewBlobReference } from "../lib/market-review-upload-shared";
+import { serializeMarketReviewSessionDate } from "../lib/market-review-store";
 
 const hashes = {
   marketsurge_pdf_sha256: "a".repeat(64),
@@ -254,6 +256,37 @@ test("market-review session dates stay canonical for worker dispatch", () => {
     () => validateMarketReviewBlobReference(uploadReference({ session_date: "Fri Aug 14" })),
     (error: unknown) => error instanceof MarketReviewValidationError && error.code === "SESSION_DATE_INVALID"
   );
+});
+
+test("database DATE values remain canonical in the worker contract", () => {
+  assert.equal(serializeMarketReviewSessionDate("2026-08-14"), "2026-08-14");
+  assert.equal(serializeMarketReviewSessionDate("2026-08-14T00:00:00.000Z"), "2026-08-14");
+  assert.equal(serializeMarketReviewSessionDate(new Date("2026-08-14T00:00:00.000Z")), "2026-08-14");
+  assert.equal(
+    serializeMarketReviewSessionDate("Fri Aug 14 2026 00:00:00 GMT+0000 (Coordinated Universal Time)"),
+    "2026-08-14"
+  );
+});
+
+test("OCR corrections require explicit v2-reviewed pages and reject navigation tokens", () => {
+  assert.deepEqual(validateMarketReviewOcrCorrections([
+    { pdf_page: 2, label: "Recent Breakouts", tickers: ["fet", "P", "FET"], reviewed: true }
+  ]), [
+    { pdf_page: 2, label: "Recent Breakouts", tickers: ["FET", "P"], reviewed: true }
+  ]);
+  for (const corrections of [
+    [{ pdf_page: 2, label: "Recent Breakouts", tickers: ["FET"], reviewed: false }],
+    [{ pdf_page: 2, label: "Recent Breakouts", tickers: ["FAVORITES"], reviewed: true }],
+    [
+      { pdf_page: 2, label: "Recent Breakouts", tickers: ["FET"], reviewed: true },
+      { pdf_page: 2, label: "Recent Breakouts", tickers: ["P"], reviewed: true }
+    ]
+  ]) {
+    assert.throws(
+      () => validateMarketReviewOcrCorrections(corrections),
+      (error: unknown) => error instanceof MarketReviewValidationError && error.code === "OCR_CORRECTIONS_INVALID"
+    );
+  }
 });
 
 test("orphan Blob cleanup keeps active references and waits 24 hours", () => {

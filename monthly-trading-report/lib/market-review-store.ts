@@ -8,6 +8,7 @@ import {
   callbackStatus,
   decodeAndValidateResultArtifacts,
   deriveCallbackUpdate,
+  requireSessionDate,
   shouldDeleteMarketReviewSources,
   type MarketReviewArtifactKind,
   type MarketReviewCallbackPayload,
@@ -174,11 +175,25 @@ function parseJson<T>(value: unknown, fallback: T): T {
   return fallback;
 }
 
+export function serializeMarketReviewSessionDate(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  const canonical = text.match(/^(\d{4}-\d{2}-\d{2})(?:$|[T\s])/);
+  if (canonical) return requireSessionDate(canonical[1]);
+
+  const date = value instanceof Date ? value : new Date(String(value));
+  if (Number.isNaN(date.getTime())) {
+    throw new MarketReviewValidationError("SESSION_DATE_INVALID", "Stored market-review session date is invalid.");
+  }
+  return requireSessionDate(
+    `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`
+  );
+}
+
 function rowToRun(row: RunRow, artifacts: MarketReviewRun["artifacts"] = []): MarketReviewRun {
   return {
     run_id: String(row.run_id),
     schema_version: MARKET_REVIEW_SCHEMA_VERSION,
-    session_date: String(row.session_date).slice(0, 10),
+    session_date: serializeMarketReviewSessionDate(row.session_date),
     status: String(row.status) as MarketReviewStatus,
     attempt: Number(row.attempt),
     source_hashes: {
