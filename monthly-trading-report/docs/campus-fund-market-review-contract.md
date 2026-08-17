@@ -16,6 +16,7 @@ Dashboard environment:
 - `MARKET_REVIEW_GITHUB_WORKFLOW`: defaults to the existing Campus-specific `daily-review.yml`; an explicit environment value still overrides it.
 - `MARKET_REVIEW_GITHUB_REF`: defaults to `main`.
 - `MARKET_REVIEW_BASE_URL`: canonical deployed dashboard origin.
+- `BLOB_READ_WRITE_TOKEN`: private Vercel Blob store used only for temporary MarketSurge source PDFs.
 
 The reusable worker secret and short-lived tokens must never be printed, stored in result metadata, or placed in `workflow_dispatch` inputs. The public workflow obtains short-lived credentials as follows:
 
@@ -24,22 +25,42 @@ The reusable worker secret and short-lived tokens must never be printed, stored 
 3. The dashboard returns signed source URLs and a short-lived callback token in the response body.
 4. The workflow must mask the response and must not echo it or run with shell tracing.
 
-## Dashboard start request
+## Dashboard direct upload and start request
 
-Authenticated browser request:
+The PDF bytes never pass through a Next.js request body. The authenticated browser first calls the Vercel Blob client-upload handler:
+
+`POST /api/journal/branden/market-review/upload`
+
+The handler issues a short-lived client token only for `application/pdf`, at most 20 MB, and an exact private pathname bound to the requested session, one upload UUID, and the browser-calculated SHA-256. The browser uploads directly to the private Blob store. Blob URLs are never sent to GitHub or exposed to the worker.
+
+The browser then sends a small authenticated JSON request:
 
 `POST /api/journal/branden/market-review`
 
-Multipart fields:
+```json
+{
+  "session_date": "YYYY-MM-DD",
+  "marketsurge_pdf": {
+    "upload_id": "uuid",
+    "session_date": "YYYY-MM-DD",
+    "filename": "MarketSurge.pdf",
+    "content_type": "application/pdf",
+    "size_bytes": 12345678,
+    "sha256": "64 lowercase hex",
+    "blob_url": "https://{store}.private.blob.vercel-storage.com/market-review/source/...",
+    "blob_pathname": "market-review/source/...",
+    "blob_content_type": "application/pdf"
+  }
+}
+```
 
-- `session_date`: exact completed U.S. session, `YYYY-MM-DD`.
-- `marketsurge_pdf`: PDF file.
-
-The dashboard internally generates the existing Daily Portfolio Snapshot with `writeExports:false` and no email. It validates PDF MIME, `.pdf` extension, `%PDF-` magic, 1–75 pages, and a maximum 20 MB. It freezes these exact byte sources in private PostgreSQL `bytea` rows:
+Before creating a run, the dashboard fetches the private object with server credentials and verifies its store URL/path, metadata size and MIME, `.pdf` extension, `%PDF-` magic, 1–75 pages, and SHA-256. It internally generates the existing Daily Portfolio Snapshot with `writeExports:false` and no email. The PDF stays in private Blob; its exact URL/path/hash metadata are frozen in PostgreSQL. Snapshot sources remain private PostgreSQL `bytea` rows:
 
 - `marketsurge_pdf`
 - `snapshot_json`
 - `snapshot_markdown`
+
+Legacy multipart create requests are rejected with `MARKETSURGE_DIRECT_UPLOAD_REQUIRED`, preventing the Vercel request-body 413 path.
 
 ## GitHub workflow dispatch
 
@@ -191,6 +212,7 @@ The dashboard recalculates every artifact size and SHA-256, validates PDF magic 
 
 - Successful strict result registration deletes temporary inputs immediately.
 - Failed and needs-review inputs expire no later than 24 hours after run creation.
+- Unclaimed direct uploads are removed after 24 hours by the cleanup operation.
 - Authenticated manual cleanup is available at `POST /api/journal/branden/market-review/cleanup`; no schedule is created by this change.
 - Result artifacts remain private and download only through authenticated dashboard endpoints.
 

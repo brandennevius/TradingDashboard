@@ -1,6 +1,14 @@
 "use client";
 
+import { upload } from "@vercel/blob/client";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  MARKET_REVIEW_MAX_SOURCE_PDF_BYTES,
+  buildMarketReviewCreatePayload,
+  marketReviewBlobPathnameValue,
+  type MarketReviewBlobReference,
+  type MarketReviewUploadDescriptor
+} from "@/lib/market-review-upload-shared";
 
 type ReviewStatus = "QUEUED" | "RUNNING" | "NEEDS_REVIEW" | "FAILED" | "COMPLETED";
 type ReviewRun = {
@@ -45,6 +53,11 @@ function formatTime(value: string | null) {
 
 function errorMessage(data: { error?: string; code?: string }) {
   return `${data.code ? `${data.code}: ` : ""}${data.error || "Market review request failed."}`;
+}
+
+async function fileSha256(file: File) {
+  const digest = await crypto.subtle.digest("SHA-256", await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest)).map((value) => value.toString(16).padStart(2, "0")).join("");
 }
 
 export default function MarketReviewPage() {
@@ -100,15 +113,52 @@ export default function MarketReviewPage() {
       setError("Choose the exact-session MarketSurge screenshot PDF.");
       return;
     }
+    if (pdf.type.toLowerCase() !== "application/pdf" || !pdf.name.toLowerCase().endsWith(".pdf")) {
+      setError("Choose a PDF file with MIME type application/pdf.");
+      return;
+    }
+    if (!pdf.size || pdf.size > MARKET_REVIEW_MAX_SOURCE_PDF_BYTES) {
+      setError("The MarketSurge PDF must be between 1 byte and 20 MB.");
+      return;
+    }
     setSubmitting(true);
     setError("");
     try {
-      const formData = new FormData();
-      formData.append("session_date", sessionDate);
-      formData.append("marketsurge_pdf", pdf);
-      const response = await fetch("/api/journal/branden/market-review", { method: "POST", body: formData });
+      const descriptor: MarketReviewUploadDescriptor = {
+        upload_id: crypto.randomUUID(),
+        session_date: sessionDate,
+        filename: pdf.name,
+        content_type: pdf.type.toLowerCase(),
+        size_bytes: pdf.size,
+        sha256: await fileSha256(pdf)
+      };
+      const blob = await upload(marketReviewBlobPathnameValue(descriptor), pdf, {
+        access: "private",
+        contentType: "application/pdf",
+        handleUploadUrl: "/api/journal/branden/market-review/upload",
+        clientPayload: JSON.stringify(descriptor),
+        multipart: true
+      });
+      const reference: MarketReviewBlobReference = {
+        ...descriptor,
+        blob_url: blob.url,
+        blob_pathname: blob.pathname,
+        blob_content_type: blob.contentType
+      };
+      const response = await fetch("/api/journal/branden/market-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildMarketReviewCreatePayload(reference))
+      });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(errorMessage(data));
+      if (!response.ok) {
+        await fetch("/api/journal/branden/market-review/upload", {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ marketsurge_pdf: reference })
+        }).catch(() => undefined);
+        throw new Error(errorMessage(data));
+      }
       const run = data.run as ReviewRun;
       setRuns((current) => [run, ...current.filter((item) => item.run_id !== run.run_id)]);
       setSelectedRunId(run.run_id);
@@ -189,7 +239,7 @@ export default function MarketReviewPage() {
           />
           <small>{pdf ? `${pdf.name} · ${(pdf.size / 1024 / 1024).toFixed(2)} MB` : "PDF only · maximum 20 MB · 1–75 pages"}</small>
         </label>
-        <button type="submit" disabled={submitting}>{submitting ? "Validating and queueing…" : "Generate Review"}</button>
+        <button type="submit" disabled={submitting}>{submitting ? "Uploading and validating…" : "Generate Review"}</button>
       </form>
 
       {error ? <div className="market-review-error" role="alert">{error}</div> : null}

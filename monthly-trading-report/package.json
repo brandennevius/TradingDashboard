@@ -16,6 +16,7 @@
   "dependencies": {
     "@napi-rs/canvas": "^1.0.0",
     "@types/pg": "^8.11.10",
+    "@vercel/blob": "^2.8.0",
     "docx": "^9.7.1",
     "jszip": "^3.10.1",
     "lightweight-charts": "^5.2.0",

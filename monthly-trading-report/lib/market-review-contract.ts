@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
+import { MARKET_REVIEW_MAX_SOURCE_PDF_BYTES } from "./market-review-upload-shared";
+
+export { MARKET_REVIEW_MAX_SOURCE_PDF_BYTES } from "./market-review-upload-shared";
 
 export const MARKET_REVIEW_SCHEMA_VERSION = "campus-fund-market-review-v1" as const;
 export const MARKET_REVIEW_CALLBACK_SCHEMA_VERSION = "campus-fund-market-review-callback-v1" as const;
-export const MARKET_REVIEW_MAX_SOURCE_PDF_BYTES = 20 * 1024 * 1024;
 export const MARKET_REVIEW_MAX_SOURCE_PAGES = 75;
 export const MARKET_REVIEW_SOURCE_RETENTION_MS = 24 * 60 * 60 * 1000;
 export const MARKET_REVIEW_TOKEN_TTL_SECONDS = 2 * 60 * 60;

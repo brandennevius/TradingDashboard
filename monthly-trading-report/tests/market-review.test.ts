@@ -17,7 +17,15 @@ import {
   type MarketReviewCallbackPayload,
   type MarketReviewRun
 } from "../lib/market-review-contract";
-import { buildMarketReviewWorkerDispatch, getMarketReviewGithubConfig, verifyDashboardWorkerSecret } from "../lib/market-review-service";
+import { buildMarketReviewWorkerDispatch, getMarketReviewGithubConfig, readAndValidateMarketReviewBlob, verifyDashboardWorkerSecret } from "../lib/market-review-service";
+import {
+  marketReviewBlobPathname,
+  parseMarketReviewUploadClientPayload,
+  requireMarketReviewCreateJson,
+  selectExpiredOrphanMarketReviewBlobs,
+  validateMarketReviewBlobReference
+} from "../lib/market-review-upload";
+import { buildMarketReviewCreatePayload, type MarketReviewBlobReference } from "../lib/market-review-upload-shared";
 
 const hashes = {
   marketsurge_pdf_sha256: "a".repeat(64),
@@ -93,6 +101,101 @@ test("MarketSurge PDF validation checks MIME, magic, page count, and size", asyn
     validateMarketSurgePdf({ mimeType: "application/pdf", filename: "scan.pdf", data: Buffer.alloc(MARKET_REVIEW_MAX_SOURCE_PDF_BYTES + 1), countPages: async () => 1 }),
     (error: unknown) => error instanceof MarketReviewValidationError && error.code === "MARKETSURGE_PDF_SIZE_INVALID"
   );
+});
+
+function uploadReference(overrides: Partial<MarketReviewBlobReference> = {}): MarketReviewBlobReference {
+  const descriptor = {
+    upload_id: "22222222-2222-4222-8222-222222222222",
+    session_date: "2026-08-14",
+    filename: "MarketSurge.pdf",
+    content_type: "application/pdf",
+    size_bytes: 15 * 1024 * 1024,
+    sha256: "d".repeat(64),
+    ...overrides
+  };
+  const pathname = marketReviewBlobPathname(descriptor);
+  return {
+    ...descriptor,
+    blob_url: `https://test-store.private.blob.vercel-storage.com/${pathname}`,
+    blob_pathname: pathname,
+    blob_content_type: "application/pdf"
+  };
+}
+
+test("direct-upload metadata binds session, UUID, PDF hash, and private Blob path", () => {
+  const reference = uploadReference();
+  assert.deepEqual(parseMarketReviewUploadClientPayload(JSON.stringify(reference)), {
+    upload_id: reference.upload_id,
+    session_date: reference.session_date,
+    filename: reference.filename,
+    content_type: reference.content_type,
+    size_bytes: reference.size_bytes,
+    sha256: reference.sha256
+  });
+  assert.deepEqual(validateMarketReviewBlobReference(reference, "2026-08-14"), reference);
+  assert.throws(
+    () => validateMarketReviewBlobReference({ ...reference, blob_pathname: "market-review/source/other.pdf" }),
+    (error: unknown) => error instanceof MarketReviewValidationError && error.code === "MARKETSURGE_BLOB_PATH_MISMATCH"
+  );
+  assert.throws(
+    () => validateMarketReviewBlobReference({ ...reference, blob_url: `https://public.example/${reference.blob_pathname}` }),
+    (error: unknown) => error instanceof MarketReviewValidationError && error.code === "MARKETSURGE_BLOB_URL_INVALID"
+  );
+});
+
+test("large direct upload creates a small reference-only review request", () => {
+  const payload = buildMarketReviewCreatePayload(uploadReference());
+  const serialized = JSON.stringify(payload);
+  assert(serialized.length < 2_000);
+  assert(!serialized.includes("content_base64"));
+  assert(!serialized.includes("%PDF-"));
+  assert.equal(payload.marketsurge_pdf.size_bytes, 15 * 1024 * 1024);
+  assert(!("account_scope" in payload));
+  assert(!("consumer" in payload));
+  assert.doesNotThrow(() => requireMarketReviewCreateJson("application/json; charset=utf-8"));
+  assert.throws(
+    () => requireMarketReviewCreateJson("multipart/form-data; boundary=large-pdf"),
+    (error: unknown) => error instanceof MarketReviewValidationError && error.code === "MARKETSURGE_DIRECT_UPLOAD_REQUIRED"
+  );
+});
+
+test("server re-reads private Blob and verifies metadata, PDF bytes, size, pages, and SHA-256", async () => {
+  const data = Buffer.from("%PDF-1.7\nbody");
+  const reference = uploadReference({ size_bytes: data.length, sha256: sha256(data) });
+  const getBlob = (async () => ({
+    statusCode: 200,
+    stream: new Response(data).body!,
+    headers: new Headers(),
+    blob: {
+      url: reference.blob_url,
+      downloadUrl: `${reference.blob_url}?download=1`,
+      pathname: reference.blob_pathname,
+      contentType: "application/pdf",
+      contentDisposition: "attachment",
+      cacheControl: "public, max-age=60",
+      etag: "test-etag",
+      size: data.length,
+      uploadedAt: new Date("2026-08-14T21:00:00Z")
+    }
+  })) as unknown as Parameters<typeof readAndValidateMarketReviewBlob>[1];
+  const result = await readAndValidateMarketReviewBlob(reference, getBlob, async () => 6);
+  assert.equal(result.pageCount, 6);
+  assert.equal(result.sha256, sha256(data));
+  await assert.rejects(
+    readAndValidateMarketReviewBlob({ ...reference, sha256: "e".repeat(64), blob_url: reference.blob_url.replace(reference.sha256, "e".repeat(64)), blob_pathname: reference.blob_pathname.replace(reference.sha256, "e".repeat(64)) }, getBlob, async () => 6),
+    (error: unknown) => error instanceof MarketReviewValidationError && ["MARKETSURGE_BLOB_METADATA_MISMATCH", "MARKETSURGE_BLOB_HASH_MISMATCH"].includes(error.code)
+  );
+});
+
+test("orphan Blob cleanup keeps active references and waits 24 hours", () => {
+  const now = Date.parse("2026-08-16T00:00:00Z");
+  const oldOrphan = "market-review/source/2026-08-14/orphan/file.pdf";
+  const active = "market-review/source/2026-08-14/active/file.pdf";
+  assert.deepEqual(selectExpiredOrphanMarketReviewBlobs([
+    { pathname: oldOrphan, uploadedAt: new Date("2026-08-14T23:59:59Z") },
+    { pathname: active, uploadedAt: new Date("2026-08-14T00:00:00Z") },
+    { pathname: "market-review/source/2026-08-15/new/file.pdf", uploadedAt: new Date("2026-08-15T12:00:00Z") }
+  ], new Set([active]), now), [oldOrphan]);
 });
 
 test("signed callback tokens bind run, session, attempt, hashes, and expiry", { concurrency: false }, () => {

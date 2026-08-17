@@ -1,4 +1,5 @@
 import type { PoolClient } from "pg";
+import { del } from "@vercel/blob";
 import { getPool } from "./store";
 import {
   MARKET_REVIEW_SCHEMA_VERSION,
@@ -33,17 +34,21 @@ type CreateRunInput = {
     filename: string;
     mediaType: string;
     sha256: string;
-    data: Buffer;
+    data?: Buffer;
+    blob?: { url: string; pathname: string };
+    sizeBytes?: number;
   }>;
 };
 
-type SourceRecord = {
+export type SourceRecord = {
   kind: MarketReviewSourceKind;
   filename: string;
   mediaType: string;
   sha256: string;
   sizeBytes: number;
-  data: Buffer;
+  data: Buffer | null;
+  storageUrl: string | null;
+  storagePathname: string | null;
   expiresAt: string;
 };
 
@@ -116,6 +121,9 @@ export function ensureMarketReviewSchema() {
           primary key (run_id, kind)
         )
       `);
+      await db.query("alter table market_review_sources add column if not exists storage_url text");
+      await db.query("alter table market_review_sources add column if not exists storage_pathname text");
+      await db.query("alter table market_review_sources alter column data drop not null");
       await db.query(`
         create table if not exists market_review_artifacts (
           run_id uuid not null references market_review_runs(run_id) on delete cascade,
@@ -246,6 +254,16 @@ async function lockedRun(client: PoolClient, runId: string) {
   return rowToRun(result.rows[0], artifacts.get(runId) || []);
 }
 
+async function deleteSourcesForRun(client: PoolClient, runId: string) {
+  const stored = await client.query(
+    "select storage_url from market_review_sources where run_id = $1 and storage_url is not null",
+    [runId]
+  );
+  const blobUrls = stored.rows.map((row) => String(row.storage_url)).filter(Boolean);
+  if (blobUrls.length) await del(blobUrls);
+  await client.query("delete from market_review_sources where run_id = $1", [runId]);
+}
+
 export async function createMarketReviewRun(input: CreateRunInput) {
   await ensureMarketReviewSchema();
   return withTransaction(async (client) => {
@@ -273,10 +291,29 @@ export async function createMarketReviewRun(input: CreateRunInput) {
       ]
     );
     for (const source of input.sources) {
+      if ((!source.data && !source.blob) || (source.data && source.blob)) {
+        throw new MarketReviewValidationError("SOURCE_STORAGE_INVALID", "Each review source must use exactly one storage mechanism.");
+      }
+      const sourceSizeBytes = source.data?.length ?? source.sizeBytes;
+      if (!Number.isInteger(sourceSizeBytes) || Number(sourceSizeBytes) < 1) {
+        throw new MarketReviewValidationError("SOURCE_STORAGE_INVALID", "Each review source must have a positive byte size.");
+      }
       await client.query(
-        `insert into market_review_sources (run_id, kind, filename, media_type, sha256, size_bytes, data, expires_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [input.runId, source.kind, source.filename, source.mediaType, source.sha256, source.data.length, source.data, input.sourceExpiresAt]
+        `insert into market_review_sources (
+          run_id, kind, filename, media_type, sha256, size_bytes, data, expires_at, storage_url, storage_pathname
+        ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          input.runId,
+          source.kind,
+          source.filename,
+          source.mediaType,
+          source.sha256,
+          sourceSizeBytes,
+          source.data || null,
+          input.sourceExpiresAt,
+          source.blob?.url || null,
+          source.blob?.pathname || null
+        ]
       );
     }
     await client.query(
@@ -314,10 +351,18 @@ export async function listMarketReviewRuns(limit = 25) {
   }
 }
 
+export async function listMarketReviewSourceBlobPathnames() {
+  await ensureMarketReviewSchema();
+  const result = await database().query(
+    "select storage_pathname from market_review_sources where storage_pathname is not null"
+  );
+  return new Set(result.rows.map((row) => String(row.storage_pathname)).filter(Boolean));
+}
+
 export async function getMarketReviewSource(runId: string, kind: MarketReviewSourceKind): Promise<SourceRecord | null> {
   await ensureMarketReviewSchema();
   const result = await database().query(
-    `select kind, filename, media_type, sha256, size_bytes, data, expires_at
+    `select kind, filename, media_type, sha256, size_bytes, data, expires_at, storage_url, storage_pathname
      from market_review_sources where run_id = $1 and kind = $2`,
     [runId, kind]
   );
@@ -329,7 +374,9 @@ export async function getMarketReviewSource(runId: string, kind: MarketReviewSou
     mediaType: String(row.media_type),
     sha256: String(row.sha256),
     sizeBytes: Number(row.size_bytes),
-    data: Buffer.from(row.data),
+    data: row.data ? Buffer.from(row.data) : null,
+    storageUrl: row.storage_url ? String(row.storage_url) : null,
+    storagePathname: row.storage_pathname ? String(row.storage_pathname) : null,
     expiresAt: iso(row.expires_at) || ""
   };
 }
@@ -406,7 +453,7 @@ export async function applyMarketReviewCallback(payload: MarketReviewCallbackPay
           [run.run_id, artifact.kind, artifact.filename, artifact.media_type, artifact.sha256, artifact.size_bytes, artifact.data]
         );
       }
-      await client.query("delete from market_review_sources where run_id = $1", [run.run_id]);
+      await deleteSourcesForRun(client, run.run_id);
     }
 
     const error = payload.event_type === "FAILED" ? payload.error : null;
@@ -490,7 +537,8 @@ export async function saveMarketReviewOcrCorrections(runId: string, input: { exp
       `insert into market_review_sources (run_id, kind, filename, media_type, sha256, size_bytes, data, expires_at)
        values ($1,'ocr_corrections_json','ocr-corrections.json','application/json',$2,$3,$4,$5)
        on conflict (run_id, kind) do update set sha256 = excluded.sha256, size_bytes = excluded.size_bytes,
-       data = excluded.data, expires_at = excluded.expires_at, created_at = now()`,
+       data = excluded.data, storage_url = null, storage_pathname = null,
+       expires_at = excluded.expires_at, created_at = now()`,
       [runId, input.sha256, input.data.length, input.data, run.source_expires_at]
     );
     const ocr = { ...(run.ocr || {}), status: "CORRECTED", correction_sha256: input.sha256, corrections: input.corrections, version: storedVersion + 1 };
@@ -510,7 +558,7 @@ export async function cleanupMarketReviewSources(now = new Date()) {
     const result = await client.query("select * from market_review_runs where source_deleted_at is null and (status = 'COMPLETED' or source_expires_at <= $1) for update", [now.toISOString()]);
     const eligible = result.rows.map((row) => rowToRun(row)).filter((run) => shouldDeleteMarketReviewSources(run, now.getTime()));
     for (const run of eligible) {
-      await client.query("delete from market_review_sources where run_id = $1", [run.run_id]);
+      await deleteSourcesForRun(client, run.run_id);
       await client.query("update market_review_runs set source_deleted_at = now(), updated_at = now() where run_id = $1", [run.run_id]);
       await client.query(
         `insert into market_review_events (event_id, run_id, event_type, status, attempt, payload)

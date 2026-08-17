@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { del, get, list } from "@vercel/blob";
 import { generateDailyPortfolioSnapshot } from "./daily-portfolio-snapshot-server";
 import {
   MARKET_REVIEW_CALLBACK_SCHEMA_VERSION,
@@ -17,13 +18,21 @@ import {
   type MarketReviewWorkerCorrelation
 } from "./market-review-contract";
 import {
+  MARKET_REVIEW_BLOB_PREFIX,
+  selectExpiredOrphanMarketReviewBlobs,
+  validateMarketReviewBlobReference,
+  type MarketReviewBlobReference
+} from "./market-review-upload";
+import {
   applyMarketReviewCallback,
   createMarketReviewRun,
   failMarketReviewRun,
   getMarketReviewRun,
   getMarketReviewSource,
+  listMarketReviewSourceBlobPathnames,
   queueMarketReviewRetry,
-  recordMarketReviewDispatch
+  recordMarketReviewDispatch,
+  cleanupMarketReviewSources
 } from "./market-review-store";
 
 type DispatchFetch = typeof fetch;
@@ -60,6 +69,37 @@ export async function countPdfPages(data: Buffer) {
   } finally {
     await parser.destroy();
   }
+}
+
+export async function readAndValidateMarketReviewBlob(
+  input: MarketReviewBlobReference,
+  getImpl: typeof get = get,
+  countPages: (data: Buffer) => Promise<number> = countPdfPages
+) {
+  const reference = validateMarketReviewBlobReference(input, input.session_date);
+  const result = await getImpl(reference.blob_url, { access: "private", useCache: false });
+  if (!result || result.statusCode !== 200 || !result.stream) {
+    throw new MarketReviewValidationError("MARKETSURGE_BLOB_NOT_FOUND", "The uploaded MarketSurge PDF is no longer available in private storage.");
+  }
+  if (
+    result.blob.url !== reference.blob_url ||
+    result.blob.pathname !== reference.blob_pathname ||
+    result.blob.contentType?.toLowerCase() !== "application/pdf" ||
+    result.blob.size !== reference.size_bytes
+  ) {
+    throw new MarketReviewValidationError("MARKETSURGE_BLOB_METADATA_MISMATCH", "The private Blob metadata does not match the submitted MarketSurge PDF reference.");
+  }
+  const data = Buffer.from(await new Response(result.stream).arrayBuffer());
+  const validated = await validateMarketSurgePdf({
+    mimeType: reference.content_type,
+    filename: reference.filename,
+    data,
+    countPages
+  });
+  if (validated.sha256 !== reference.sha256 || validated.sizeBytes !== reference.size_bytes) {
+    throw new MarketReviewValidationError("MARKETSURGE_BLOB_HASH_MISMATCH", "The stored MarketSurge PDF bytes do not match the browser SHA-256 and size.");
+  }
+  return { reference, data, ...validated };
 }
 
 function sourceUrl(baseUrl: string, run: MarketReviewRun, kind: MarketReviewSourceKind, sha: string) {
@@ -113,65 +153,77 @@ export async function dispatchMarketReviewRun(run: MarketReviewRun, baseUrl: str
 
 export async function createAndDispatchMarketReview(input: {
   session: string;
-  pdfFilename: string;
-  pdfMimeType: string;
-  pdfData: Buffer;
+  pdfBlob: MarketReviewBlobReference;
   baseUrl: string;
   now?: Date;
   countPages?: (data: Buffer) => Promise<number>;
   dispatch?: typeof dispatchMarketReviewRun;
+  getBlob?: typeof get;
+  deleteBlob?: typeof del;
 }) {
   const session = requireSessionDate(input.session);
   const now = input.now || new Date();
-  const pdf = await validateMarketSurgePdf({
-    mimeType: input.pdfMimeType,
-    filename: input.pdfFilename,
-    data: input.pdfData,
-    countPages: input.countPages || countPdfPages
-  });
-  const snapshotResult = await generateDailyPortfolioSnapshot({
-    session,
-    writeExports: false,
-    dependencies: input.now ? { now: () => now } : undefined
-  });
-  if (snapshotResult.snapshot.metadata.requested_session !== session) {
-    throw new MarketReviewValidationError("SNAPSHOT_SESSION_MISMATCH", "The generated portfolio snapshot did not preserve the requested session.");
-  }
-  const snapshotJson = Buffer.from(`${JSON.stringify(snapshotResult.snapshot, null, 2)}\n`, "utf8");
-  const snapshotMarkdown = Buffer.from(snapshotResult.markdown, "utf8");
-  const sourceHashes = {
-    marketsurge_pdf_sha256: pdf.sha256,
-    snapshot_json_sha256: sha256(snapshotJson),
-    snapshot_markdown_sha256: sha256(snapshotMarkdown)
-  };
-  const config = getMarketReviewGithubConfig();
-  const runId = crypto.randomUUID();
-  const sourceExpiresAt = new Date(now.getTime() + MARKET_REVIEW_SOURCE_RETENTION_MS).toISOString();
-  let run = await createMarketReviewRun({
-    runId,
-    sessionDate: session,
-    sourceHashes,
-    pdfFilename: input.pdfFilename,
-    pdfSizeBytes: pdf.sizeBytes,
-    pdfPageCount: pdf.pageCount,
-    sourceExpiresAt,
-    githubRepository: config.repository,
-    githubWorkflow: config.workflow,
-    githubRef: config.ref,
-    sources: [
-      { kind: "marketsurge_pdf", filename: input.pdfFilename, mediaType: "application/pdf", sha256: sourceHashes.marketsurge_pdf_sha256, data: input.pdfData },
-      { kind: "snapshot_json", filename: `daily-portfolio-snapshot-${session}.json`, mediaType: "application/json", sha256: sourceHashes.snapshot_json_sha256, data: snapshotJson },
-      { kind: "snapshot_markdown", filename: `daily-portfolio-snapshot-${session}.md`, mediaType: "text/markdown; charset=utf-8", sha256: sourceHashes.snapshot_markdown_sha256, data: snapshotMarkdown }
-    ]
-  });
+  const reference = validateMarketReviewBlobReference(input.pdfBlob, session);
+  let runCreated = false;
   try {
-    await (input.dispatch || dispatchMarketReviewRun)(run, input.baseUrl);
+    const pdf = await readAndValidateMarketReviewBlob(reference, input.getBlob || get, input.countPages || countPdfPages);
+    const snapshotResult = await generateDailyPortfolioSnapshot({
+      session,
+      writeExports: false,
+      dependencies: input.now ? { now: () => now } : undefined
+    });
+    if (snapshotResult.snapshot.metadata.requested_session !== session) {
+      throw new MarketReviewValidationError("SNAPSHOT_SESSION_MISMATCH", "The generated portfolio snapshot did not preserve the requested session.");
+    }
+    const snapshotJson = Buffer.from(`${JSON.stringify(snapshotResult.snapshot, null, 2)}\n`, "utf8");
+    const snapshotMarkdown = Buffer.from(snapshotResult.markdown, "utf8");
+    const sourceHashes = {
+      marketsurge_pdf_sha256: pdf.sha256,
+      snapshot_json_sha256: sha256(snapshotJson),
+      snapshot_markdown_sha256: sha256(snapshotMarkdown)
+    };
+    const config = getMarketReviewGithubConfig();
+    const runId = crypto.randomUUID();
+    const sourceExpiresAt = new Date(now.getTime() + MARKET_REVIEW_SOURCE_RETENTION_MS).toISOString();
+    let run = await createMarketReviewRun({
+      runId,
+      sessionDate: session,
+      sourceHashes,
+      pdfFilename: reference.filename,
+      pdfSizeBytes: pdf.sizeBytes,
+      pdfPageCount: pdf.pageCount,
+      sourceExpiresAt,
+      githubRepository: config.repository,
+      githubWorkflow: config.workflow,
+      githubRef: config.ref,
+      sources: [
+        {
+          kind: "marketsurge_pdf",
+          filename: reference.filename,
+          mediaType: "application/pdf",
+          sha256: sourceHashes.marketsurge_pdf_sha256,
+          blob: { url: reference.blob_url, pathname: reference.blob_pathname },
+          sizeBytes: pdf.sizeBytes
+        },
+        { kind: "snapshot_json", filename: `daily-portfolio-snapshot-${session}.json`, mediaType: "application/json", sha256: sourceHashes.snapshot_json_sha256, data: snapshotJson },
+        { kind: "snapshot_markdown", filename: `daily-portfolio-snapshot-${session}.md`, mediaType: "text/markdown; charset=utf-8", sha256: sourceHashes.snapshot_markdown_sha256, data: snapshotMarkdown }
+      ]
+    });
+    runCreated = true;
+    try {
+      await (input.dispatch || dispatchMarketReviewRun)(run, input.baseUrl);
+    } catch (error) {
+      const code = error instanceof MarketReviewValidationError ? error.code : "GITHUB_DISPATCH_FAILED";
+      const message = error instanceof Error ? error.message : "GitHub workflow dispatch failed.";
+      run = await failMarketReviewRun(run.run_id, code, message, error instanceof MarketReviewValidationError ? error.details : undefined);
+    }
+    return run;
   } catch (error) {
-    const code = error instanceof MarketReviewValidationError ? error.code : "GITHUB_DISPATCH_FAILED";
-    const message = error instanceof Error ? error.message : "GitHub workflow dispatch failed.";
-    run = await failMarketReviewRun(run.run_id, code, message, error instanceof MarketReviewValidationError ? error.details : undefined);
+    if (!runCreated) {
+      await (input.deleteBlob || del)(reference.blob_url).catch(() => undefined);
+    }
+    throw error;
   }
-  return run;
 }
 
 export async function retryAndDispatchMarketReview(runId: string, baseUrl: string, dispatch: typeof dispatchMarketReviewRun = dispatchMarketReviewRun) {
@@ -184,6 +236,21 @@ export async function retryAndDispatchMarketReview(runId: string, baseUrl: strin
     run = await failMarketReviewRun(run.run_id, code, message, error instanceof MarketReviewValidationError ? error.details : undefined);
   }
   return run;
+}
+
+export async function cleanupExpiredMarketReviewSources(now = new Date()) {
+  const databaseCleanup = await cleanupMarketReviewSources(now);
+  const referenced = await listMarketReviewSourceBlobPathnames();
+  const blobs: Array<{ pathname: string; uploadedAt: Date }> = [];
+  let cursor: string | undefined;
+  do {
+    const page = await list({ prefix: `${MARKET_REVIEW_BLOB_PREFIX}/`, cursor, limit: 1000 });
+    blobs.push(...page.blobs.map((blob) => ({ pathname: blob.pathname, uploadedAt: blob.uploadedAt })));
+    cursor = page.hasMore ? page.cursor : undefined;
+  } while (cursor);
+  const orphanPathnames = selectExpiredOrphanMarketReviewBlobs(blobs, referenced, now.getTime());
+  if (orphanPathnames.length) await del(orphanPathnames);
+  return { ...databaseCleanup, deletedOrphanBlobCount: orphanPathnames.length };
 }
 
 export function verifyDashboardWorkerSecret(supplied: string) {

@@ -14,7 +14,27 @@ export async function GET(request: Request, context: { params: Promise<{ runId: 
     const token = new URL(request.url).searchParams.get("token") || "";
     if (!token) throw new MarketReviewValidationError("TOKEN_REQUIRED", "A signed source token is required.");
     const source = await authorizeMarketReviewSource(runId, kind, token);
-    return new Response(new Uint8Array(source.data), {
+    let body: BodyInit;
+    if (source.data) {
+      body = new Uint8Array(source.data);
+    } else if (source.storageUrl && source.storagePathname) {
+      const blob = await get(source.storageUrl, { access: "private", useCache: false });
+      if (!blob || blob.statusCode !== 200 || !blob.stream) {
+        throw new MarketReviewValidationError("SOURCE_NOT_FOUND", "The requested exact source does not exist or has been deleted.");
+      }
+      if (
+        blob.blob.url !== source.storageUrl ||
+        blob.blob.pathname !== source.storagePathname ||
+        blob.blob.size !== source.sizeBytes ||
+        blob.blob.contentType?.toLowerCase() !== source.mediaType.toLowerCase()
+      ) {
+        throw new MarketReviewValidationError("SOURCE_CORRELATION_MISMATCH", "Private Blob metadata does not match the frozen review source.");
+      }
+      body = blob.stream;
+    } else {
+      throw new MarketReviewValidationError("SOURCE_NOT_FOUND", "The requested exact source has no stored content.");
+    }
+    return new Response(body, {
       headers: {
         "Content-Type": source.mediaType,
         "Content-Length": String(source.sizeBytes),
@@ -28,3 +48,4 @@ export async function GET(request: Request, context: { params: Promise<{ runId: 
     return marketReviewErrorResponse(error);
   }
 }
+import { get } from "@vercel/blob";
