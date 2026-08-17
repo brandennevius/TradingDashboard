@@ -17,6 +17,13 @@ import {
   type MarketReviewCallbackPayload,
   type MarketReviewRun
 } from "../lib/market-review-contract";
+import {
+  asciiDownloadFilename,
+  buildMarketReviewDownloadResponse,
+  marketReviewArtifactMediaType,
+  marketReviewContentDisposition,
+  marketReviewSourceMediaType
+} from "../lib/market-review-download";
 import { buildMarketReviewWorkerDispatch, getMarketReviewGithubConfig, readAndValidateMarketReviewBlob, verifyDashboardWorkerSecret } from "../lib/market-review-service";
 import {
   marketReviewBlobPathname,
@@ -184,6 +191,68 @@ test("server re-reads private Blob and verifies metadata, PDF bytes, size, pages
   await assert.rejects(
     readAndValidateMarketReviewBlob({ ...reference, sha256: "e".repeat(64), blob_url: reference.blob_url.replace(reference.sha256, "e".repeat(64)), blob_pathname: reference.blob_pathname.replace(reference.sha256, "e".repeat(64)) }, getBlob, async () => 6),
     (error: unknown) => error instanceof MarketReviewValidationError && ["MARKETSURGE_BLOB_METADATA_MISMATCH", "MARKETSURGE_BLOB_HASH_MISMATCH"].includes(error.code)
+  );
+});
+
+test("market-review downloads encode Unicode filenames without invalid response-header bytes", async () => {
+  const filename = "MarketSurge Fri Aug 14\u202f2026.pdf";
+  const data = Buffer.from("%PDF-1.7\nbody");
+  const digest = sha256(data);
+  const disposition = marketReviewContentDisposition(filename);
+  assert.equal(asciiDownloadFilename(filename), "MarketSurge_Fri_Aug_14_2026.pdf");
+  assert.match(disposition, /^attachment; filename="MarketSurge_Fri_Aug_14_2026\.pdf"; filename\*=UTF-8''/);
+  assert(disposition.includes("%E2%80%AF"));
+  assert([...disposition].every((character) => character.charCodeAt(0) <= 0x7f));
+  assert.doesNotThrow(() => new Headers({ "Content-Disposition": disposition }));
+
+  const response = buildMarketReviewDownloadResponse(new Uint8Array(data), {
+    filename,
+    contentType: marketReviewSourceMediaType("marketsurge_pdf", "application/pdf"),
+    sizeBytes: data.length,
+    sha256: digest
+  });
+  assert.equal(response.headers.get("x-content-sha256"), digest);
+  assert.equal(sha256(Buffer.from(await response.arrayBuffer())), digest);
+});
+
+test("market-review download headers sanitize non-ASCII, path traversal, and header injection", () => {
+  const unicode = marketReviewContentDisposition("../../r\u00e9sum\u00e9 \u5e02\u5834.pdf");
+  assert.match(unicode, /^attachment; filename="resume.pdf"; filename\*=UTF-8''/);
+  assert(unicode.includes("r%C3%A9sum%C3%A9%20%E5%B8%82%E5%A0%B4.pdf"));
+  assert([...unicode].every((character) => character.charCodeAt(0) <= 0x7f));
+
+  const injected = marketReviewContentDisposition("report.pdf\r\nX-Injected: yes.pdf");
+  assert(!injected.includes("\r"));
+  assert(!injected.includes("\n"));
+  assert.doesNotThrow(() => new Headers({ "Content-Disposition": injected }));
+  const headers = new Headers({ "Content-Disposition": injected });
+  assert.equal(headers.get("x-injected"), null);
+  assert.throws(
+    () => buildMarketReviewDownloadResponse("x", {
+      filename: "x.pdf",
+      contentType: "application/pdf\r\nX-Injected: yes",
+      sizeBytes: 1,
+      sha256: "a".repeat(64)
+    }),
+    (error: unknown) => error instanceof MarketReviewValidationError && error.code === "DOWNLOAD_MEDIA_TYPE_INVALID"
+  );
+});
+
+test("market-review download media types are fixed by source or artifact kind", () => {
+  assert.equal(marketReviewSourceMediaType("snapshot_markdown", "text/markdown"), "text/markdown; charset=utf-8");
+  assert.equal(marketReviewArtifactMediaType("json", "application/json"), "application/json");
+  assert.throws(
+    () => marketReviewArtifactMediaType("pdf", "text/plain\r\nX-Injected: yes"),
+    (error: unknown) => error instanceof MarketReviewValidationError && error.code === "RESULT_ARTIFACT_METADATA_INVALID"
+  );
+});
+
+test("market-review session dates stay canonical for worker dispatch", () => {
+  assert.equal(run({ session_date: "2026-08-14" }).session_date, "2026-08-14");
+  assert.equal(buildMarketReviewWorkerDispatch(run(), "https://dashboard.example").session_date, "2026-08-14");
+  assert.throws(
+    () => validateMarketReviewBlobReference(uploadReference({ session_date: "Fri Aug 14" })),
+    (error: unknown) => error instanceof MarketReviewValidationError && error.code === "SESSION_DATE_INVALID"
   );
 });
 

@@ -1,5 +1,7 @@
+import { get } from "@vercel/blob";
 import { marketReviewErrorResponse } from "@/lib/market-review-api";
 import { MarketReviewValidationError, type MarketReviewSourceKind } from "@/lib/market-review-contract";
+import { buildMarketReviewDownloadResponse, marketReviewSourceMediaType } from "@/lib/market-review-download";
 import { authorizeMarketReviewSource } from "@/lib/market-review-service";
 
 export const runtime = "nodejs";
@@ -34,18 +36,13 @@ export async function GET(request: Request, context: { params: Promise<{ runId: 
     } else {
       throw new MarketReviewValidationError("SOURCE_NOT_FOUND", "The requested exact source has no stored content.");
     }
-    return new Response(body, {
-      headers: {
-        "Content-Type": source.mediaType,
-        "Content-Length": String(source.sizeBytes),
-        "Content-Disposition": `attachment; filename="${source.filename.replace(/["\\\r\n]/g, "_")}"`,
-        "Cache-Control": "private, no-store",
-        "X-Content-SHA256": source.sha256,
-        "X-Content-Type-Options": "nosniff"
-      }
+    return buildMarketReviewDownloadResponse(body, {
+      filename: source.filename,
+      contentType: marketReviewSourceMediaType(kind, source.mediaType),
+      sizeBytes: source.sizeBytes,
+      sha256: source.sha256
     });
   } catch (error) {
     return marketReviewErrorResponse(error);
   }
 }
-import { get } from "@vercel/blob";
