@@ -30,7 +30,7 @@ import type {
 
 let pool: Pool | null = null;
 
-function getPool() {
+export function getPool() {
   if (!process.env.DATABASE_URL) {
     return null;
   }

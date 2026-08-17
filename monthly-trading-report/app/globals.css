@@ -401,6 +401,342 @@
   }
 }
 
+.market-review-page {
+  align-content: start;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  padding: 18px;
+}
+
+.market-review-hero,
+.market-review-start-card,
+.market-review-run-list,
+.market-review-run-detail {
+  background: rgba(255, 250, 240, 0.86);
+  border: 1px solid rgba(185, 214, 168, 0.8);
+  border-radius: 14px;
+  box-shadow: 0 14px 32px rgba(86, 100, 72, 0.08);
+}
+
+.market-review-hero {
+  align-items: end;
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  padding: 24px;
+}
+
+.market-review-hero h1,
+.market-review-start-card h2,
+.market-review-section-heading h2,
+.market-review-ocr h3 {
+  margin: 3px 0 0;
+}
+
+.market-review-hero p:not(.eyebrow),
+.market-review-start-card p,
+.market-review-empty p {
+  color: #6f7469;
+  line-height: 1.55;
+  margin: 8px 0 0;
+}
+
+.market-review-hero > span {
+  background: rgba(215, 240, 208, 0.62);
+  border: 1px solid rgba(111, 143, 95, 0.2);
+  border-radius: 999px;
+  color: #4f7045;
+  flex: 0 0 auto;
+  font-size: 0.76rem;
+  font-weight: 900;
+  padding: 8px 11px;
+}
+
+.market-review-start-card {
+  align-items: end;
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(240px, 1.25fr) minmax(180px, 0.55fr) minmax(260px, 1fr) auto;
+  padding: 20px;
+}
+
+.market-review-start-card label,
+.market-review-ocr label {
+  color: #5f665a;
+  display: grid;
+  font-size: 0.78rem;
+  font-weight: 900;
+  gap: 7px;
+}
+
+.market-review-start-card input,
+.market-review-ocr textarea {
+  background: #fffdf7;
+  border: 1px solid rgba(111, 143, 95, 0.44);
+  border-radius: 9px;
+  color: #2f352d;
+  font: inherit;
+  min-height: 44px;
+  padding: 10px 12px;
+}
+
+.market-review-start-card small {
+  color: #7b8075;
+  font-weight: 700;
+}
+
+.market-review-start-card button,
+.market-review-run-list button,
+.market-review-ocr button,
+.market-review-retry,
+.market-review-section-heading > button {
+  background: #6f8f5f;
+  border: 0;
+  border-radius: 9px;
+  color: #fffdf7;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 900;
+  min-height: 44px;
+  padding: 10px 14px;
+}
+
+.market-review-start-card button:disabled,
+.market-review-run-list button:disabled,
+.market-review-ocr button:disabled,
+.market-review-retry:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.market-review-error,
+.market-review-run-error {
+  background: rgba(180, 79, 79, 0.1);
+  border: 1px solid rgba(180, 79, 79, 0.28);
+  border-radius: 10px;
+  color: #873f3f;
+  font-weight: 800;
+  padding: 13px 15px;
+  white-space: pre-wrap;
+}
+
+.market-review-workspace {
+  align-items: start;
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(230px, 0.32fr) minmax(0, 1fr);
+}
+
+.market-review-run-list,
+.market-review-run-detail {
+  min-width: 0;
+  padding: 18px;
+}
+
+.market-review-run-list {
+  display: grid;
+  gap: 8px;
+  position: sticky;
+  top: 16px;
+}
+
+.market-review-run-list > button {
+  align-items: center;
+  background: rgba(240, 255, 240, 0.42);
+  border: 1px solid rgba(185, 214, 168, 0.72);
+  color: #2f352d;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.market-review-run-list > button.active {
+  background: rgba(215, 240, 208, 0.72);
+  box-shadow: inset 4px 0 #4f7045;
+}
+
+.market-review-run-list > button span {
+  display: grid;
+  gap: 2px;
+}
+
+.market-review-run-list small {
+  color: #7b8075;
+}
+
+.market-review-section-heading {
+  align-items: center;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.market-review-section-heading > button {
+  background: rgba(111, 143, 95, 0.13);
+  color: #4f7045;
+  min-height: 36px;
+  padding: 7px 10px;
+}
+
+.market-review-status {
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-style: normal;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  padding: 6px 8px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.market-review-status.queued { background: #eee8d5; color: #786b45; }
+.market-review-status.running { background: #dcecf4; color: #35637b; }
+.market-review-status.needs_review { background: #f6e5c3; color: #8a642c; }
+.market-review-status.failed { background: #f4d6d6; color: #984848; }
+.market-review-status.completed { background: #d7f0d0; color: #39704a; }
+
+.market-review-run-detail {
+  display: grid;
+  gap: 18px;
+}
+
+.market-review-facts {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+}
+
+.market-review-facts > div {
+  background: rgba(240, 255, 240, 0.42);
+  border: 1px solid rgba(185, 214, 168, 0.58);
+  border-radius: 9px;
+  min-width: 0;
+  padding: 11px 12px;
+}
+
+.market-review-facts dt {
+  color: #7b8075;
+  font-size: 0.7rem;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.market-review-facts dd {
+  font-size: 0.86rem;
+  font-weight: 800;
+  margin: 5px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.market-review-hashes,
+.market-review-ocr,
+.market-review-results {
+  background: rgba(246, 230, 200, 0.22);
+  border: 1px solid rgba(185, 214, 168, 0.62);
+  border-radius: 10px;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+}
+
+.market-review-hashes h3,
+.market-review-run-error p {
+  margin: 0;
+}
+
+.market-review-hashes code {
+  background: rgba(255, 255, 255, 0.52);
+  border-radius: 7px;
+  color: #4f5f49;
+  overflow-wrap: anywhere;
+  padding: 8px 10px;
+}
+
+.market-review-ocr pre {
+  background: #253027;
+  border-radius: 9px;
+  color: #eef7e9;
+  font-size: 0.75rem;
+  max-height: 280px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.market-review-ocr textarea {
+  min-height: 160px;
+  resize: vertical;
+}
+
+.market-review-results > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.market-review-results a {
+  background: #6f8f5f;
+  border-radius: 8px;
+  color: #fff;
+  font-weight: 900;
+  padding: 9px 12px;
+  text-decoration: none;
+}
+
+.market-review-retry {
+  justify-self: start;
+}
+
+.market-review-empty {
+  min-height: 260px;
+  place-content: center;
+  text-align: center;
+}
+
+@media (max-width: 1180px) {
+  .market-review-start-card {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .market-review-start-card > div {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 760px) {
+  .market-review-page {
+    padding: 12px;
+  }
+
+  .market-review-hero,
+  .market-review-section-heading {
+    align-items: flex-start;
+    display: grid;
+  }
+
+  .market-review-hero > span {
+    justify-self: start;
+  }
+
+  .market-review-start-card,
+  .market-review-workspace,
+  .market-review-facts {
+    grid-template-columns: 1fr;
+  }
+
+  .market-review-start-card > div {
+    grid-column: auto;
+  }
+
+  .market-review-run-list {
+    position: static;
+  }
+}
+
 * {
   box-sizing: border-box;
 }
