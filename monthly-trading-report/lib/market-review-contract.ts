@@ -152,7 +152,23 @@ export type MarketReviewOcrCorrection = {
   reviewed: true;
 };
 
-export function validateMarketReviewOcrCorrections(value: unknown): MarketReviewOcrCorrection[] {
+function ocrReviewRank(value: unknown, pdfPage: number, tickerIndex: number) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const items = Array.isArray((value as Record<string, unknown>).items)
+    ? (value as Record<string, unknown>).items as unknown[]
+    : [];
+  const item = items.find((raw) => raw && typeof raw === "object" && !Array.isArray(raw)
+    && Number((raw as Record<string, unknown>).pdf_page) === pdfPage) as Record<string, unknown> | undefined;
+  if (!item) return null;
+  const acceptedCount = Array.isArray(item.tickers) ? item.tickers.length : 0;
+  const reviewRows = Array.isArray(item.review_rows) ? item.review_rows : [];
+  const reviewRow = reviewRows[tickerIndex - acceptedCount];
+  if (!reviewRow || typeof reviewRow !== "object" || Array.isArray(reviewRow)) return null;
+  const rank = (reviewRow as Record<string, unknown>).rank;
+  return Number.isInteger(rank) && Number(rank) > 0 ? Number(rank) : null;
+}
+
+export function validateMarketReviewOcrCorrections(value: unknown, reviewState?: unknown): MarketReviewOcrCorrection[] {
   if (!Array.isArray(value) || !value.length || value.length > MARKET_REVIEW_MAX_SOURCE_PAGES) {
     throw new MarketReviewValidationError(
       "OCR_CORRECTIONS_INVALID",
@@ -184,18 +200,23 @@ export function validateMarketReviewOcrCorrections(value: unknown): MarketReview
     }
     pages.add(Number(pdfPage));
     const normalizedTickers: string[] = [];
-    for (const rawTicker of tickers) {
+    for (const [tickerIndex, rawTicker] of tickers.entries()) {
       const ticker = String(rawTicker || "").trim().toUpperCase();
       if (!/^[A-Z][A-Z0-9.-]{0,9}$/.test(ticker) || MARKET_REVIEW_OCR_EXCLUDED_TOKENS.has(ticker)) {
+        const rank = ocrReviewRank(reviewState, Number(pdfPage), tickerIndex);
         throw new MarketReviewValidationError(
           "OCR_CORRECTIONS_INVALID",
-          `Page ${pdfPage} contains an invalid or navigation ticker token.`
+          `Page ${pdfPage}${rank ? ` rank ${rank}` : ""} contains invalid corrected ticker ${JSON.stringify(String(rawTicker || ""))}. Use a 1–10 character U.S.-listed ticker containing only letters, numbers, period, or hyphen.`
         );
       }
       if (!normalizedTickers.includes(ticker)) normalizedTickers.push(ticker);
     }
     return { pdf_page: Number(pdfPage), label, tickers: normalizedTickers, reviewed: true };
   });
+}
+
+export function canSaveMarketReviewOcrCorrections(status: MarketReviewStatus) {
+  return status === "NEEDS_REVIEW" || status === "FAILED";
 }
 
 export async function validateMarketSurgePdf(input: {

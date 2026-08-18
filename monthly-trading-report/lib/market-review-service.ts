@@ -263,6 +263,17 @@ export async function createAndDispatchMarketReview(input: {
 }
 
 export async function retryAndDispatchMarketReview(runId: string, baseUrl: string, dispatch: typeof dispatchMarketReviewRun = dispatchMarketReviewRun) {
+  const existing = await getMarketReviewRun(runId);
+  if (!existing) throw new MarketReviewValidationError("REVIEW_RUN_NOT_FOUND", "The requested market review run does not exist.");
+  if (existing.ocr?.status === "CORRECTED" && existing.ocr.schema_version === "marketsurge_ocr_v2") {
+    const correctionSource = await getMarketReviewSource(runId, "ocr_corrections_json");
+    if (!dispatchableMarketReviewOcrCorrections(existing, correctionSource)) {
+      throw new MarketReviewValidationError(
+        "OCR_CORRECTIONS_INVALID",
+        "Saved OCR corrections are invalid or no longer correlate with this run. Edit and resave them before retrying."
+      );
+    }
+  }
   let run = await queueMarketReviewRetry(runId);
   try {
     await dispatch(run, baseUrl);

@@ -5,6 +5,7 @@ import {
   MARKET_REVIEW_SCHEMA_VERSION,
   MarketReviewValidationError,
   assertMarketReviewTransition,
+  canSaveMarketReviewOcrCorrections,
   callbackStatus,
   decodeAndValidateResultArtifacts,
   deriveCallbackUpdate,
@@ -18,6 +19,10 @@ import {
   type MarketReviewSourceKind,
   type MarketReviewStatus
 } from "./market-review-contract";
+
+export const REQUIRED_RETRY_SOURCE_KINDS = [
+  "marketsurge_pdf", "snapshot_json", "snapshot_markdown", "market_gauge_json"
+] as const;
 
 type CreateRunInput = {
   runId: string;
@@ -524,9 +529,12 @@ export async function queueMarketReviewRetry(runId: string) {
     if (run.source_deleted_at || new Date(run.source_expires_at).getTime() <= Date.now()) {
       throw new MarketReviewValidationError("RETRY_SOURCE_UNAVAILABLE", "The exact source packet has expired or was deleted; start a new review.");
     }
-    const sourceCount = await client.query("select count(*)::int as count from market_review_sources where run_id = $1 and kind in ('marketsurge_pdf','snapshot_json','snapshot_markdown')", [runId]);
-    if (Number(sourceCount.rows[0]?.count) !== 3) {
-      throw new MarketReviewValidationError("RETRY_SOURCE_INCOMPLETE", "The exact three-source packet is incomplete; start a new review.");
+    const sourceCount = await client.query(
+      "select count(*)::int as count from market_review_sources where run_id = $1 and kind = any($2::text[])",
+      [runId, REQUIRED_RETRY_SOURCE_KINDS]
+    );
+    if (Number(sourceCount.rows[0]?.count) !== REQUIRED_RETRY_SOURCE_KINDS.length) {
+      throw new MarketReviewValidationError("RETRY_SOURCE_INCOMPLETE", "The exact four-source packet is incomplete; start a new review.");
     }
     const nextAttempt = run.attempt + 1;
     await client.query(
@@ -549,7 +557,9 @@ export async function saveMarketReviewOcrCorrections(runId: string, input: { exp
   await ensureMarketReviewSchema();
   return withTransaction(async (client) => {
     const run = await lockedRun(client, runId);
-    if (run.status !== "NEEDS_REVIEW") throw new MarketReviewValidationError("OCR_CORRECTION_NOT_ALLOWED", "OCR corrections are accepted only while a run needs review.");
+    if (!canSaveMarketReviewOcrCorrections(run.status)) {
+      throw new MarketReviewValidationError("OCR_CORRECTION_NOT_ALLOWED", "OCR corrections are accepted only while a run needs review or after an OCR-related failure.");
+    }
     const storedVersion = Number(run.ocr?.version || 0);
     if (storedVersion !== input.expectedVersion) throw new MarketReviewValidationError("OCR_VERSION_CONFLICT", "OCR review changed; reload before submitting corrections.");
     await client.query(
@@ -564,8 +574,8 @@ export async function saveMarketReviewOcrCorrections(runId: string, input: { exp
     await client.query("update market_review_runs set ocr = $2::jsonb, updated_at = now() where run_id = $1", [runId, JSON.stringify(ocr)]);
     await client.query(
       `insert into market_review_events (event_id, run_id, event_type, status, attempt, payload)
-       values ($1,$2,'OCR_CORRECTED','NEEDS_REVIEW',$3,$4::jsonb)`,
-      [`${runId}:ocr-corrected:${storedVersion + 1}`, runId, run.attempt, JSON.stringify({ version: storedVersion + 1, sha256: input.sha256 })]
+       values ($1,$2,'OCR_CORRECTED',$3,$4,$5::jsonb)`,
+      [`${runId}:ocr-corrected:${storedVersion + 1}`, runId, run.status, run.attempt, JSON.stringify({ version: storedVersion + 1, sha256: input.sha256 })]
     );
     return lockedRun(client, runId);
   });

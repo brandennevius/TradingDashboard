@@ -122,6 +122,31 @@ export function buildMarketReviewOcrCorrections(
   return { ready: errors.length === 0, errors, corrections };
 }
 
+export function restoreMarketReviewOcrEditor(pages: MarketReviewOcrReviewPage[], value: unknown) {
+  const ocr = record(value);
+  const saved = ocr && Array.isArray(ocr.corrections) ? ocr.corrections : [];
+  const resolutions: Record<string, string> = {};
+  const reviewedPages: Record<number, boolean> = {};
+  const errors: string[] = [];
+
+  for (const page of pages) {
+    const correction = saved.find((raw) => record(raw)?.pdf_page === page.pdfPage);
+    const correctionRecord = record(correction);
+    const savedTickers = Array.isArray(correctionRecord?.tickers)
+      ? correctionRecord.tickers.map(normalizeMarketReviewTicker).filter((ticker): ticker is string => Boolean(ticker))
+      : [];
+    const remaining = savedTickers.filter((ticker) => !page.acceptedTickers.includes(ticker));
+    if (remaining.length !== page.reviewRows.length) {
+      errors.push(`Page ${page.pdfPage} saved corrections cannot be mapped safely; recheck each ambiguous row.`);
+    }
+    page.reviewRows.forEach((row, index) => {
+      resolutions[row.key] = remaining[index] || "";
+    });
+    reviewedPages[page.pdfPage] = correctionRecord?.reviewed === true && remaining.length === page.reviewRows.length;
+  }
+  return { resolutions, reviewedPages, errors };
+}
+
 export function hasSavedV2MarketReviewCorrections(value: unknown) {
   const ocr = record(value);
   if (!ocr || ocr.status !== "CORRECTED" || ocr.schema_version !== "marketsurge_ocr_v2" || !Array.isArray(ocr.corrections)) return false;
@@ -129,5 +154,11 @@ export function hasSavedV2MarketReviewCorrections(value: unknown) {
 }
 
 export function canRetryMarketReview(status: string, ocr: unknown) {
-  return status === "FAILED" || (status === "NEEDS_REVIEW" && hasSavedV2MarketReviewCorrections(ocr));
+  if (status === "FAILED") {
+    const review = record(ocr);
+    return review?.status === "CORRECTED" && review.schema_version === "marketsurge_ocr_v2"
+      ? hasSavedV2MarketReviewCorrections(ocr)
+      : true;
+  }
+  return status === "NEEDS_REVIEW" && hasSavedV2MarketReviewCorrections(ocr);
 }

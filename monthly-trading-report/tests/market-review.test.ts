@@ -5,6 +5,7 @@ import {
   MARKET_REVIEW_MAX_SOURCE_PDF_BYTES,
   MarketReviewValidationError,
   assertMarketReviewTransition,
+  canSaveMarketReviewOcrCorrections,
   decodeAndValidateResultArtifacts,
   deriveCallbackUpdate,
   sha256,
@@ -35,7 +36,7 @@ import {
   marketReviewSnapshotError
 } from "../lib/market-review-service";
 import { SnapshotValidationError } from "../lib/daily-portfolio-snapshot-server";
-import type { SourceRecord } from "../lib/market-review-store";
+import { REQUIRED_RETRY_SOURCE_KINDS, type SourceRecord } from "../lib/market-review-store";
 import {
   marketReviewBlobPathname,
   parseMarketReviewUploadClientPayload,
@@ -50,7 +51,8 @@ import {
   canRetryMarketReview,
   hasSavedV2MarketReviewCorrections,
   marketReviewOcrRowKey,
-  parseMarketReviewOcrReview
+  parseMarketReviewOcrReview,
+  restoreMarketReviewOcrEditor
 } from "../lib/market-review-ocr-ui";
 
 const hashes = {
@@ -264,6 +266,45 @@ test("NEEDS_REVIEW retry stays locked until valid v2 corrections are saved", () 
   assert.equal(hasSavedV2MarketReviewCorrections({ ...attemptFourOcrFixture, status: "CORRECTED", corrections: [{ reviewed: false }] }), false);
 });
 
+test("failed v2 review restores production-shaped corrections for safe amendment", () => {
+  const review = {
+    schema_version: "marketsurge_ocr_v2",
+    status: "CORRECTED",
+    version: 1,
+    items: [{
+      pdf_page: 9,
+      label: "BRANDENS WATCHLIST",
+      tickers: ["ZIM", "TNK", "MANU"],
+      review_rows: [
+        { rank: 9, raw_text: "Ww", candidate_ticker: "WW", reason: "SYMBOL_CASE_AMBIGUOUS" },
+        { rank: 19, raw_text: "LY.FT,", candidate_ticker: "LY.FT", reason: "LOW_CONFIDENCE_SYMBOL" },
+        { rank: 20, raw_text: "FTI", candidate_ticker: "FTI", reason: "LOW_CONFIDENCE_SYMBOL" }
+      ]
+    }],
+    corrections: [{
+      pdf_page: 9,
+      label: "BRANDENS WATCHLIST",
+      tickers: ["ZIM", "TNK", "MANU", "W", "LYFT", "FTI"],
+      reviewed: true
+    }]
+  };
+  const pages = parseMarketReviewOcrReview(review);
+  const restored = restoreMarketReviewOcrEditor(pages, review);
+  assert.deepEqual(restored.errors, []);
+  assert.equal(restored.resolutions[marketReviewOcrRowKey(9, 9, 0)], "W");
+  assert.equal(restored.resolutions[marketReviewOcrRowKey(9, 19, 1)], "LYFT");
+  assert.equal(restored.resolutions[marketReviewOcrRowKey(9, 20, 2)], "FTI");
+  assert.equal(restored.reviewedPages[9], true);
+  assert.equal(canSaveMarketReviewOcrCorrections("FAILED"), true);
+  assert.equal(canSaveMarketReviewOcrCorrections("COMPLETED"), false);
+});
+
+test("retry requires all four frozen source kinds including market gauge", () => {
+  assert.deepEqual(REQUIRED_RETRY_SOURCE_KINDS, [
+    "marketsurge_pdf", "snapshot_json", "snapshot_markdown", "market_gauge_json"
+  ]);
+});
+
 function uploadReference(overrides: Partial<MarketReviewBlobReference> = {}): MarketReviewBlobReference {
   const descriptor = {
     upload_id: "22222222-2222-4222-8222-222222222222",
@@ -441,6 +482,26 @@ test("OCR corrections require explicit v2-reviewed pages and reject navigation t
       (error: unknown) => error instanceof MarketReviewValidationError && error.code === "OCR_CORRECTIONS_INVALID"
     );
   }
+});
+
+test("invalid corrected ticker reports its exact page and rank before save", () => {
+  const reviewState = {
+    items: [{
+      pdf_page: 9,
+      label: "BRANDENS WATCHLIST",
+      tickers: ["ZIM", "TNK"],
+      review_rows: [{ rank: 19, raw_text: "LY.FT,", candidate_ticker: "LY.FT" }]
+    }]
+  };
+  assert.throws(
+    () => validateMarketReviewOcrCorrections([
+      { pdf_page: 9, label: "BRANDENS WATCHLIST", tickers: ["ZIM", "TNK", "LY/FT"], reviewed: true }
+    ], reviewState),
+    (error: unknown) => error instanceof MarketReviewValidationError
+      && error.code === "OCR_CORRECTIONS_INVALID"
+      && error.message.includes("Page 9 rank 19")
+      && error.message.includes('"LY/FT"')
+  );
 });
 
 function correctionSource(data: Buffer): SourceRecord {

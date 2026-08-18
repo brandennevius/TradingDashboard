@@ -14,7 +14,8 @@ import {
   canRetryMarketReview,
   hasSavedV2MarketReviewCorrections,
   normalizeMarketReviewTicker,
-  parseMarketReviewOcrReview
+  parseMarketReviewOcrReview,
+  restoreMarketReviewOcrEditor
 } from "@/lib/market-review-ocr-ui";
 
 type ReviewStatus = "QUEUED" | "RUNNING" | "NEEDS_REVIEW" | "FAILED" | "COMPLETED";
@@ -121,12 +122,22 @@ export default function MarketReviewPage() {
   const hasSavedV2Corrections = hasSavedV2MarketReviewCorrections(selectedRun?.ocr);
   const hasFrozenMarketGauge = Boolean(selectedRun?.source_hashes.market_gauge_json_sha256);
   const retryAllowed = selectedRun ? hasFrozenMarketGauge && canRetryMarketReview(selectedRun.status, selectedRun.ocr) : false;
+  const correctionEditorAvailable = Boolean(selectedRun && ocrReviewPages.length && (
+    (selectedRun.status === "NEEDS_REVIEW" && !hasSavedV2Corrections)
+    || selectedRun.status === "FAILED"
+  ));
 
   useEffect(() => {
-    setOcrResolutions({});
-    setReviewedOcrPages({});
+    if (selectedRun?.status === "FAILED" && hasSavedV2MarketReviewCorrections(selectedRun.ocr)) {
+      const restored = restoreMarketReviewOcrEditor(ocrReviewPages, selectedRun.ocr);
+      setOcrResolutions(restored.resolutions);
+      setReviewedOcrPages(restored.reviewedPages);
+    } else {
+      setOcrResolutions({});
+      setReviewedOcrPages({});
+    }
     setPreviewPage(null);
-  }, [selectedRun?.run_id, selectedRun?.ocr]);
+  }, [selectedRun?.run_id, selectedRun?.ocr, selectedRun?.status, ocrReviewPages]);
 
   async function startReview(event: FormEvent) {
     event.preventDefault();
@@ -320,10 +331,12 @@ export default function MarketReviewPage() {
               {selectedRun.ocr ? (
                 <section className="market-review-ocr">
                   <div><p className="eyebrow">OCR review</p><h3>{String(selectedRun.ocr.status || "RETURNED")}</h3></div>
-                  {selectedRun.status === "NEEDS_REVIEW" && !hasSavedV2Corrections ? (
+                  {correctionEditorAvailable ? (
                     <div className="market-review-ocr-workflow">
                       <p className="market-review-ocr-instructions">
-                        Resolve every ambiguous symbol against the frozen PDF, then explicitly review each page. The dashboard builds the v2 correction packet; raw JSON editing is not required.
+                        {selectedRun.status === "FAILED"
+                          ? "This failed run keeps its frozen sources. Review or amend the saved tickers below, resave the v2 packet, then retry without uploading another PDF."
+                          : "Resolve every ambiguous symbol against the frozen PDF, then explicitly review each page. The dashboard builds the v2 correction packet; raw JSON editing is not required."}
                       </p>
                       <div className="market-review-ocr-progress">
                         <strong>{ocrReviewPages.reduce((total, page) => total + page.reviewRows.length, 0)} ambiguous rows</strong>
@@ -376,7 +389,9 @@ export default function MarketReviewPage() {
                                         value={ocrResolutions[row.key] || ""}
                                         onChange={(event) => setOcrResolutions((current) => ({ ...current, [row.key]: event.target.value.toUpperCase() }))}
                                       />
-                                      <small>{normalized ? `Validated as ${normalized}` : "Required · ticker format only"}</small>
+                                      <small>{normalized
+                                        ? `Validated as ${normalized}`
+                                        : `Page ${page.pdfPage}${row.rank ? ` rank ${row.rank}` : ""}: required ticker; letters, numbers, period, or hyphen only.`}</small>
                                     </label>
                                   </div>
                                 );
