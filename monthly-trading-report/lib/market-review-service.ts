@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { del, get, list } from "@vercel/blob";
-import { generateDailyPortfolioSnapshot } from "./daily-portfolio-snapshot-server";
+import { generateDailyPortfolioSnapshot, SnapshotValidationError } from "./daily-portfolio-snapshot-server";
 import {
   MARKET_REVIEW_CALLBACK_SCHEMA_VERSION,
   MARKET_REVIEW_SOURCE_RETENTION_MS,
@@ -174,6 +174,13 @@ export async function fetchExactSessionMarketGauge(
   return Buffer.from(`${JSON.stringify(payload, null, 2)}\n`, "utf8");
 }
 
+export function marketReviewSnapshotError(error: unknown) {
+  if (error instanceof SnapshotValidationError) {
+    return new MarketReviewValidationError(error.code, error.message, error.diagnostic);
+  }
+  return error;
+}
+
 export async function createAndDispatchMarketReview(input: {
   session: string;
   pdfBlob: MarketReviewBlobReference;
@@ -195,6 +202,8 @@ export async function createAndDispatchMarketReview(input: {
       session,
       writeExports: false,
       dependencies: input.now ? { now: () => now } : undefined
+    }).catch((error) => {
+      throw marketReviewSnapshotError(error);
     });
     if (snapshotResult.snapshot.metadata.requested_session !== session) {
       throw new MarketReviewValidationError("SNAPSHOT_SESSION_MISMATCH", "The generated portfolio snapshot did not preserve the requested session.");

@@ -10,7 +10,7 @@ import {
   type SnapshotPrice,
   type SnapshotWarning
 } from "./daily-portfolio-snapshot";
-import { getMarketCandlesWithProvider } from "./market-data";
+import { getExactMarketSessionPrice } from "./market-data";
 import { getBrandenPortfolioSettings, getWeeklyProcessFocus, listBrandenVisibleTrades } from "./store";
 import type { TradeLogEntry } from "./types";
 import type { WeeklyFocus } from "./weekly-focus";
@@ -211,16 +211,14 @@ function brokerValidationMessage(diagnostic: SnapshotValidationDiagnostic) {
 }
 
 async function loadSessionPrice(symbol: string, session: string): Promise<SnapshotPrice> {
-  const result = await getMarketCandlesWithProvider(symbol, "1d");
-  const eligible = result.candles.filter((candle) => candle.time <= session);
-  const candle = eligible.at(-1);
+  const result = await getExactMarketSessionPrice(symbol, session);
   return {
     symbol,
-    price: candle?.close ?? null,
-    timestamp: candle?.time ? marketSessionCloseTimestamp(candle.time) : null,
-    sessionDate: candle?.time ?? null,
+    price: result.price,
+    timestamp: result.timestamp || (result.sessionDate ? marketSessionCloseTimestamp(result.sessionDate) : null),
+    sessionDate: result.sessionDate,
     provider: result.provider,
-    priceType: "delayed_close",
+    priceType: result.priceType,
     retrievedAt: new Date().toISOString()
   };
 }
@@ -302,7 +300,7 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
     );
   }
   const openSymbols = Array.from(new Set(accountTrades.filter((trade) => trade.status === "OPEN").map((trade) => trade.symbol))).sort();
-  const loadedPrices = await mapWithConcurrency(openSymbols, 4, (symbol) => dependencies.loadPrice(symbol, session.resolved));
+  const loadedPrices = await mapWithConcurrency(openSymbols, 2, (symbol) => dependencies.loadPrice(symbol, session.resolved));
   const prices = new Map(loadedPrices.map((price) => [price.symbol, price]));
   const sessionPortfolioMeta = portfolioMeta?.equityStatementDate === session.resolved
     ? portfolioMeta
@@ -350,7 +348,7 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
   if (invalidPrices.length) {
     throw new SnapshotValidationError(
       "CURRENT_PRICES_INVALID",
-      `Snapshot not generated: current-session prices are missing or stale for ${invalidPrices.join(", ")}.`
+      `Snapshot not generated: exact-session prices for ${session.resolved} are missing or stale for ${invalidPrices.join(", ")}.`
     );
   }
   const markdown = renderDailyPortfolioSnapshotMarkdown(snapshot);

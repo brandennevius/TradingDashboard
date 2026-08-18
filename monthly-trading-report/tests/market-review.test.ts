@@ -31,8 +31,10 @@ import {
   fetchExactSessionMarketGauge,
   getMarketReviewGithubConfig,
   readAndValidateMarketReviewBlob,
-  verifyDashboardWorkerSecret
+  verifyDashboardWorkerSecret,
+  marketReviewSnapshotError
 } from "../lib/market-review-service";
+import { SnapshotValidationError } from "../lib/daily-portfolio-snapshot-server";
 import type { SourceRecord } from "../lib/market-review-store";
 import {
   marketReviewBlobPathname,
@@ -75,6 +77,19 @@ test("exact-session market gauge source is canonical and rejects mismatched sess
     fetchExactSessionMarketGauge("https://dashboard.example", "2026-08-14", mismatchFetch as typeof fetch),
     (error: unknown) => error instanceof MarketReviewValidationError && error.code === "MARKET_GAUGE_SOURCE_INVALID"
   );
+});
+
+test("snapshot validation failures retain their machine-readable code at the market-review boundary", () => {
+  const mapped = marketReviewSnapshotError(new SnapshotValidationError(
+    "CURRENT_PRICES_INVALID",
+    "Exact-session price evidence is unavailable."
+  ));
+
+  assert(mapped instanceof MarketReviewValidationError);
+  assert.equal(mapped.code, "CURRENT_PRICES_INVALID");
+  assert.equal(mapped.details, undefined);
+  const unrelated = new Error("unrelated");
+  assert.equal(marketReviewSnapshotError(unrelated), unrelated);
 });
 
 function run(overrides: Partial<MarketReviewRun> = {}): MarketReviewRun {

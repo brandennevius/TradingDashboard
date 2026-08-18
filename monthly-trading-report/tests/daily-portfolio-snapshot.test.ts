@@ -575,6 +575,29 @@ test("server does not write exports when a current price is stale", async () => 
   assert.deepEqual(await readdir(outputDirectory), []);
 });
 
+test("selected historical session fails closed instead of accepting a newer live price", async () => {
+  await assert.rejects(
+    generateDailyPortfolioSnapshot({
+      session: "2026-08-17", accountName: "Main", writeExports: false,
+      dependencies: {
+        now: () => new Date("2026-08-18T21:00:00Z"),
+        loadTrades: async () => [trade({ entryDate: "2026-08-17", executions: [{ ...trade().executions[0], date: "2026-08-17" }] })],
+        loadPortfolioSettings: async () => ({
+          portfolios: ["Main"], defaultPortfolio: "Main",
+          portfolioMeta: { Main: { ...input([]).portfolioMeta, equityStatementDate: "2026-08-17" } }
+        }),
+        loadPrice: async (symbol) => ({
+          symbol, price: 112, sessionDate: "2026-08-18", timestamp: "2026-08-18T15:00:00-04:00",
+          provider: "yahoo", priceType: "last_trade", retrievedAt: "2026-08-18T19:00:01.000Z"
+        })
+      }
+    }),
+    (error) => error instanceof SnapshotValidationError
+      && error.code === "CURRENT_PRICES_INVALID"
+      && error.message.includes("exact-session prices for 2026-08-17")
+  );
+});
+
 test("server can return browser download payloads without writing deployment files", async () => {
   const outputDirectory = await mkdtemp(path.join(os.tmpdir(), "snapshot-browser-test-"));
   const weeklyFocus = createUserDefinedWeeklyFocus({ summary: "Follow my written plan.", focusItems: ["Let trades earn adds"] }, new Date("2026-07-12T16:00:00Z"));

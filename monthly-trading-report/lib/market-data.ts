@@ -10,6 +10,16 @@ export type MarketCandle = {
 export type MarketTimeframe = "1h" | "4h" | "1d" | "1wk" | "1mo";
 export type MarketDataProvider = "stooq" | "yahoo" | "unavailable";
 
+export type ExactMarketSessionPrice = {
+  symbol: string;
+  requestedSession: string;
+  sessionDate: string | null;
+  price: number | null;
+  timestamp: string | null;
+  provider: MarketDataProvider;
+  priceType: "delayed_close" | "last_trade";
+};
+
 export function cleanMarketSymbol(value: string) {
   return value
     .trim()
@@ -109,6 +119,11 @@ function dateInTimeZone(unixTimestamp: number, timeZone: string) {
   }
 }
 
+function validPositiveNumber(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
 function parseYahooResponse(payload: unknown, timeframe: MarketTimeframe): MarketCandle[] {
   const result =
     payload &&
@@ -201,6 +216,118 @@ async function fetchStooqCandles(symbolValue: string, timeframe: MarketTimeframe
   }
 
   return parseStooqCsv(await response.text());
+}
+
+async function fetchExactStooqSession(symbolValue: string, session: string) {
+  const symbol = marketProviderSymbols(symbolValue).stooq;
+  if (!symbol) return null;
+  const compactSession = session.replaceAll("-", "");
+  const response = await fetch(
+    `https://stooq.com/q/d/l/?s=${encodeURIComponent(symbol)}&d1=${compactSession}&d2=${compactSession}&i=d`,
+    { cache: "no-store" }
+  );
+  if (!response.ok) return null;
+  return parseStooqCsv(await response.text()).find((candle) => candle.time === session) || null;
+}
+
+function yahooSessionWindow(session: string) {
+  const sessionStart = Date.parse(`${session}T00:00:00Z`);
+  if (!Number.isFinite(sessionStart)) return null;
+  return {
+    period1: Math.floor((sessionStart - 86_400_000) / 1000),
+    period2: Math.floor((sessionStart + 2 * 86_400_000) / 1000)
+  };
+}
+
+function exactYahooSessionPrice(payload: unknown, symbol: string, session: string): ExactMarketSessionPrice | null {
+  const result =
+    payload &&
+    typeof payload === "object" &&
+    "chart" in payload &&
+    (payload as { chart?: { result?: unknown[] } }).chart?.result?.[0];
+  if (!result || typeof result !== "object") return null;
+
+  const exactCandle = parseYahooResponse(payload, "1d").find((candle) => candle.time === session);
+  if (exactCandle) {
+    return {
+      symbol,
+      requestedSession: session,
+      sessionDate: session,
+      price: exactCandle.close,
+      timestamp: null,
+      provider: "yahoo",
+      priceType: "delayed_close"
+    };
+  }
+
+  const meta = (result as {
+    meta?: {
+      exchangeTimezoneName?: unknown;
+      regularMarketPrice?: unknown;
+      regularMarketTime?: unknown;
+    };
+  }).meta;
+  const price = validPositiveNumber(meta?.regularMarketPrice);
+  const unixTimestamp = Number(meta?.regularMarketTime);
+  const timeZone = typeof meta?.exchangeTimezoneName === "string" && meta.exchangeTimezoneName
+    ? meta.exchangeTimezoneName
+    : "America/New_York";
+  if (price === null || !Number.isFinite(unixTimestamp) || dateInTimeZone(unixTimestamp, timeZone) !== session) {
+    return null;
+  }
+  return {
+    symbol,
+    requestedSession: session,
+    sessionDate: session,
+    price,
+    timestamp: new Date(unixTimestamp * 1000).toISOString(),
+    provider: "yahoo",
+    priceType: "last_trade"
+  };
+}
+
+async function fetchExactYahooSession(symbolValue: string, session: string) {
+  const symbol = marketProviderSymbols(symbolValue).yahoo;
+  const window = yahooSessionWindow(session);
+  if (!symbol || !window) return null;
+  for (const host of ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]) {
+    const response = await fetch(
+      `https://${host}/v8/finance/chart/${encodeURIComponent(symbol)}?period1=${window.period1}&period2=${window.period2}&interval=1d&events=history`,
+      { cache: "no-store" }
+    ).catch(() => null);
+    if (!response?.ok) continue;
+    const exact = exactYahooSessionPrice(await response.json().catch(() => null), marketProviderSymbols(symbolValue).symbol, session);
+    if (exact) return exact;
+  }
+  return null;
+}
+
+export async function getExactMarketSessionPrice(symbolValue: string, session: string): Promise<ExactMarketSessionPrice> {
+  const symbol = marketProviderSymbols(symbolValue).symbol;
+  const unavailable: ExactMarketSessionPrice = {
+    symbol,
+    requestedSession: session,
+    sessionDate: null,
+    price: null,
+    timestamp: null,
+    provider: "unavailable",
+    priceType: "delayed_close"
+  };
+  if (!symbol || !/^\d{4}-\d{2}-\d{2}$/.test(session)) return unavailable;
+
+  const stooqCandle = await fetchExactStooqSession(symbol, session).catch(() => null);
+  if (stooqCandle) {
+    return {
+      symbol,
+      requestedSession: session,
+      sessionDate: session,
+      price: stooqCandle.close,
+      timestamp: null,
+      provider: "stooq",
+      priceType: "delayed_close"
+    };
+  }
+  return await fetchExactYahooSession(symbol, session) || unavailable;
 }
 
 export async function getYahooMarketCandles(symbolValue: string, timeframe: MarketTimeframe = "1d") {
