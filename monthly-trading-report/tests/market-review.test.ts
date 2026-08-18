@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   MARKET_REVIEW_CALLBACK_SCHEMA_VERSION,
@@ -26,6 +27,7 @@ import {
   marketReviewContentDisposition,
   marketReviewSourceMediaType
 } from "../lib/market-review-download";
+import { marketReviewArtifactDisposition, marketReviewInlineArtifactUrl } from "../lib/market-review-preview";
 import {
   buildMarketReviewWorkerDispatch,
   dispatchableMarketReviewOcrCorrections,
@@ -410,6 +412,34 @@ test("market-review downloads encode Unicode filenames without invalid response-
   assert.match(response.headers.get("content-disposition") || "", /^inline; filename="MarketSurge_Fri_Aug_14_2026\.pdf";/);
   assert.equal(response.headers.get("x-content-sha256"), digest);
   assert.equal(sha256(Buffer.from(await response.arrayBuffer())), digest);
+});
+
+test("completed PDF preview preserves the authenticated artifact route and only opts PDF into inline disposition", () => {
+  assert.equal(
+    marketReviewInlineArtifactUrl("/api/journal/branden/market-review/runs/run-1/artifacts/pdf"),
+    "/api/journal/branden/market-review/runs/run-1/artifacts/pdf?disposition=inline"
+  );
+  assert.equal(
+    marketReviewInlineArtifactUrl("/api/journal/branden/market-review/runs/run-1/artifacts/pdf?token=signed#page=2"),
+    "/api/journal/branden/market-review/runs/run-1/artifacts/pdf?token=signed&disposition=inline#page=2"
+  );
+  assert.equal(marketReviewArtifactDisposition(new Request("https://dashboard.test/artifact?disposition=inline"), "pdf"), "inline");
+  assert.equal(marketReviewArtifactDisposition(new Request("https://dashboard.test/artifact?disposition=inline"), "markdown"), "attachment");
+  assert.equal(marketReviewArtifactDisposition(new Request("https://dashboard.test/artifact"), "pdf"), "attachment");
+});
+
+test("PDF preview UI is an accessible modal with verified loading, failure, close, and Escape behavior", () => {
+  const source = readFileSync(new URL("../app/journal/branden/market-review/page.tsx", import.meta.url), "utf8");
+  assert.match(source, />Preview PDF</);
+  assert.match(source, /aria-modal="true"/);
+  assert.match(source, /role="dialog"/);
+  assert.match(source, /event\.key === "Escape"/);
+  assert.match(source, /event\.key === "Tab"/);
+  assert.match(source, /previewTriggerRef\.current\?\.focus/);
+  assert.match(source, /Loading verified PDF/);
+  assert.match(source, /Preview unavailable/);
+  assert.match(source, /credentials: "same-origin"/);
+  assert.match(source, /responseHash !== pdfPreview\.sha256/);
 });
 
 test("market-review download headers sanitize non-ASCII, path traversal, and header injection", () => {

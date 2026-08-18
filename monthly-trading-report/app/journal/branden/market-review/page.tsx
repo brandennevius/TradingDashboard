@@ -17,6 +17,7 @@ import {
   parseMarketReviewOcrReview,
   restoreMarketReviewOcrEditor
 } from "@/lib/market-review-ocr-ui";
+import { marketReviewInlineArtifactUrl } from "@/lib/market-review-preview";
 
 type ReviewStatus = "QUEUED" | "RUNNING" | "NEEDS_REVIEW" | "FAILED" | "COMPLETED";
 type ReviewRun = {
@@ -46,6 +47,8 @@ type ReviewRun = {
   updated_at: string;
   completed_at: string | null;
 };
+
+type ReviewArtifact = ReviewRun["artifacts"][number];
 
 function nyDate() {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
@@ -81,7 +84,14 @@ export default function MarketReviewPage() {
   const [ocrResolutions, setOcrResolutions] = useState<Record<string, string>>({});
   const [reviewedOcrPages, setReviewedOcrPages] = useState<Record<number, boolean>>({});
   const [previewPage, setPreviewPage] = useState<number | null>(null);
+  const [pdfPreview, setPdfPreview] = useState<ReviewArtifact | null>(null);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState("");
+  const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
+  const [pdfPreviewError, setPdfPreviewError] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const previewDialogRef = useRef<HTMLElement | null>(null);
+  const previewCloseRef = useRef<HTMLButtonElement | null>(null);
+  const previewTriggerRef = useRef<HTMLElement | null>(null);
 
   async function loadRuns(silent = false) {
     if (!silent) setLoading(true);
@@ -138,6 +148,72 @@ export default function MarketReviewPage() {
     }
     setPreviewPage(null);
   }, [selectedRun?.run_id, selectedRun?.ocr, selectedRun?.status, ocrReviewPages]);
+
+  useEffect(() => {
+    if (!pdfPreview) return;
+    const controller = new AbortController();
+    let objectUrl = "";
+    setPdfPreviewLoading(true);
+    setPdfPreviewError("");
+    setPdfPreviewUrl("");
+    document.body.classList.add("market-review-modal-open");
+    window.setTimeout(() => previewCloseRef.current?.focus(), 0);
+
+    fetch(marketReviewInlineArtifactUrl(pdfPreview.download_url), {
+      cache: "no-store",
+      credentials: "same-origin",
+      signal: controller.signal
+    }).then(async (response) => {
+      if (!response.ok) throw new Error(`PDF preview failed (${response.status}).`);
+      const contentType = response.headers.get("Content-Type")?.toLowerCase() || "";
+      const responseHash = response.headers.get("X-Content-SHA256") || "";
+      if (!contentType.startsWith("application/pdf")) throw new Error("The preview response was not a PDF.");
+      if (responseHash !== pdfPreview.sha256) throw new Error("The preview PDF did not match the stored artifact hash.");
+      const blob = await response.blob();
+      objectUrl = URL.createObjectURL(blob);
+      setPdfPreviewUrl(objectUrl);
+    }).catch((previewError) => {
+      if (!controller.signal.aborted) {
+        setPdfPreviewError(previewError instanceof Error ? previewError.message : "The PDF preview could not be loaded.");
+      }
+    }).finally(() => {
+      if (!controller.signal.aborted) setPdfPreviewLoading(false);
+    });
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPdfPreview(null);
+      if (event.key === "Tab") {
+        const controls = Array.from(
+          previewDialogRef.current?.querySelectorAll<HTMLElement>(
+            'button:not([disabled]), a[href], iframe, [tabindex]:not([tabindex="-1"])'
+          ) || []
+        ).filter((element) => !element.hasAttribute("disabled"));
+        if (!controls.length) return;
+        const first = controls[0];
+        const last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      controller.abort();
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      document.body.classList.remove("market-review-modal-open");
+      window.removeEventListener("keydown", onKeyDown);
+      previewTriggerRef.current?.focus();
+    };
+  }, [pdfPreview]);
+
+  function openPdfPreview(artifact: ReviewArtifact) {
+    previewTriggerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setPdfPreview(artifact);
+  }
 
   async function startReview(event: FormEvent) {
     event.preventDefault();
@@ -425,9 +501,16 @@ export default function MarketReviewPage() {
               {selectedRun.artifacts.length ? (
                 <section className="market-review-results">
                   <p className="eyebrow">Generated results</p>
-                  <div>{selectedRun.artifacts.map((artifact) => (
-                    <a key={artifact.kind} href={artifact.download_url}>Download {artifact.kind === "json" ? "JSON" : artifact.kind === "pdf" ? "PDF" : "Markdown"}</a>
-                  ))}</div>
+                  <div>{[...selectedRun.artifacts]
+                    .sort((left, right) => ({ pdf: 0, markdown: 1, json: 2 }[left.kind] - { pdf: 0, markdown: 1, json: 2 }[right.kind]))
+                    .map((artifact) => (
+                      <span className="market-review-result-action" key={artifact.kind}>
+                        <a href={artifact.download_url}>Download {artifact.kind === "json" ? "JSON" : artifact.kind === "pdf" ? "PDF" : "Markdown"}</a>
+                        {artifact.kind === "pdf" ? (
+                          <button type="button" onClick={() => openPdfPreview(artifact)}>Preview PDF</button>
+                        ) : null}
+                      </span>
+                    ))}</div>
                 </section>
               ) : null}
 
@@ -459,6 +542,40 @@ export default function MarketReviewPage() {
           ) : <div className="market-review-empty"><h2>Select or start a review</h2><p>Every run is tied to its explicit ID, session, attempt, and source hashes.</p></div>}
         </article>
       </div>
+      {pdfPreview ? (
+        <div className="market-review-preview-backdrop" onMouseDown={(event) => {
+          if (event.currentTarget === event.target) setPdfPreview(null);
+        }}>
+          <section
+            ref={previewDialogRef}
+            aria-describedby="market-review-preview-description"
+            aria-labelledby="market-review-preview-title"
+            aria-modal="true"
+            className="market-review-preview-dialog"
+            role="dialog"
+          >
+            <header>
+              <div>
+                <p className="eyebrow">Completed review</p>
+                <h2 id="market-review-preview-title">Preview PDF</h2>
+                <p id="market-review-preview-description">{pdfPreview.filename}</p>
+              </div>
+              <button ref={previewCloseRef} type="button" onClick={() => setPdfPreview(null)} aria-label="Close PDF preview">Close</button>
+            </header>
+            <div className="market-review-preview-frame" aria-busy={pdfPreviewLoading}>
+              {pdfPreviewLoading ? <p className="market-review-preview-state" role="status">Loading verified PDF…</p> : null}
+              {pdfPreviewError ? (
+                <div className="market-review-preview-state market-review-preview-failure" role="alert">
+                  <strong>Preview unavailable</strong>
+                  <p>{pdfPreviewError}</p>
+                  <a href={pdfPreview.download_url}>Download PDF instead</a>
+                </div>
+              ) : null}
+              {pdfPreviewUrl ? <iframe src={pdfPreviewUrl} title={`PDF preview: ${pdfPreview.filename}`} /> : null}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

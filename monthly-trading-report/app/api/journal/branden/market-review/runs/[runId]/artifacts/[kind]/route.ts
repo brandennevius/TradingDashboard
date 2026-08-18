@@ -1,11 +1,12 @@
 import { requireMarketReviewDashboardUser, marketReviewErrorResponse } from "@/lib/market-review-api";
 import { MarketReviewValidationError, type MarketReviewArtifactKind } from "@/lib/market-review-contract";
 import { buildMarketReviewDownloadResponse, marketReviewArtifactMediaType } from "@/lib/market-review-download";
+import { marketReviewArtifactDisposition } from "@/lib/market-review-preview";
 import { getMarketReviewArtifact } from "@/lib/market-review-store";
 
 const artifactKinds = new Set<MarketReviewArtifactKind>(["pdf", "markdown", "json"]);
 
-export async function GET(_request: Request, context: { params: Promise<{ runId: string; kind: string }> }) {
+export async function GET(request: Request, context: { params: Promise<{ runId: string; kind: string }> }) {
   try {
     await requireMarketReviewDashboardUser(false);
     const { runId, kind: rawKind } = await context.params;
@@ -17,7 +18,8 @@ export async function GET(_request: Request, context: { params: Promise<{ runId:
       filename: artifact.filename,
       contentType: marketReviewArtifactMediaType(kind, artifact.mediaType),
       sizeBytes: artifact.sizeBytes,
-      sha256: artifact.sha256
+      sha256: artifact.sha256,
+      disposition: marketReviewArtifactDisposition(request, kind)
     });
   } catch (error) {
     return marketReviewErrorResponse(error);
