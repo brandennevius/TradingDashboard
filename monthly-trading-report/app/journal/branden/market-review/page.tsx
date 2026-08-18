@@ -102,6 +102,8 @@ export default function MarketReviewPage() {
   }, [hasActiveRun]);
 
   const selectedRun = useMemo(() => runs.find((run) => run.run_id === selectedRunId) || runs[0] || null, [runs, selectedRunId]);
+  const selectedRunHasLegacyCorrections = selectedRun?.ocr?.status === "CORRECTED"
+    && selectedRun.ocr.schema_version !== "marketsurge_ocr_v2";
 
   useEffect(() => {
     const items = selectedRun?.ocr && Array.isArray(selectedRun.ocr.items) ? selectedRun.ocr.items : [];
@@ -335,9 +337,20 @@ export default function MarketReviewPage() {
               ) : null}
 
               {(selectedRun.status === "FAILED" || selectedRun.status === "NEEDS_REVIEW") && !selectedRun.source_deleted_at ? (
-                <button className="market-review-retry" type="button" disabled={actionRunId === selectedRun.run_id} onClick={() => retryRun(selectedRun)}>
-                  {actionRunId === selectedRun.run_id ? "Queueing retry…" : `Retry with frozen sources (attempt ${selectedRun.attempt + 1})`}
-                </button>
+                <>
+                  {selectedRunHasLegacyCorrections ? (
+                    <p className="market-review-retry-note">
+                      Legacy OCR corrections will be ignored. Retry will rerun the corrected OCR parser from the frozen PDF.
+                    </p>
+                  ) : null}
+                  <button className="market-review-retry" type="button" disabled={actionRunId === selectedRun.run_id} onClick={() => retryRun(selectedRun)}>
+                    {actionRunId === selectedRun.run_id
+                      ? "Queueing retry…"
+                      : selectedRunHasLegacyCorrections
+                        ? `Rerun OCR from frozen PDF (attempt ${selectedRun.attempt + 1})`
+                        : `Retry with frozen sources (attempt ${selectedRun.attempt + 1})`}
+                  </button>
+                </>
               ) : null}
             </>
           ) : <div className="market-review-empty"><h2>Select or start a review</h2><p>Every run is tied to its explicit ID, session, attempt, and source hashes.</p></div>}

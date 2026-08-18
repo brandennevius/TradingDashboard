@@ -703,6 +703,18 @@
   justify-self: start;
 }
 
+.market-review-retry-note {
+  background: rgba(171, 127, 62, 0.1);
+  border: 1px solid rgba(171, 127, 62, 0.28);
+  border-radius: 9px;
+  color: #72572f;
+  font-size: 0.82rem;
+  font-weight: 800;
+  line-height: 1.45;
+  margin: 0;
+  padding: 10px 12px;
+}
+
 .market-review-empty {
   min-height: 260px;
   place-content: center;

@@ -10,6 +10,7 @@ import {
   signMarketReviewToken,
   sourceHashForKind,
   validateMarketSurgePdf,
+  validateMarketReviewOcrCorrections,
   validateWorkerInputCorrelation,
   verifyMarketReviewToken,
   type MarketReviewCallbackPayload,
@@ -34,6 +35,7 @@ import {
   recordMarketReviewDispatch,
   cleanupMarketReviewSources
 } from "./market-review-store";
+import type { SourceRecord } from "./market-review-store";
 
 type DispatchFetch = typeof fetch;
 
@@ -263,6 +265,26 @@ export function verifyDashboardWorkerSecret(supplied: string) {
   }
 }
 
+export function dispatchableMarketReviewOcrCorrections(
+  run: MarketReviewRun,
+  source: SourceRecord | null
+): SourceRecord | null {
+  if (!source?.data || run.ocr?.status !== "CORRECTED") return null;
+  if (
+    sha256(source.data) !== source.sha256
+    || String(run.ocr.correction_sha256 || "") !== source.sha256
+  ) return null;
+  try {
+    const payload = JSON.parse(source.data.toString("utf8")) as Record<string, unknown>;
+    if (payload.schema_version !== "marketsurge_ocr_corrections_v2") return null;
+    if (Number(payload.expected_version) + 1 !== Number(run.ocr.version)) return null;
+    validateMarketReviewOcrCorrections(payload.corrections);
+    return source;
+  } catch {
+    return null;
+  }
+}
+
 export async function getMarketReviewWorkerInput(
   runId: string,
   workerSecret: string,
@@ -276,7 +298,10 @@ export async function getMarketReviewWorkerInput(
   if (run.source_deleted_at || new Date(run.source_expires_at).getTime() <= Date.now()) {
     throw new MarketReviewValidationError("SOURCE_PACKET_UNAVAILABLE", "The exact review source packet has expired or was deleted.");
   }
-  const corrections = await getMarketReviewSource(run.run_id, "ocr_corrections_json");
+  const corrections = dispatchableMarketReviewOcrCorrections(
+    run,
+    await getMarketReviewSource(run.run_id, "ocr_corrections_json")
+  );
   return {
     schema_version: "campus-fund-market-review-worker-input-v1",
     review_run_id: run.run_id,

@@ -25,7 +25,14 @@ import {
   marketReviewContentDisposition,
   marketReviewSourceMediaType
 } from "../lib/market-review-download";
-import { buildMarketReviewWorkerDispatch, getMarketReviewGithubConfig, readAndValidateMarketReviewBlob, verifyDashboardWorkerSecret } from "../lib/market-review-service";
+import {
+  buildMarketReviewWorkerDispatch,
+  dispatchableMarketReviewOcrCorrections,
+  getMarketReviewGithubConfig,
+  readAndValidateMarketReviewBlob,
+  verifyDashboardWorkerSecret
+} from "../lib/market-review-service";
+import type { SourceRecord } from "../lib/market-review-store";
 import {
   marketReviewBlobPathname,
   parseMarketReviewUploadClientPayload,
@@ -287,6 +294,63 @@ test("OCR corrections require explicit v2-reviewed pages and reject navigation t
       (error: unknown) => error instanceof MarketReviewValidationError && error.code === "OCR_CORRECTIONS_INVALID"
     );
   }
+});
+
+function correctionSource(data: Buffer): SourceRecord {
+  return {
+    kind: "ocr_corrections_json",
+    filename: "ocr-corrections.json",
+    mediaType: "application/json",
+    sha256: sha256(data),
+    sizeBytes: data.length,
+    data,
+    storageUrl: null,
+    storagePathname: null,
+    expiresAt: "2026-08-16T00:00:00.000Z"
+  };
+}
+
+test("legacy v1 OCR corrections are omitted so retry reruns OCR from the frozen PDF", () => {
+  const data = Buffer.from(JSON.stringify({
+    expected_version: 0,
+    corrections: [{ pdf_page: 1, label: "Near Pivot", tickers: ["FAVORITES"] }]
+  }));
+  const source = correctionSource(data);
+  const correctedRun = run({
+    status: "FAILED",
+    attempt: 4,
+    ocr: { status: "CORRECTED", version: 1, correction_sha256: source.sha256 }
+  });
+  assert.equal(dispatchableMarketReviewOcrCorrections(correctedRun, source), null);
+});
+
+test("reviewed v2 OCR corrections remain dispatchable with exact hash and version correlation", () => {
+  const data = Buffer.from(JSON.stringify({
+    schema_version: "marketsurge_ocr_corrections_v2",
+    expected_version: 1,
+    corrections: [
+      { pdf_page: 2, label: "Recent Breakouts", tickers: ["FET", "P"], reviewed: true }
+    ]
+  }));
+  const source = correctionSource(data);
+  const correctedRun = run({
+    status: "FAILED",
+    attempt: 4,
+    ocr: {
+      status: "CORRECTED",
+      schema_version: "marketsurge_ocr_v2",
+      version: 2,
+      correction_sha256: source.sha256
+    }
+  });
+  assert.equal(dispatchableMarketReviewOcrCorrections(correctedRun, source), source);
+  assert.equal(
+    dispatchableMarketReviewOcrCorrections(
+      { ...correctedRun, ocr: { ...correctedRun.ocr, correction_sha256: "f".repeat(64) } },
+      source
+    ),
+    null
+  );
 });
 
 test("orphan Blob cleanup keeps active references and waits 24 hours", () => {
