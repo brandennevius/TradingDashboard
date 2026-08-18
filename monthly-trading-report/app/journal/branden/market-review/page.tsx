@@ -9,6 +9,13 @@ import {
   type MarketReviewBlobReference,
   type MarketReviewUploadDescriptor
 } from "@/lib/market-review-upload-shared";
+import {
+  buildMarketReviewOcrCorrections,
+  canRetryMarketReview,
+  hasSavedV2MarketReviewCorrections,
+  normalizeMarketReviewTicker,
+  parseMarketReviewOcrReview
+} from "@/lib/market-review-ocr-ui";
 
 type ReviewStatus = "QUEUED" | "RUNNING" | "NEEDS_REVIEW" | "FAILED" | "COMPLETED";
 type ReviewRun = {
@@ -69,8 +76,9 @@ export default function MarketReviewPage() {
   const [submitting, setSubmitting] = useState(false);
   const [actionRunId, setActionRunId] = useState("");
   const [error, setError] = useState("");
-  const [correctionsText, setCorrectionsText] = useState("[]");
-  const [correctionsReviewed, setCorrectionsReviewed] = useState(false);
+  const [ocrResolutions, setOcrResolutions] = useState<Record<string, string>>({});
+  const [reviewedOcrPages, setReviewedOcrPages] = useState<Record<number, boolean>>({});
+  const [previewPage, setPreviewPage] = useState<number | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
 
   async function loadRuns(silent = false) {
@@ -104,19 +112,18 @@ export default function MarketReviewPage() {
   const selectedRun = useMemo(() => runs.find((run) => run.run_id === selectedRunId) || runs[0] || null, [runs, selectedRunId]);
   const selectedRunHasLegacyCorrections = selectedRun?.ocr?.status === "CORRECTED"
     && selectedRun.ocr.schema_version !== "marketsurge_ocr_v2";
+  const ocrReviewPages = useMemo(() => parseMarketReviewOcrReview(selectedRun?.ocr), [selectedRun?.ocr]);
+  const ocrReviewResult = useMemo(
+    () => buildMarketReviewOcrCorrections(ocrReviewPages, ocrResolutions, reviewedOcrPages),
+    [ocrReviewPages, ocrResolutions, reviewedOcrPages]
+  );
+  const hasSavedV2Corrections = hasSavedV2MarketReviewCorrections(selectedRun?.ocr);
+  const retryAllowed = selectedRun ? canRetryMarketReview(selectedRun.status, selectedRun.ocr) : false;
 
   useEffect(() => {
-    const items = selectedRun?.ocr && Array.isArray(selectedRun.ocr.items) ? selectedRun.ocr.items : [];
-    setCorrectionsText(JSON.stringify(items.map((item) => {
-      const page = item as Record<string, unknown>;
-      return {
-        pdf_page: page.pdf_page,
-        label: page.label,
-        tickers: page.tickers,
-        reviewed: false
-      };
-    }), null, 2));
-    setCorrectionsReviewed(false);
+    setOcrResolutions({});
+    setReviewedOcrPages({});
+    setPreviewPage(null);
   }, [selectedRun?.run_id, selectedRun?.ocr]);
 
   async function startReview(event: FormEvent) {
@@ -202,14 +209,11 @@ export default function MarketReviewPage() {
     setActionRunId(run.run_id);
     setError("");
     try {
-      const corrections = JSON.parse(correctionsText);
-      if (!Array.isArray(corrections)) throw new Error("OCR corrections must be a JSON array.");
-      if (!correctionsReviewed) throw new Error("Confirm that you reviewed every page before saving corrections.");
-      const reviewedCorrections = corrections.map((item) => ({ ...item, reviewed: true }));
+      if (!ocrReviewResult.ready) throw new Error(ocrReviewResult.errors[0] || "Complete every OCR review item before saving.");
       const response = await fetch(`/api/journal/branden/market-review/runs/${run.run_id}/ocr-corrections`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expected_version: Number(run.ocr?.version || 0), corrections: reviewedCorrections })
+        body: JSON.stringify({ expected_version: Number(run.ocr?.version || 0), corrections: ocrReviewResult.corrections })
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(errorMessage(data));
@@ -313,17 +317,90 @@ export default function MarketReviewPage() {
               {selectedRun.ocr ? (
                 <section className="market-review-ocr">
                   <div><p className="eyebrow">OCR review</p><h3>{String(selectedRun.ocr.status || "RETURNED")}</h3></div>
-                  <pre>{JSON.stringify(selectedRun.ocr, null, 2)}</pre>
-                  {selectedRun.status === "NEEDS_REVIEW" ? (
-                    <>
-                      <label>Corrections JSON<textarea rows={8} value={correctionsText} onChange={(event) => setCorrectionsText(event.target.value)} /></label>
-                      <label className="market-review-ocr-confirm">
-                        <input type="checkbox" checked={correctionsReviewed} onChange={(event) => setCorrectionsReviewed(event.target.checked)} />
-                        I reviewed every PDF page, its section label, and every corrected ticker.
-                      </label>
-                      <button type="button" disabled={actionRunId === selectedRun.run_id} onClick={() => saveCorrections(selectedRun)}>Save OCR Corrections</button>
-                    </>
+                  {selectedRun.status === "NEEDS_REVIEW" && !hasSavedV2Corrections ? (
+                    <div className="market-review-ocr-workflow">
+                      <p className="market-review-ocr-instructions">
+                        Resolve every ambiguous symbol against the frozen PDF, then explicitly review each page. The dashboard builds the v2 correction packet; raw JSON editing is not required.
+                      </p>
+                      <div className="market-review-ocr-progress">
+                        <strong>{ocrReviewPages.reduce((total, page) => total + page.reviewRows.length, 0)} ambiguous rows</strong>
+                        <span>{Object.values(reviewedOcrPages).filter(Boolean).length} of {ocrReviewPages.length} pages reviewed</span>
+                      </div>
+                      {ocrReviewPages.map((page) => (
+                        <section className="market-review-ocr-page" key={page.pdfPage}>
+                          <header>
+                            <div>
+                              <p>Page {page.pdfPage}</p>
+                              <h4>{page.label}</h4>
+                              <small>{page.acceptedTickers.length} symbols accepted automatically · {page.reviewRows.length} need review</small>
+                            </div>
+                            <button type="button" className="market-review-evidence-toggle" onClick={() => setPreviewPage((current) => current === page.pdfPage ? null : page.pdfPage)}>
+                              {previewPage === page.pdfPage ? "Hide evidence" : "View evidence"}
+                            </button>
+                          </header>
+                          {previewPage === page.pdfPage ? (
+                            <div className="market-review-evidence-preview">
+                              <object
+                                aria-label={`Frozen MarketSurge PDF page ${page.pdfPage}`}
+                                data={`/api/journal/branden/market-review/runs/${selectedRun.run_id}/evidence#page=${page.pdfPage}&view=FitH`}
+                                type="application/pdf"
+                              >
+                                <a href={`/api/journal/branden/market-review/runs/${selectedRun.run_id}/evidence#page=${page.pdfPage}`} target="_blank" rel="noreferrer">Open frozen PDF at page {page.pdfPage}</a>
+                              </object>
+                            </div>
+                          ) : null}
+                          {page.reviewRows.length ? (
+                            <div className="market-review-ocr-rows">
+                              {page.reviewRows.map((row) => {
+                                const normalized = normalizeMarketReviewTicker(ocrResolutions[row.key]);
+                                return (
+                                  <div className={`market-review-ocr-row ${normalized ? "resolved" : ""}`} key={row.key}>
+                                    <dl>
+                                      <div><dt>Rank</dt><dd>{row.rank ?? "Not detected"}</dd></div>
+                                      <div><dt>Raw OCR</dt><dd>{row.rawText || "Nothing detected"}</dd></div>
+                                      <div><dt>Candidate</dt><dd>{row.candidateTicker || "None"}</dd></div>
+                                      <div><dt>Confidence</dt><dd>{row.confidence === null ? "Unavailable" : `${row.confidence.toFixed(2)}%`}</dd></div>
+                                      <div><dt>Reason</dt><dd>{row.reason.replaceAll("_", " ")}</dd></div>
+                                    </dl>
+                                    <label>
+                                      Verified ticker
+                                      <input
+                                        aria-label={`Verified ticker for page ${page.pdfPage} rank ${row.rank ?? "unknown"}`}
+                                        autoCapitalize="characters"
+                                        maxLength={10}
+                                        pattern="[A-Za-z][A-Za-z0-9.-]{0,9}"
+                                        placeholder={row.candidateTicker ? `Check ${row.candidateTicker} against the PDF` : "Enter the ticker shown in the PDF"}
+                                        value={ocrResolutions[row.key] || ""}
+                                        onChange={(event) => setOcrResolutions((current) => ({ ...current, [row.key]: event.target.value.toUpperCase() }))}
+                                      />
+                                      <small>{normalized ? `Validated as ${normalized}` : "Required · ticker format only"}</small>
+                                    </label>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : <p className="market-review-ocr-clear">No ambiguous rows were returned for this page.</p>}
+                          <label className="market-review-ocr-confirm">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(reviewedOcrPages[page.pdfPage])}
+                              disabled={page.reviewRows.some((row) => !normalizeMarketReviewTicker(ocrResolutions[row.key]))}
+                              onChange={(event) => setReviewedOcrPages((current) => ({ ...current, [page.pdfPage]: event.target.checked }))}
+                            />
+                            I checked page {page.pdfPage}, its section, and every ambiguous ticker against the frozen evidence.
+                          </label>
+                        </section>
+                      ))}
+                      {!ocrReviewResult.ready ? <p className="market-review-ocr-blocker">Save remains disabled until all ambiguous rows are valid and all {ocrReviewPages.length} pages are reviewed.</p> : null}
+                      <button type="button" disabled={!ocrReviewResult.ready || actionRunId === selectedRun.run_id} onClick={() => saveCorrections(selectedRun)}>Save reviewed OCR corrections</button>
+                    </div>
+                  ) : hasSavedV2Corrections ? (
+                    <p className="market-review-ocr-saved">Valid v2 corrections are saved. Retry is now available and will use the frozen PDF and reviewed correction packet.</p>
                   ) : null}
+                  <details className="market-review-ocr-diagnostics">
+                    <summary>Raw OCR diagnostics</summary>
+                    <pre>{JSON.stringify(selectedRun.ocr, null, 2)}</pre>
+                  </details>
                 </section>
               ) : null}
 
@@ -343,7 +420,10 @@ export default function MarketReviewPage() {
                       Legacy OCR corrections will be ignored. Retry will rerun the corrected OCR parser from the frozen PDF.
                     </p>
                   ) : null}
-                  <button className="market-review-retry" type="button" disabled={actionRunId === selectedRun.run_id} onClick={() => retryRun(selectedRun)}>
+                  {selectedRun.status === "NEEDS_REVIEW" && !retryAllowed ? (
+                    <p className="market-review-retry-note">Retry is locked until every OCR page is reviewed and a valid v2 correction packet is saved.</p>
+                  ) : null}
+                  <button className="market-review-retry" type="button" disabled={!retryAllowed || actionRunId === selectedRun.run_id} onClick={() => retryRun(selectedRun)}>
                     {actionRunId === selectedRun.run_id
                       ? "Queueing retry…"
                       : selectedRunHasLegacyCorrections

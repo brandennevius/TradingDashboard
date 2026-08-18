@@ -42,6 +42,13 @@ import {
 } from "../lib/market-review-upload";
 import { buildMarketReviewCreatePayload, type MarketReviewBlobReference } from "../lib/market-review-upload-shared";
 import { serializeMarketReviewSessionDate } from "../lib/market-review-store";
+import {
+  buildMarketReviewOcrCorrections,
+  canRetryMarketReview,
+  hasSavedV2MarketReviewCorrections,
+  marketReviewOcrRowKey,
+  parseMarketReviewOcrReview
+} from "../lib/market-review-ocr-ui";
 
 const hashes = {
   marketsurge_pdf_sha256: "a".repeat(64),
@@ -117,6 +124,108 @@ test("MarketSurge PDF validation checks MIME, magic, page count, and size", asyn
     validateMarketSurgePdf({ mimeType: "application/pdf", filename: "scan.pdf", data: Buffer.alloc(MARKET_REVIEW_MAX_SOURCE_PDF_BYTES + 1), countPages: async () => 1 }),
     (error: unknown) => error instanceof MarketReviewValidationError && error.code === "MARKETSURGE_PDF_SIZE_INVALID"
   );
+});
+
+const attemptFourOcrFixture = {
+  schema_version: "marketsurge_ocr_v2",
+  status: "NEEDS_REVIEW",
+  version: 4,
+  items: [
+    { pdf_page: 1, label: "Breaking Out Today", tickers: ["CVE"], review_rows: [] },
+    {
+      pdf_page: 2,
+      label: "Recent Breakouts",
+      tickers: ["LNVGY", "NESR"],
+      review_rows: [
+        { rank: 1, raw_text: "FEL", candidate_ticker: "FEL", confidence: 67.56, reason: "LOW_CONFIDENCE_SYMBOL" },
+        { rank: 2, raw_text: ">)", candidate_ticker: ">)", confidence: 50.34, reason: "SYMBOL_TOKEN_INVALID" },
+        { rank: 9, raw_text: "ATl", candidate_ticker: "ATL", confidence: 73.67, reason: "SYMBOL_CASE_AMBIGUOUS" }
+      ]
+    },
+    { pdf_page: 3, label: "Tight Areas", tickers: ["PCAR"], review_rows: [] },
+    { pdf_page: 4, label: "Near Pivot", tickers: ["NVDA"], review_rows: [] },
+    { pdf_page: 5, label: "Power from Pivot", tickers: ["QNST"], review_rows: [{ rank: 40, raw_text: "S)", candidate_ticker: "S)", confidence: 41.67, reason: "SYMBOL_TOKEN_INVALID" }] },
+    {
+      pdf_page: 6,
+      label: "Power from Pivot",
+      tickers: ["CDNA"],
+      review_rows: [
+        { rank: 23, raw_text: "FET,", candidate_ticker: "FET", confidence: 62.23, reason: "LOW_CONFIDENCE_SYMBOL" },
+        { rank: 26, raw_text: "Oll", candidate_ticker: "OLL", confidence: 91.81, reason: "SYMBOL_CASE_AMBIGUOUS" }
+      ]
+    },
+    {
+      pdf_page: 7,
+      label: "Top Rated Stocks",
+      tickers: ["ATEYY"],
+      review_rows: [
+        { rank: 11, raw_text: null, candidate_ticker: null, confidence: null, reason: "SYMBOL_CELL_NOT_DETECTED" },
+        { rank: 16, raw_text: "DGIl", candidate_ticker: "DGIL", confidence: 68.15, reason: "SYMBOL_CASE_AMBIGUOUS" }
+      ]
+    },
+    { pdf_page: 8, label: "BRANDENS WATCHLIST", tickers: ["CPRT"], review_rows: [] },
+    { pdf_page: 9, label: "Top Rated Stocks", tickers: ["ATI"], review_rows: [] }
+  ]
+};
+
+test("structured OCR review parses all attempt-four pages and ambiguous rows", () => {
+  const pages = parseMarketReviewOcrReview(attemptFourOcrFixture);
+  assert.equal(pages.length, 9);
+  assert.equal(pages.reduce((total, page) => total + page.reviewRows.length, 0), 8);
+  assert.deepEqual(pages.filter((page) => page.reviewRows.length).map((page) => [page.pdfPage, page.reviewRows.map((row) => row.rank)]), [
+    [2, [1, 2, 9]],
+    [5, [40]],
+    [6, [23, 26]],
+    [7, [11, 16]]
+  ]);
+  assert.deepEqual(pages[1].reviewRows[0], {
+    key: "2:1:0",
+    pdfPage: 2,
+    label: "Recent Breakouts",
+    rank: 1,
+    rawText: "FEL",
+    candidateTicker: "FEL",
+    confidence: 67.56,
+    reason: "LOW_CONFIDENCE_SYMBOL"
+  });
+});
+
+test("structured OCR review remains fail-closed until every row and page is reviewed", () => {
+  const pages = parseMarketReviewOcrReview(attemptFourOcrFixture);
+  const incomplete = buildMarketReviewOcrCorrections(pages, { [marketReviewOcrRowKey(2, 1, 0)]: "FET" }, { 1: true });
+  assert.equal(incomplete.ready, false);
+  assert.ok(incomplete.errors.some((error) => error.includes("Page 2 rank 2")));
+  assert.ok(incomplete.errors.some((error) => error.includes("Page 9 has not been marked reviewed")));
+
+  const resolutions = {
+    [marketReviewOcrRowKey(2, 1, 0)]: "FET",
+    [marketReviewOcrRowKey(2, 2, 1)]: "P",
+    [marketReviewOcrRowKey(2, 9, 2)]: "ATI",
+    [marketReviewOcrRowKey(5, 40, 0)]: "S",
+    [marketReviewOcrRowKey(6, 23, 0)]: "FET",
+    [marketReviewOcrRowKey(6, 26, 1)]: "OII",
+    [marketReviewOcrRowKey(7, 11, 0)]: "P",
+    [marketReviewOcrRowKey(7, 16, 1)]: "DGII"
+  };
+  const reviewedPages = Object.fromEntries(pages.map((page) => [page.pdfPage, true]));
+  const complete = buildMarketReviewOcrCorrections(pages, resolutions, reviewedPages);
+  assert.equal(complete.ready, true);
+  assert.deepEqual(complete.errors, []);
+  assert.deepEqual(complete.corrections.find((item) => item.pdf_page === 2), {
+    pdf_page: 2,
+    label: "Recent Breakouts",
+    tickers: ["LNVGY", "NESR", "FET", "P", "ATI"],
+    reviewed: true
+  });
+  assert.deepEqual(complete.corrections.find((item) => item.pdf_page === 7)?.tickers, ["ATEYY", "P", "DGII"]);
+});
+
+test("NEEDS_REVIEW retry stays locked until valid v2 corrections are saved", () => {
+  assert.equal(canRetryMarketReview("NEEDS_REVIEW", attemptFourOcrFixture), false);
+  assert.equal(canRetryMarketReview("NEEDS_REVIEW", { ...attemptFourOcrFixture, status: "CORRECTED", corrections: [{ reviewed: true }] }), true);
+  assert.equal(canRetryMarketReview("NEEDS_REVIEW", { status: "CORRECTED", schema_version: "marketsurge_ocr_v1", corrections: [{ reviewed: true }] }), false);
+  assert.equal(canRetryMarketReview("FAILED", null), true);
+  assert.equal(hasSavedV2MarketReviewCorrections({ ...attemptFourOcrFixture, status: "CORRECTED", corrections: [{ reviewed: false }] }), false);
 });
 
 function uploadReference(overrides: Partial<MarketReviewBlobReference> = {}): MarketReviewBlobReference {
@@ -218,8 +327,10 @@ test("market-review downloads encode Unicode filenames without invalid response-
     filename,
     contentType: marketReviewSourceMediaType("marketsurge_pdf", "application/pdf"),
     sizeBytes: data.length,
-    sha256: digest
+    sha256: digest,
+    disposition: "inline"
   });
+  assert.match(response.headers.get("content-disposition") || "", /^inline; filename="MarketSurge_Fri_Aug_14_2026\.pdf";/);
   assert.equal(response.headers.get("x-content-sha256"), digest);
   assert.equal(sha256(Buffer.from(await response.arrayBuffer())), digest);
 });

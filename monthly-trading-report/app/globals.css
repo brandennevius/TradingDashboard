@@ -667,9 +667,182 @@
   white-space: pre-wrap;
 }
 
-.market-review-ocr textarea {
-  min-height: 160px;
-  resize: vertical;
+.market-review-ocr-workflow {
+  display: grid;
+  gap: 14px;
+}
+
+.market-review-ocr-instructions,
+.market-review-ocr-saved,
+.market-review-ocr-blocker,
+.market-review-ocr-clear {
+  line-height: 1.5;
+  margin: 0;
+}
+
+.market-review-ocr-instructions,
+.market-review-ocr-saved {
+  color: #566151;
+}
+
+.market-review-ocr-saved {
+  background: rgba(215, 240, 208, 0.55);
+  border: 1px solid rgba(111, 143, 95, 0.28);
+  border-radius: 9px;
+  font-weight: 800;
+  padding: 11px 12px;
+}
+
+.market-review-ocr-progress {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.52);
+  border-radius: 9px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
+}
+
+.market-review-ocr-progress span {
+  color: #6f7469;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.market-review-ocr-page {
+  background: rgba(255, 253, 247, 0.72);
+  border: 1px solid rgba(185, 214, 168, 0.75);
+  border-radius: 10px;
+  display: grid;
+  gap: 12px;
+  padding: 13px;
+}
+
+.market-review-ocr-page > header {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.market-review-ocr-page header p,
+.market-review-ocr-page h4 {
+  margin: 0;
+}
+
+.market-review-ocr-page header p {
+  color: #6f8f5f;
+  font-size: 0.72rem;
+  font-weight: 950;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.market-review-ocr-page h4 {
+  font-size: 1rem;
+}
+
+.market-review-ocr-page header small,
+.market-review-ocr-row label small {
+  color: #7b8075;
+  display: block;
+  font-weight: 750;
+  margin-top: 3px;
+}
+
+.market-review-ocr button.market-review-evidence-toggle {
+  background: rgba(111, 143, 95, 0.13);
+  color: #4f7045;
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 7px 10px;
+}
+
+.market-review-evidence-preview {
+  background: #fff;
+  border: 1px solid rgba(111, 143, 95, 0.25);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.market-review-evidence-preview object {
+  display: block;
+  height: min(62vh, 640px);
+  width: 100%;
+}
+
+.market-review-ocr-rows {
+  display: grid;
+  gap: 10px;
+}
+
+.market-review-ocr-row {
+  align-items: end;
+  background: rgba(246, 230, 200, 0.26);
+  border: 1px solid rgba(171, 127, 62, 0.24);
+  border-radius: 9px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) minmax(190px, 0.32fr);
+  padding: 11px;
+}
+
+.market-review-ocr-row.resolved {
+  background: rgba(215, 240, 208, 0.34);
+  border-color: rgba(111, 143, 95, 0.36);
+}
+
+.market-review-ocr-row dl {
+  display: grid;
+  gap: 7px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  margin: 0;
+}
+
+.market-review-ocr-row dt {
+  color: #7b8075;
+  font-size: 0.65rem;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.market-review-ocr-row dd {
+  font-size: 0.78rem;
+  font-weight: 850;
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.market-review-ocr-row input {
+  background: #fffdf7;
+  border: 1px solid rgba(111, 143, 95, 0.44);
+  border-radius: 8px;
+  color: #2f352d;
+  font: inherit;
+  font-weight: 900;
+  min-height: 42px;
+  padding: 9px 10px;
+  text-transform: uppercase;
+}
+
+.market-review-ocr-blocker {
+  color: #8a642c;
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.market-review-ocr-diagnostics {
+  border-top: 1px solid rgba(111, 143, 95, 0.18);
+  margin-top: 3px;
+  padding-top: 10px;
+}
+
+.market-review-ocr-diagnostics summary {
+  color: #687064;
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 850;
 }
 
 .market-review-ocr .market-review-ocr-confirm {
@@ -682,6 +855,11 @@
   accent-color: #6f8f5f;
   height: 18px;
   width: 18px;
+}
+
+.market-review-ocr-confirm input:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .market-review-results > div {
@@ -758,6 +936,24 @@
 
   .market-review-run-list {
     position: static;
+  }
+
+  .market-review-ocr-page > header,
+  .market-review-ocr-progress {
+    align-items: flex-start;
+    display: grid;
+  }
+
+  .market-review-ocr-row {
+    grid-template-columns: 1fr;
+  }
+
+  .market-review-ocr-row dl {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .market-review-evidence-preview object {
+    height: 440px;
   }
 }
 

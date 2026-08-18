@@ -78,15 +78,15 @@ function encodeRfc5987(value: string) {
   return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
-export function marketReviewContentDisposition(filename: string) {
+export function marketReviewContentDisposition(filename: string, disposition: "attachment" | "inline" = "attachment") {
   const extended = safeExtendedFilename(filename);
   const fallback = asciiDownloadFilename(extended);
-  return `attachment; filename="${fallback}"; filename*=UTF-8''${encodeRfc5987(extended)}`;
+  return `${disposition}; filename="${fallback}"; filename*=UTF-8''${encodeRfc5987(extended)}`;
 }
 
 export function buildMarketReviewDownloadResponse(
   body: BodyInit,
-  input: { filename: string; contentType: string; sizeBytes: number; sha256: string }
+  input: { filename: string; contentType: string; sizeBytes: number; sha256: string; disposition?: "attachment" | "inline" }
 ) {
   if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes < 0 || !isSha256(input.sha256)) {
     throw new MarketReviewValidationError("DOWNLOAD_METADATA_INVALID", "Stored market-review download size or SHA-256 is invalid.");
@@ -98,7 +98,7 @@ export function buildMarketReviewDownloadResponse(
     headers: {
       "Content-Type": input.contentType,
       "Content-Length": String(input.sizeBytes),
-      "Content-Disposition": marketReviewContentDisposition(input.filename),
+      "Content-Disposition": marketReviewContentDisposition(input.filename, input.disposition),
       "Cache-Control": "private, no-store",
       "X-Content-SHA256": input.sha256,
       "X-Content-Type-Options": "nosniff"
