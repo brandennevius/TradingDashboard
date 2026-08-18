@@ -9,6 +9,7 @@ const SOURCE_MEDIA_TYPES: Record<MarketReviewSourceKind, readonly string[]> = {
   marketsurge_pdf: ["application/pdf"],
   snapshot_json: ["application/json"],
   snapshot_markdown: ["text/markdown", "text/markdown; charset=utf-8"],
+  market_gauge_json: ["application/json"],
   ocr_corrections_json: ["application/json"]
 };
 

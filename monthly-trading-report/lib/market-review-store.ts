@@ -86,6 +86,7 @@ export function ensureMarketReviewSchema() {
           marketsurge_pdf_sha256 text not null,
           snapshot_json_sha256 text not null,
           snapshot_markdown_sha256 text not null,
+          market_gauge_json_sha256 text,
           marketsurge_pdf_filename text not null,
           marketsurge_pdf_size_bytes integer not null,
           marketsurge_pdf_page_count integer not null,
@@ -108,6 +109,7 @@ export function ensureMarketReviewSchema() {
           check (delivery_status in ('NOT_REQUESTED','PENDING','SENDING','SENT','FAILED'))
         )
       `);
+      await db.query("alter table market_review_runs add column if not exists market_gauge_json_sha256 text");
       await db.query(`
         create table if not exists market_review_sources (
           run_id uuid not null references market_review_runs(run_id) on delete cascade,
@@ -199,7 +201,8 @@ function rowToRun(row: RunRow, artifacts: MarketReviewRun["artifacts"] = []): Ma
     source_hashes: {
       marketsurge_pdf_sha256: String(row.marketsurge_pdf_sha256),
       snapshot_json_sha256: String(row.snapshot_json_sha256),
-      snapshot_markdown_sha256: String(row.snapshot_markdown_sha256)
+      snapshot_markdown_sha256: String(row.snapshot_markdown_sha256),
+      market_gauge_json_sha256: row.market_gauge_json_sha256 ? String(row.market_gauge_json_sha256) : ""
     },
     marketsurge_pdf_filename: String(row.marketsurge_pdf_filename),
     marketsurge_pdf_size_bytes: Number(row.marketsurge_pdf_size_bytes),
@@ -285,10 +288,10 @@ export async function createMarketReviewRun(input: CreateRunInput) {
     await client.query(
       `insert into market_review_runs (
         run_id, schema_version, session_date, status, attempt,
-        marketsurge_pdf_sha256, snapshot_json_sha256, snapshot_markdown_sha256,
+        marketsurge_pdf_sha256, snapshot_json_sha256, snapshot_markdown_sha256, market_gauge_json_sha256,
         marketsurge_pdf_filename, marketsurge_pdf_size_bytes, marketsurge_pdf_page_count,
         source_expires_at, github_repository, github_workflow, github_ref
-      ) values ($1,$2,$3,'QUEUED',1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+      ) values ($1,$2,$3,'QUEUED',1,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [
         input.runId,
         MARKET_REVIEW_SCHEMA_VERSION,
@@ -296,6 +299,7 @@ export async function createMarketReviewRun(input: CreateRunInput) {
         input.sourceHashes.marketsurge_pdf_sha256,
         input.sourceHashes.snapshot_json_sha256,
         input.sourceHashes.snapshot_markdown_sha256,
+        input.sourceHashes.market_gauge_json_sha256,
         input.pdfFilename,
         input.pdfSizeBytes,
         input.pdfPageCount,

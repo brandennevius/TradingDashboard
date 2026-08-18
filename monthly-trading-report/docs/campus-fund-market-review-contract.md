@@ -78,12 +78,13 @@ Only these non-secret `workflow_dispatch.inputs` are sent:
   "marketsurge_pdf_sha256": "64 lowercase hex",
   "snapshot_json_sha256": "64 lowercase hex",
   "snapshot_markdown_sha256": "64 lowercase hex",
+  "market_gauge_json_sha256": "64 lowercase hex",
   "worker_input_url": "https://dashboard.example/api/journal/branden/market-review/runs/{run_id}/worker-input",
   "worker_callback_url": "https://dashboard.example/api/journal/branden/market-review/runs/{run_id}/worker-callback"
 }
 ```
 
-There is no token input. `snapshot_markdown_sha256` is the third frozen source hash; it is not a chart-manifest hash. A future approved/chart manifest must be a separately named optional source with its own hash and must be explicitly bound to `marketsurge_pdf_sha256`.
+There is no token input. The fourth hash binds the exact-session Dashboard Market Gauge JSON. None of these values is a credential, and no generic newest artifact is selected.
 
 ## Worker input
 
@@ -99,6 +100,7 @@ The worker must also repeat the non-secret dispatch correlation values as header
 - `X-MarketSurge-PDF-SHA256: {marketsurge_pdf_sha256}`
 - `X-Snapshot-JSON-SHA256: {snapshot_json_sha256}`
 - `X-Snapshot-Markdown-SHA256: {snapshot_markdown_sha256}`
+- `X-Market-Gauge-JSON-SHA256: {market_gauge_json_sha256}`
 
 The dashboard rejects the request if the attempt is no longer current or any hash differs. This prevents a delayed job from an earlier attempt from obtaining the current attempt's tokens.
 
@@ -113,7 +115,8 @@ Response:
   "source_hashes": {
     "marketsurge_pdf_sha256": "...",
     "snapshot_json_sha256": "...",
-    "snapshot_markdown_sha256": "..."
+    "snapshot_markdown_sha256": "...",
+    "market_gauge_json_sha256": "..."
   },
   "portfolio_snapshot": {
     "download_url": "absolute signed URL",
@@ -127,6 +130,10 @@ Response:
     "page_count": 12,
     "filename": "MarketSurge.pdf"
   },
+  "market_gauge": {
+    "download_url": "absolute signed URL",
+    "sha256": "..."
+  },
   "ocr_corrections": null,
   "callback": {
     "url": "absolute callback URL",
@@ -136,7 +143,7 @@ Response:
 }
 ```
 
-On a correction retry, `ocr_corrections` contains `download_url`, `sha256`, and `version`. All download URLs are short-lived, exact-kind URLs signed over run ID, session, attempt, all three source hashes, source kind, and the downloaded byte hash. The worker must independently hash every downloaded body and reject any mismatch.
+On a correction retry, `ocr_corrections` contains `download_url`, `sha256`, and `version`. All download URLs are short-lived, exact-kind URLs signed over run ID, session, attempt, all four source hashes, source kind, and the downloaded byte hash. The worker must independently hash every downloaded body and reject any mismatch.
 
 ## Callback authentication and common envelope
 
@@ -146,7 +153,7 @@ Header:
 
 `Authorization: Bearer {callback.token from worker input}`
 
-The token is short-lived and signed over run ID, session, attempt, and all three source hashes. The callback body repeats those values. Any mismatch is rejected.
+The token is short-lived and signed over run ID, session, attempt, and all four source hashes. The callback body repeats those values. Any mismatch is rejected.
 
 Common metadata:
 
@@ -161,7 +168,8 @@ Common metadata:
   "source_hashes": {
     "marketsurge_pdf_sha256": "...",
     "snapshot_json_sha256": "...",
-    "snapshot_markdown_sha256": "..."
+    "snapshot_markdown_sha256": "...",
+    "market_gauge_json_sha256": "..."
   },
   "github": {
     "repository": "brandennevius/DailyMarketChartPipeline",

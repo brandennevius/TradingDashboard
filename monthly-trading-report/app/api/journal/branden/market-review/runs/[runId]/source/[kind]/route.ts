@@ -6,7 +6,7 @@ import { authorizeMarketReviewSource } from "@/lib/market-review-service";
 
 export const runtime = "nodejs";
 
-const sourceKinds = new Set<MarketReviewSourceKind>(["marketsurge_pdf", "snapshot_json", "snapshot_markdown", "ocr_corrections_json"]);
+const sourceKinds = new Set<MarketReviewSourceKind>(["marketsurge_pdf", "snapshot_json", "snapshot_markdown", "market_gauge_json", "ocr_corrections_json"]);
 
 export async function GET(request: Request, context: { params: Promise<{ runId: string; kind: string }> }) {
   try {

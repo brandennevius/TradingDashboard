@@ -125,6 +125,7 @@ export function buildMarketReviewWorkerDispatch(run: MarketReviewRun, baseUrl: s
     marketsurge_pdf_sha256: run.source_hashes.marketsurge_pdf_sha256,
     snapshot_json_sha256: run.source_hashes.snapshot_json_sha256,
     snapshot_markdown_sha256: run.source_hashes.snapshot_markdown_sha256,
+    market_gauge_json_sha256: run.source_hashes.market_gauge_json_sha256,
     worker_input_url: `${baseUrl}/api/journal/branden/market-review/runs/${run.run_id}/worker-input`,
     worker_callback_url: `${baseUrl}/api/journal/branden/market-review/runs/${run.run_id}/worker-callback`
   };
@@ -153,6 +154,26 @@ export async function dispatchMarketReviewRun(run: MarketReviewRun, baseUrl: str
   await recordMarketReviewDispatch(run.run_id, run.attempt);
 }
 
+export async function fetchExactSessionMarketGauge(
+  baseUrl: string,
+  session: string,
+  fetchImpl: DispatchFetch = fetch
+) {
+  const response = await fetchImpl(`${baseUrl}/api/market-gauge?session_date=${encodeURIComponent(session)}`, {
+    cache: "no-store",
+    headers: { Accept: "application/json" }
+  });
+  const payload = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (!response.ok || payload?.schema_version !== "dashboard_market_gauge_v1" || payload.session_date !== session) {
+    throw new MarketReviewValidationError(
+      "MARKET_GAUGE_SOURCE_INVALID",
+      "The exact-session Dashboard Market Gauge could not be frozen for this review.",
+      { status: response.status, code: payload?.code || null }
+    );
+  }
+  return Buffer.from(`${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
 export async function createAndDispatchMarketReview(input: {
   session: string;
   pdfBlob: MarketReviewBlobReference;
@@ -162,6 +183,7 @@ export async function createAndDispatchMarketReview(input: {
   dispatch?: typeof dispatchMarketReviewRun;
   getBlob?: typeof get;
   deleteBlob?: typeof del;
+  fetchMarketGauge?: typeof fetchExactSessionMarketGauge;
 }) {
   const session = requireSessionDate(input.session);
   const now = input.now || new Date();
@@ -179,10 +201,12 @@ export async function createAndDispatchMarketReview(input: {
     }
     const snapshotJson = Buffer.from(`${JSON.stringify(snapshotResult.snapshot, null, 2)}\n`, "utf8");
     const snapshotMarkdown = Buffer.from(snapshotResult.markdown, "utf8");
+    const marketGaugeJson = await (input.fetchMarketGauge || fetchExactSessionMarketGauge)(input.baseUrl, session);
     const sourceHashes = {
       marketsurge_pdf_sha256: pdf.sha256,
       snapshot_json_sha256: sha256(snapshotJson),
-      snapshot_markdown_sha256: sha256(snapshotMarkdown)
+      snapshot_markdown_sha256: sha256(snapshotMarkdown),
+      market_gauge_json_sha256: sha256(marketGaugeJson)
     };
     const config = getMarketReviewGithubConfig();
     const runId = crypto.randomUUID();
@@ -208,7 +232,8 @@ export async function createAndDispatchMarketReview(input: {
           sizeBytes: pdf.sizeBytes
         },
         { kind: "snapshot_json", filename: `daily-portfolio-snapshot-${session}.json`, mediaType: "application/json", sha256: sourceHashes.snapshot_json_sha256, data: snapshotJson },
-        { kind: "snapshot_markdown", filename: `daily-portfolio-snapshot-${session}.md`, mediaType: "text/markdown; charset=utf-8", sha256: sourceHashes.snapshot_markdown_sha256, data: snapshotMarkdown }
+        { kind: "snapshot_markdown", filename: `daily-portfolio-snapshot-${session}.md`, mediaType: "text/markdown; charset=utf-8", sha256: sourceHashes.snapshot_markdown_sha256, data: snapshotMarkdown },
+        { kind: "market_gauge_json", filename: `market-gauge-${session}.json`, mediaType: "application/json", sha256: sourceHashes.market_gauge_json_sha256, data: marketGaugeJson }
       ]
     });
     runCreated = true;
@@ -319,6 +344,10 @@ export async function getMarketReviewWorkerInput(
       sha256: run.source_hashes.marketsurge_pdf_sha256,
       page_count: run.marketsurge_pdf_page_count,
       filename: run.marketsurge_pdf_filename
+    },
+    market_gauge: {
+      download_url: sourceUrl(baseUrl, run, "market_gauge_json", run.source_hashes.market_gauge_json_sha256),
+      sha256: run.source_hashes.market_gauge_json_sha256
     },
     ocr_corrections: corrections
       ? {

@@ -16,7 +16,8 @@ export async function GET(request: Request, context: { params: Promise<{ runId: 
       source_hashes: {
         marketsurge_pdf_sha256: request.headers.get("x-marketsurge-pdf-sha256") || "",
         snapshot_json_sha256: request.headers.get("x-snapshot-json-sha256") || "",
-        snapshot_markdown_sha256: request.headers.get("x-snapshot-markdown-sha256") || ""
+        snapshot_markdown_sha256: request.headers.get("x-snapshot-markdown-sha256") || "",
+        market_gauge_json_sha256: request.headers.get("x-market-gauge-json-sha256") || ""
       }
     });
     return NextResponse.json(input, { headers: { "Cache-Control": "private, no-store" } });

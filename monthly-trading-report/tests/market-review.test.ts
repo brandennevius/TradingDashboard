@@ -28,6 +28,7 @@ import {
 import {
   buildMarketReviewWorkerDispatch,
   dispatchableMarketReviewOcrCorrections,
+  fetchExactSessionMarketGauge,
   getMarketReviewGithubConfig,
   readAndValidateMarketReviewBlob,
   verifyDashboardWorkerSecret
@@ -53,8 +54,28 @@ import {
 const hashes = {
   marketsurge_pdf_sha256: "a".repeat(64),
   snapshot_json_sha256: "b".repeat(64),
-  snapshot_markdown_sha256: "c".repeat(64)
+  snapshot_markdown_sha256: "c".repeat(64),
+  market_gauge_json_sha256: "d".repeat(64)
 };
+
+test("exact-session market gauge source is canonical and rejects mismatched sessions", async () => {
+  const okFetch = async () => new Response(JSON.stringify({
+    schema_version: "dashboard_market_gauge_v1",
+    session_date: "2026-08-14",
+    overall_state: "Neutral"
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  const bytes = await fetchExactSessionMarketGauge("https://dashboard.example", "2026-08-14", okFetch as typeof fetch);
+  assert.equal(JSON.parse(bytes.toString("utf8")).session_date, "2026-08-14");
+
+  const mismatchFetch = async () => new Response(JSON.stringify({
+    schema_version: "dashboard_market_gauge_v1",
+    session_date: "2026-08-13"
+  }), { status: 200, headers: { "Content-Type": "application/json" } });
+  await assert.rejects(
+    fetchExactSessionMarketGauge("https://dashboard.example", "2026-08-14", mismatchFetch as typeof fetch),
+    (error: unknown) => error instanceof MarketReviewValidationError && error.code === "MARKET_GAUGE_SOURCE_INVALID"
+  );
+});
 
 function run(overrides: Partial<MarketReviewRun> = {}): MarketReviewRun {
   return {
@@ -526,6 +547,7 @@ test("worker shared secret is presented outside public dispatch inputs", { concu
   const inputs = buildMarketReviewWorkerDispatch(run(), "https://dashboard.example");
   assert.deepEqual(Object.keys(inputs).sort(), [
     "attempt",
+    "market_gauge_json_sha256",
     "marketsurge_pdf_sha256",
     "review_run_id",
     "session_date",
@@ -555,14 +577,14 @@ test("GitHub workflow defaults to daily-review.yml and preserves the environment
   }
 });
 
-test("callbacks require exact run, date, attempt, and all three source hashes", () => {
+test("callbacks require exact run, date, attempt, and all four source hashes", () => {
   assert.doesNotThrow(() => validateCallbackCorrelation(run(), callback("RUNNING")));
   assert.throws(
     () => validateCallbackCorrelation(run(), callback("RUNNING", { session_date: "2026-08-13" })),
     (error: unknown) => error instanceof MarketReviewValidationError && error.code === "CALLBACK_CORRELATION_MISMATCH"
   );
   assert.throws(
-    () => validateCallbackCorrelation(run(), callback("RUNNING", { source_hashes: { ...hashes, snapshot_markdown_sha256: "d".repeat(64) } })),
+    () => validateCallbackCorrelation(run(), callback("RUNNING", { source_hashes: { ...hashes, market_gauge_json_sha256: "e".repeat(64) } })),
     (error: unknown) => error instanceof MarketReviewValidationError && error.code === "CALLBACK_SOURCE_HASH_MISMATCH"
   );
 });

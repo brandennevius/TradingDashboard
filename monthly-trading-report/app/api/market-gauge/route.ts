@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createApiTimer } from "@/lib/apiTiming";
+import { filterCandlesThroughSession, hasExactIndexSessionEvidence } from "@/lib/market-gauge-session";
 
 type Candle = {
   time: string;
@@ -181,7 +182,7 @@ function parseYahooResponse(payload: unknown): Candle[] {
     .filter(Boolean) as Candle[];
 }
 
-async function fetchCandles(symbol: string) {
+async function fetchCandles(symbol: string, sessionDate?: string) {
   const stooqSymbol = `${symbol.toLowerCase()}.us`;
   const stooqResponse = await fetch(`https://stooq.com/q/d/l/?s=${encodeURIComponent(stooqSymbol)}&i=d`, {
     next: { revalidate: 60 * 60 * 6 }
@@ -189,7 +190,10 @@ async function fetchCandles(symbol: string) {
 
   if (stooqResponse.ok) {
     const candles = parseStooqCsv(await stooqResponse.text());
-    if (candles.length) return candles.slice(-520);
+    if (candles.length) {
+      const eligible = filterCandlesThroughSession(candles, sessionDate);
+      return eligible.slice(-520);
+    }
   }
 
   const now = Math.floor(Date.now() / 1000);
@@ -200,7 +204,8 @@ async function fetchCandles(symbol: string) {
   );
 
   if (!yahooResponse.ok) return [];
-  return parseYahooResponse(await yahooResponse.json()).slice(-520);
+  const candles = parseYahooResponse(await yahooResponse.json());
+  return filterCandlesThroughSession(candles, sessionDate).slice(-520);
 }
 
 function buildRegimeAtIndex(symbol: string, candles: Candle[], candleIndex: number): SymbolRegime | null {
@@ -332,12 +337,16 @@ function buildComponents(
   return { above21, percentAbove21, leadershipState, components };
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const logTiming = createApiTimer("/api/market-gauge");
   try {
-    const indexPairs = await Promise.all(indexSymbols.map(async (symbol) => buildRegimePair(symbol, await fetchCandles(symbol))));
+    const requestedSession = new URL(request.url).searchParams.get("session_date")?.trim() || undefined;
+    if (requestedSession && !/^\d{4}-\d{2}-\d{2}$/.test(requestedSession)) {
+      return NextResponse.json({ error: "session_date must use YYYY-MM-DD" }, { status: 400 });
+    }
+    const indexPairs = await Promise.all(indexSymbols.map(async (symbol) => buildRegimePair(symbol, await fetchCandles(symbol, requestedSession))));
     const leaderResults = await Promise.allSettled(
-      defaultLeaderWatchlist.map(async (symbol) => buildRegimePair(symbol, await fetchCandles(symbol)))
+      defaultLeaderWatchlist.map(async (symbol) => buildRegimePair(symbol, await fetchCandles(symbol, requestedSession)))
     );
     const indexRegimes = indexPairs.map((item) => item.current).filter((item): item is SymbolRegime => Boolean(item));
     const previousIndexRegimes = indexPairs.map((item) => item.previous).filter((item): item is SymbolRegime => Boolean(item));
@@ -362,13 +371,41 @@ export async function GET() {
         })
       )
     );
+    const overallScore = average(
+      components.map((component) => component.state === "Grow" ? 100 : component.state === "Neutral" ? 50 : 0)
+    );
+    const effectiveSession = requestedSession || indexRegimes.map((item) => item.date).sort().at(-1);
+    if (requestedSession && !hasExactIndexSessionEvidence(indexRegimes, requestedSession, indexSymbols)) {
+      return NextResponse.json(
+        {
+          error: "Exact-session index evidence is incomplete.",
+          code: "MARKET_GAUGE_SESSION_EVIDENCE_INCOMPLETE",
+          session_date: requestedSession,
+          index_dates: indexRegimes.map((item) => ({ symbol: item.symbol, date: item.date }))
+        },
+        { status: 422, headers: { "Cache-Control": "private, no-store" } }
+      );
+    }
     logTiming(200, { indexRegimes: indexRegimes.length, leaderRegimes: leaderRegimes.length, overallState });
 
     return NextResponse.json(
       {
+        schema_version: "dashboard_market_gauge_v1",
+        session_date: effectiveSession,
+        generated_at: new Date().toISOString(),
+        evidence_status: requestedSession ? "EXACT_SESSION_PARTIAL_EVIDENCE" : "CURRENT_PARTIAL_EVIDENCE",
+        overall_state: overallState,
+        overall_score: Number(overallScore.toFixed(2)),
+        universe: { indexes: indexSymbols, leaders: defaultLeaderWatchlist, leader_count: defaultLeaderWatchlist.length },
+        providers: ["Stooq", "Yahoo fallback"],
+        limitations: [
+          "The 12-name leader list is a fixed gauge component, not market breadth or a stock scanner.",
+          "Distribution-day, follow-through-day, and official NYSE/Nasdaq breadth evidence are unavailable."
+        ],
         overallState,
         leadership: { above21, total: leaderRegimes.length, percentAbove21, state: leadershipState },
         components,
+        index_regimes: indexRegimes,
         indexRegimes,
         leaderRegimes: leaderRegimes.map((item) => ({ symbol: item.symbol, shortTerm: item.shortTerm }))
       },

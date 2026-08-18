@@ -27,6 +27,7 @@ type ReviewRun = {
     marketsurge_pdf_sha256: string;
     snapshot_json_sha256: string;
     snapshot_markdown_sha256: string;
+    market_gauge_json_sha256: string;
   };
   marketsurge_pdf_filename: string;
   marketsurge_pdf_size_bytes: number;
@@ -118,7 +119,8 @@ export default function MarketReviewPage() {
     [ocrReviewPages, ocrResolutions, reviewedOcrPages]
   );
   const hasSavedV2Corrections = hasSavedV2MarketReviewCorrections(selectedRun?.ocr);
-  const retryAllowed = selectedRun ? canRetryMarketReview(selectedRun.status, selectedRun.ocr) : false;
+  const hasFrozenMarketGauge = Boolean(selectedRun?.source_hashes.market_gauge_json_sha256);
+  const retryAllowed = selectedRun ? hasFrozenMarketGauge && canRetryMarketReview(selectedRun.status, selectedRun.ocr) : false;
 
   useEffect(() => {
     setOcrResolutions({});
@@ -305,6 +307,7 @@ export default function MarketReviewPage() {
                 <code>MarketSurge {shortHash(selectedRun.source_hashes.marketsurge_pdf_sha256)}</code>
                 <code>Snapshot JSON {shortHash(selectedRun.source_hashes.snapshot_json_sha256)}</code>
                 <code>Snapshot Markdown {shortHash(selectedRun.source_hashes.snapshot_markdown_sha256)}</code>
+                <code>Market Gauge {shortHash(selectedRun.source_hashes.market_gauge_json_sha256)}</code>
               </section>
 
               {selectedRun.error ? (
@@ -415,12 +418,17 @@ export default function MarketReviewPage() {
 
               {(selectedRun.status === "FAILED" || selectedRun.status === "NEEDS_REVIEW") && !selectedRun.source_deleted_at ? (
                 <>
+                  {!hasFrozenMarketGauge ? (
+                    <p className="market-review-retry-note">
+                      This legacy run has no frozen exact-session Market Gauge source. Start a new review; retry is disabled so source packets cannot be mixed.
+                    </p>
+                  ) : null}
                   {selectedRunHasLegacyCorrections ? (
                     <p className="market-review-retry-note">
                       Legacy OCR corrections will be ignored. Retry will rerun the corrected OCR parser from the frozen PDF.
                     </p>
                   ) : null}
-                  {selectedRun.status === "NEEDS_REVIEW" && !retryAllowed ? (
+                  {hasFrozenMarketGauge && selectedRun.status === "NEEDS_REVIEW" && !retryAllowed ? (
                     <p className="market-review-retry-note">Retry is locked until every OCR page is reviewed and a valid v2 correction packet is saved.</p>
                   ) : null}
                   <button className="market-review-retry" type="button" disabled={!retryAllowed || actionRunId === selectedRun.run_id} onClick={() => retryRun(selectedRun)}>

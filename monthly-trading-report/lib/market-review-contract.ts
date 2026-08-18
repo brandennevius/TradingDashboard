@@ -11,7 +11,7 @@ export const MARKET_REVIEW_TOKEN_TTL_SECONDS = 2 * 60 * 60;
 
 export type MarketReviewStatus = "QUEUED" | "RUNNING" | "NEEDS_REVIEW" | "FAILED" | "COMPLETED";
 export type MarketReviewDeliveryStatus = "NOT_REQUESTED" | "PENDING" | "SENDING" | "SENT" | "FAILED";
-export type MarketReviewSourceKind = "marketsurge_pdf" | "snapshot_json" | "snapshot_markdown" | "ocr_corrections_json";
+export type MarketReviewSourceKind = "marketsurge_pdf" | "snapshot_json" | "snapshot_markdown" | "market_gauge_json" | "ocr_corrections_json";
 export type MarketReviewArtifactKind = "pdf" | "markdown" | "json";
 export type MarketReviewCallbackEventType = "RUNNING" | "OCR_REVIEW_REQUIRED" | "FAILED" | "RESULTS_REGISTERED" | "DELIVERY_STATUS";
 
@@ -19,6 +19,7 @@ export type MarketReviewSourceHashes = {
   marketsurge_pdf_sha256: string;
   snapshot_json_sha256: string;
   snapshot_markdown_sha256: string;
+  market_gauge_json_sha256: string;
 };
 
 export type MarketReviewArtifactInput = {
@@ -288,7 +289,8 @@ export function verifyMarketReviewToken(token: string, expected: Partial<MarketR
       if (
         left?.marketsurge_pdf_sha256 !== right.marketsurge_pdf_sha256 ||
         left?.snapshot_json_sha256 !== right.snapshot_json_sha256 ||
-        left?.snapshot_markdown_sha256 !== right.snapshot_markdown_sha256
+        left?.snapshot_markdown_sha256 !== right.snapshot_markdown_sha256 ||
+        left?.market_gauge_json_sha256 !== right.market_gauge_json_sha256
       ) {
         throw new MarketReviewValidationError("TOKEN_CORRELATION_MISMATCH", `The review token does not match ${key}.`);
       }
@@ -303,6 +305,7 @@ export function sourceHashForKind(hashes: MarketReviewSourceHashes, kind: Market
   if (kind === "marketsurge_pdf") return hashes.marketsurge_pdf_sha256;
   if (kind === "snapshot_json") return hashes.snapshot_json_sha256;
   if (kind === "snapshot_markdown") return hashes.snapshot_markdown_sha256;
+  if (kind === "market_gauge_json") return hashes.market_gauge_json_sha256;
   return undefined;
 }
 
@@ -337,8 +340,9 @@ export function validateCallbackCorrelation(run: MarketReviewRun, payload: Marke
   }
   if (!payload.source_hashes || !isSha256(payload.source_hashes.marketsurge_pdf_sha256)
     || !isSha256(payload.source_hashes.snapshot_json_sha256)
-    || !isSha256(payload.source_hashes.snapshot_markdown_sha256)) {
-    throw new MarketReviewValidationError("CALLBACK_SOURCE_HASHES_INVALID", "Callback source hashes must contain all three SHA-256 values.");
+    || !isSha256(payload.source_hashes.snapshot_markdown_sha256)
+    || !isSha256(payload.source_hashes.market_gauge_json_sha256)) {
+    throw new MarketReviewValidationError("CALLBACK_SOURCE_HASHES_INVALID", "Callback source hashes must contain all four SHA-256 values.");
   }
   if (!new Set<MarketReviewCallbackEventType>(["RUNNING", "OCR_REVIEW_REQUIRED", "FAILED", "RESULTS_REGISTERED", "DELIVERY_STATUS"]).has(payload.event_type)) {
     throw new MarketReviewValidationError("CALLBACK_EVENT_INVALID", "The callback event type is not supported.");
@@ -349,7 +353,8 @@ export function validateCallbackCorrelation(run: MarketReviewRun, payload: Marke
   if (
     payload.source_hashes.marketsurge_pdf_sha256 !== run.source_hashes.marketsurge_pdf_sha256 ||
     payload.source_hashes.snapshot_json_sha256 !== run.source_hashes.snapshot_json_sha256 ||
-    payload.source_hashes.snapshot_markdown_sha256 !== run.source_hashes.snapshot_markdown_sha256
+    payload.source_hashes.snapshot_markdown_sha256 !== run.source_hashes.snapshot_markdown_sha256 ||
+    payload.source_hashes.market_gauge_json_sha256 !== run.source_hashes.market_gauge_json_sha256
   ) {
     throw new MarketReviewValidationError("CALLBACK_SOURCE_HASH_MISMATCH", "Callback source hashes do not match the stored review sources.");
   }
@@ -393,15 +398,17 @@ export function validateWorkerInputCorrelation(run: MarketReviewRun, correlation
   }
   if (!correlation.source_hashes || !isSha256(correlation.source_hashes.marketsurge_pdf_sha256)
     || !isSha256(correlation.source_hashes.snapshot_json_sha256)
-    || !isSha256(correlation.source_hashes.snapshot_markdown_sha256)) {
-    throw new MarketReviewValidationError("WORKER_SOURCE_HASHES_INVALID", "Worker request must present all three source SHA-256 values.");
+    || !isSha256(correlation.source_hashes.snapshot_markdown_sha256)
+    || !isSha256(correlation.source_hashes.market_gauge_json_sha256)) {
+    throw new MarketReviewValidationError("WORKER_SOURCE_HASHES_INVALID", "Worker request must present all four source SHA-256 values.");
   }
   if (correlation.attempt !== run.attempt) {
     throw new MarketReviewValidationError("WORKER_ATTEMPT_MISMATCH", "Worker attempt does not match the current review attempt.");
   }
   if (correlation.source_hashes.marketsurge_pdf_sha256 !== run.source_hashes.marketsurge_pdf_sha256
     || correlation.source_hashes.snapshot_json_sha256 !== run.source_hashes.snapshot_json_sha256
-    || correlation.source_hashes.snapshot_markdown_sha256 !== run.source_hashes.snapshot_markdown_sha256) {
+    || correlation.source_hashes.snapshot_markdown_sha256 !== run.source_hashes.snapshot_markdown_sha256
+    || correlation.source_hashes.market_gauge_json_sha256 !== run.source_hashes.market_gauge_json_sha256) {
     throw new MarketReviewValidationError("WORKER_SOURCE_HASH_MISMATCH", "Worker source hashes do not match the frozen review sources.");
   }
 }
