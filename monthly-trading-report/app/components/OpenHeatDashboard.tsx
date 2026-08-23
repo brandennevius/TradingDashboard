@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { BrokerPortfolioPosition, BrokerPortfolioSnapshot } from "@/lib/broker-portfolio-snapshot";
 import type { TradeLogEntry } from "@/lib/types";
 
 type Props = {
@@ -8,25 +9,29 @@ type Props = {
   activePortfolio: string;
   onSelectTrade?: (tradeId: string) => void;
   portfolioMeta?: Record<string, PortfolioMeta>;
+  brokerPortfolioSnapshots?: BrokerPortfolioSnapshot[];
 };
 
 type LatestPrice = {
-  price: number;
+  price: number | null;
   date: string;
   error?: string;
 };
 
 type RiskRow = {
   trade: TradeLogEntry;
-  currentPrice: number;
+  shares: number;
+  entryPrice: number;
+  stopLabel: string;
+  currentPrice: number | null;
   priceDate: string;
-  positionValue: number;
-  floatingPnl: number;
-  floatingPct: number;
-  dollarRisk: number;
-  stopOutcome: number;
-  riskPct: number;
-  weightPct: number;
+  positionValue: number | null;
+  floatingPnl: number | null;
+  floatingPct: number | null;
+  dollarRisk: number | null;
+  stopOutcome: number | null;
+  riskPct: number | null;
+  weightPct: number | null;
   status: "ready" | "fallback" | "missing";
   note: string;
 };
@@ -38,14 +43,8 @@ type PortfolioMeta = {
   equityUpdatedAt?: string;
   equityStatementDate?: string;
 };
-type PortfolioSettingsResponse = {
-  portfolioMeta?: Record<string, PortfolioMeta>;
-};
-
-const DEFAULT_EQUITY = 700000;
-const DEFAULT_DRAWDOWN_FLOOR = 688000;
-
-function formatCurrency(value: number) {
+function formatCurrency(value: number | null) {
+  if (value === null || !Number.isFinite(value)) return "—";
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
@@ -53,8 +52,8 @@ function formatCurrency(value: number) {
   }).format(Number.isFinite(value) ? value : 0);
 }
 
-function formatPrice(value: number) {
-  if (!Number.isFinite(value) || value === 0) {
+function formatPrice(value: number | null) {
+  if (value === null || !Number.isFinite(value) || value === 0) {
     return "-";
   }
 
@@ -63,8 +62,8 @@ function formatPrice(value: number) {
   }).format(value);
 }
 
-function formatPercent(value: number) {
-  return `${(Number.isFinite(value) ? value : 0).toFixed(2)}%`;
+function formatPercent(value: number | null) {
+  return value === null || !Number.isFinite(value) ? "—" : `${value.toFixed(2)}%`;
 }
 
 function pickLatestImportedMeta(portfolioMeta: Record<string, PortfolioMeta> | undefined) {
@@ -86,7 +85,7 @@ async function fetchLatestPrice(symbol: string): Promise<LatestPrice> {
   const data = await response.json().catch(() => ({}));
 
   if (!response.ok) {
-    return { price: 0, date: "", error: data.error || `Could not load ${symbol}.` };
+    return { price: null, date: "", error: data.error || `Could not load ${symbol}.` };
   }
 
   const candles = Array.isArray(data.candles) ? data.candles : [];
@@ -96,131 +95,162 @@ async function fetchLatestPrice(symbol: string): Promise<LatestPrice> {
   });
 
   return {
-    price: Number(latest?.close) || 0,
+    price: Number(latest?.close) || null,
     date: latest?.time ? String(latest.time) : ""
   };
 }
 
-function buildRiskRow(trade: TradeLogEntry, price: LatestPrice | undefined, currentEquity: number): RiskRow {
-  const shares = Math.abs(Number(trade.shares) || 0);
-  const latestPrice = Number(price?.price) || 0;
-  const entryPrice = Number(trade.avgEntry) || 0;
-  const currentPrice = latestPrice || entryPrice;
-  const stopPrice = Number(trade.stopPrice) || 0;
+function positive(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function brokerPositionForTrade(snapshot: BrokerPortfolioSnapshot | undefined, trade: TradeLogEntry) {
+  if (
+    snapshot
+    && (trade.entryDate > snapshot.coverageDate
+      || (trade.executions || []).some((execution) => execution.date > snapshot.coverageDate))
+  ) {
+    return undefined;
+  }
+  return snapshot?.openPositions.find(
+    (position) => position.symbol.toUpperCase() === trade.symbol.toUpperCase() && position.side === trade.side
+  );
+}
+
+function protectiveLevels(
+  trade: TradeLogEntry,
+  shares: number,
+  storedStop: number | null,
+  snapshot: BrokerPortfolioSnapshot | undefined
+) {
+  const exitDirection = trade.side === "LONG" ? "Sell" : "Buy";
+  const stopOrders = (snapshot?.workingOrders || [])
+    .filter((order) =>
+      order.symbol.toUpperCase() === trade.symbol.toUpperCase()
+      && order.direction === exitDirection
+      && order.orderType === "STOP"
+      && order.shares > 0
+      && order.orderPrice > 0
+    )
+    .sort((a, b) => trade.side === "LONG" ? b.orderPrice - a.orderPrice : a.orderPrice - b.orderPrice);
+
+  if (!stopOrders.length) {
+    return storedStop ? [{ price: storedStop, quantity: shares }] : [];
+  }
+
+  const bracketStop = stopOrders.at(-1)!;
+  const stagedStops = stopOrders.slice(0, -1);
+  let remaining = shares;
+  const levels: Array<{ price: number; quantity: number }> = [];
+  stagedStops.forEach((order) => {
+    const quantity = Math.min(order.shares, remaining);
+    if (quantity > 0) {
+      levels.push({ price: order.orderPrice, quantity });
+      remaining -= quantity;
+    }
+  });
+  if (remaining > 0) levels.push({ price: bracketStop.orderPrice, quantity: remaining });
+  return levels;
+}
+
+export function buildOpenPositionRiskRow(
+  trade: TradeLogEntry,
+  price: LatestPrice | undefined,
+  currentEquity: number | null,
+  brokerPosition: BrokerPortfolioPosition | undefined,
+  brokerSnapshot: BrokerPortfolioSnapshot | undefined
+): RiskRow {
+  const shares = positive(brokerPosition?.shares) ?? positive(trade.shares) ?? 0;
+  const entryPrice = positive(brokerPosition?.entryPrice) ?? positive(trade.avgEntry) ?? 0;
+  const marketPrice = positive(price?.price);
+  const statementPrice = positive(brokerPosition?.currentPrice);
+  const currentPrice = marketPrice ?? statementPrice;
+  const stopPrice = positive(brokerPosition?.stopPrice) ?? positive(trade.stopPrice);
   const storedRisk = Math.abs(Number(trade.risk) || 0);
-  const positionValue = currentPrice && shares ? currentPrice * shares : Math.abs(entryPrice * shares);
+  const positionValue = currentPrice && shares ? currentPrice * shares : null;
   const floatingPnl =
     entryPrice && currentPrice && shares
       ? trade.side === "SHORT"
         ? (entryPrice - currentPrice) * shares
         : (currentPrice - entryPrice) * shares
-      : 0;
+      : null;
   const floatingPct =
     entryPrice && currentPrice
       ? trade.side === "SHORT"
         ? ((entryPrice - currentPrice) / entryPrice) * 100
         : ((currentPrice - entryPrice) / entryPrice) * 100
-      : 0;
-  let stopOutcome = 0;
-  let barRisk = 0;
+      : null;
+  const levels = protectiveLevels(trade, shares, stopPrice, brokerSnapshot);
+  let stopOutcome: number | null = null;
+  let barRisk: number | null = null;
   let status: RiskRow["status"] = "missing";
-  let note = "Needs average entry, shares, and stop.";
+  let note = "Needs quantity-aware stop or saved risk data.";
 
-  if (entryPrice && stopPrice && shares) {
-    stopOutcome =
-      trade.side === "SHORT"
-        ? (entryPrice - stopPrice) * shares
-        : (stopPrice - entryPrice) * shares;
-    barRisk =
-      currentPrice && stopPrice
-        ? trade.side === "SHORT"
-          ? Math.max(0, (stopPrice - currentPrice) * shares)
-          : Math.max(0, (currentPrice - stopPrice) * shares)
-        : Math.max(0, -stopOutcome);
+  if (entryPrice && currentPrice && shares && levels.length) {
+    stopOutcome = levels.reduce(
+      (total, level) => total + (trade.side === "SHORT"
+        ? (entryPrice - level.price) * level.quantity
+        : (level.price - entryPrice) * level.quantity),
+      0
+    );
+    barRisk = levels.reduce(
+      (total, level) => total + Math.max(0, trade.side === "SHORT"
+        ? (level.price - currentPrice) * level.quantity
+        : (currentPrice - level.price) * level.quantity),
+      0
+    );
     status = "ready";
     note = stopOutcome >= 0 ? "Stop locks profit versus average cost; BAR is current giveback to stop." : "Stop loss versus average cost.";
   } else if (storedRisk) {
     stopOutcome = -storedRisk;
     barRisk = storedRisk;
     status = "fallback";
-    note = currentPrice ? "Using saved original risk fallback." : "Using stored risk fallback.";
+    note = "Using the Trade Log's saved planned-risk fallback.";
   } else if (price?.error) {
     note = price.error;
   }
 
-  const dollarRisk = barRisk;
-
   return {
     trade,
+    shares,
+    entryPrice,
+    stopLabel: levels.map((level) => `${formatPrice(level.quantity)} @ ${formatPrice(level.price)}`).join("; ") || "—",
     currentPrice,
-    priceDate: price?.date || "",
+    priceDate: marketPrice ? price?.date || "" : statementPrice ? brokerSnapshot?.coverageDate || "" : "",
     positionValue,
     floatingPnl,
     floatingPct,
-    dollarRisk,
+    dollarRisk: barRisk,
     stopOutcome,
-    riskPct: currentEquity ? (dollarRisk / currentEquity) * 100 : 0,
-    weightPct: currentEquity && positionValue ? (positionValue / currentEquity) * 100 : 0,
+    riskPct: currentEquity && barRisk !== null ? (barRisk / currentEquity) * 100 : null,
+    weightPct: currentEquity && positionValue !== null ? (positionValue / currentEquity) * 100 : null,
     status,
     note
   };
 }
 
-export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTrade, portfolioMeta }: Props) {
-  const [accountBalance, setAccountBalance] = useState(DEFAULT_EQUITY);
-  const [accountEquity, setAccountEquity] = useState(DEFAULT_EQUITY);
-  const [statementPnl, setStatementPnl] = useState(0);
+export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTrade, portfolioMeta, brokerPortfolioSnapshots = [] }: Props) {
   const [prices, setPrices] = useState<Record<string, LatestPrice>>({});
   const [isLoadingPrices, setIsLoadingPrices] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPortfolioEquity() {
-      if (!activePortfolio) {
-        return;
-      }
-
-      let meta = activePortfolio ? portfolioMeta?.[activePortfolio] : pickLatestImportedMeta(portfolioMeta);
-
-      if (!meta) {
-        const response = await fetch("/api/settings/branden-portfolios", { cache: "no-store" });
-        const data = (await response.json().catch(() => ({}))) as PortfolioSettingsResponse;
-
-        if (!response.ok || cancelled) {
-          return;
-        }
-
-        meta = activePortfolio ? data?.portfolioMeta?.[activePortfolio] : pickLatestImportedMeta(data?.portfolioMeta);
-      }
-
-      if (cancelled) {
-        return;
-      }
-
-      const statementBalance = Number(meta?.currentEquity);
-      const statementEquity = Number(meta?.statementEquity);
-      const importedFloatingPnl = Number(meta?.floatingPnl);
-      const hasBalance = Number.isFinite(statementBalance) && statementBalance > 0;
-      const hasEquity = Number.isFinite(statementEquity) && statementEquity > 0;
-
-      if (hasBalance || hasEquity) {
-        const nextBalance = hasBalance ? statementBalance : statementEquity;
-        const nextEquity = hasEquity ? statementEquity : statementBalance;
-        setAccountBalance(nextBalance);
-        setAccountEquity(nextEquity);
-
-        const derivedPnl = hasBalance && hasEquity ? nextEquity - nextBalance : importedFloatingPnl;
-        setStatementPnl(Number.isFinite(derivedPnl) ? derivedPnl : 0);
-      }
-    }
-
-    loadPortfolioEquity();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activePortfolio, portfolioMeta]);
+  const brokerSnapshot = useMemo(
+    () => brokerPortfolioSnapshots
+      .filter((snapshot) => !activePortfolio || snapshot.portfolioTag === activePortfolio)
+      .sort((a, b) => b.coverageDate.localeCompare(a.coverageDate))[0],
+    [activePortfolio, brokerPortfolioSnapshots]
+  );
+  const importedMeta = activePortfolio ? portfolioMeta?.[activePortfolio] : pickLatestImportedMeta(portfolioMeta);
+  const accountBalance = positive(brokerSnapshot?.balance) ?? positive(importedMeta?.currentEquity);
+  const accountEquity = positive(brokerSnapshot?.currentEquity)
+    ?? positive(brokerSnapshot?.statementEquity)
+    ?? positive(importedMeta?.statementEquity);
+  const importedPnl = Number(brokerSnapshot?.floatingPnl ?? importedMeta?.floatingPnl);
+  const statementPnl = Number.isFinite(importedPnl)
+    ? importedPnl
+    : accountBalance !== null && accountEquity !== null
+      ? accountEquity - accountBalance
+      : null;
 
   const openPositions = useMemo(
     () =>
@@ -266,26 +296,37 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
   }, [symbols.join("|")]);
 
   const riskRows = useMemo(
-    () => openPositions.map((trade) => buildRiskRow(trade, prices[trade.symbol], accountEquity)),
-    [openPositions, prices, accountEquity]
+    () => openPositions.map((trade) => {
+      const brokerPosition = brokerPositionForTrade(brokerSnapshot, trade);
+      return buildOpenPositionRiskRow(
+        trade,
+        prices[trade.symbol],
+        accountEquity,
+        brokerPosition,
+        brokerPosition ? brokerSnapshot : undefined
+      );
+    }),
+    [openPositions, prices, accountEquity, brokerSnapshot]
   );
 
-  const totalOpenHeat = riskRows.reduce((sum, row) => sum + row.dollarRisk, 0);
-  const netStopPnl = riskRows.reduce((sum, row) => sum + row.stopOutcome, 0);
-  const profitableStopProfit = riskRows.reduce((sum, row) => sum + Math.max(0, row.stopOutcome), 0);
-  const balanceAtRiskPct = accountEquity ? (totalOpenHeat / accountEquity) * 100 : 0;
-  const statementPnlPct = accountEquity ? (statementPnl / accountEquity) * 100 : 0;
-  const netStopPnlPct = accountEquity ? (netStopPnl / accountEquity) * 100 : 0;
-  const distanceToDrawdownFloor = accountEquity - DEFAULT_DRAWDOWN_FLOOR;
-  const survivalBuffer = distanceToDrawdownFloor - totalOpenHeat;
-  const worstCaseEquity = accountEquity - totalOpenHeat;
   const missingRiskCount = riskRows.filter((row) => row.status === "missing").length;
-  const newTradesAllowed = missingRiskCount === 0 && survivalBuffer > 0;
+  const fallbackRiskCount = riskRows.filter((row) => row.status === "fallback").length;
+  const totalOpenHeat = missingRiskCount ? null : riskRows.reduce((sum, row) => sum + (row.dollarRisk || 0), 0);
+  const netStopPnl = missingRiskCount ? null : riskRows.reduce((sum, row) => sum + (row.stopOutcome || 0), 0);
+  const profitableStopProfit = missingRiskCount
+    ? null
+    : riskRows.reduce((sum, row) => sum + Math.max(0, row.stopOutcome || 0), 0);
+  const balanceAtRiskPct = accountEquity && totalOpenHeat !== null ? (totalOpenHeat / accountEquity) * 100 : null;
+  const statementPnlPct = accountEquity && statementPnl !== null ? (statementPnl / accountEquity) * 100 : null;
+  const netStopPnlPct = accountEquity && netStopPnl !== null ? (netStopPnl / accountEquity) * 100 : null;
+  const worstCaseEquity = accountEquity && totalOpenHeat !== null ? accountEquity - totalOpenHeat : null;
+  const latestPriceDate = riskRows.map((row) => row.priceDate).filter(Boolean).sort().at(-1) || "—";
+  const riskState = missingRiskCount ? "incomplete" : fallbackRiskCount ? "fallback" : "complete";
   const warningText = missingRiskCount
     ? `${missingRiskCount} open ${missingRiskCount === 1 ? "position is" : "positions are"} missing stop/risk data.`
-    : survivalBuffer <= 0
-      ? "Open heat would break the drawdown floor if every stop is hit."
-      : "Open heat is inside the current survival buffer.";
+    : fallbackRiskCount
+      ? `${fallbackRiskCount} ${fallbackRiskCount === 1 ? "position uses" : "positions use"} saved Trade Log risk because a current quantity-aware stop plan is unavailable.`
+      : "Every open position has a current quantity-aware downside-risk calculation.";
 
   return (
     <section className="open-heat-panel">
@@ -294,9 +335,13 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
           <p className="eyebrow">REBAR / Balance at Risk</p>
           <h3>Open Positions</h3>
         </div>
-        <span className={`open-heat-status ${newTradesAllowed ? "allowed" : "blocked"}`}>
-          {newTradesAllowed ? "New trades allowed" : "Block new trades"}
+        <span className={`open-heat-status ${riskState === "complete" ? "allowed" : "blocked"}`}>
+          {riskState === "complete" ? "Risk data complete" : riskState === "fallback" ? "Trade Log fallback" : "Risk data incomplete"}
         </span>
+      </div>
+
+      <div className="open-heat-warning">
+        <strong>Position state through {brokerSnapshot?.coverageDate || importedMeta?.equityStatementDate || "Trade Log"}. Prices through {latestPriceDate}.</strong>
       </div>
 
       <div className="open-heat-kpi-grid">
@@ -310,43 +355,35 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
         </article>
         <article>
           <span>B-A-R / giveback $</span>
-          <strong className={totalOpenHeat > 0 ? "open-heat-negative" : ""}>{formatCurrency(totalOpenHeat)}</strong>
+          <strong className={totalOpenHeat !== null && totalOpenHeat > 0 ? "open-heat-negative" : ""}>{formatCurrency(totalOpenHeat)}</strong>
         </article>
         <article>
           <span>B-A-R / giveback %</span>
-          <strong className={balanceAtRiskPct > 0 ? "open-heat-negative" : ""}>-{formatPercent(balanceAtRiskPct)}</strong>
+          <strong className={balanceAtRiskPct !== null && balanceAtRiskPct > 0 ? "open-heat-negative" : ""}>{balanceAtRiskPct === null ? "—" : `-${formatPercent(balanceAtRiskPct)}`}</strong>
         </article>
         <article>
           <span>Statement P&L $</span>
-          <strong className={statementPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatCurrency(statementPnl)}</strong>
+          <strong className={statementPnl !== null && statementPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatCurrency(statementPnl)}</strong>
         </article>
         <article>
           <span>Statement P&L %</span>
-          <strong className={statementPnlPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatPercent(statementPnlPct)}</strong>
+          <strong className={statementPnlPct !== null && statementPnlPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatPercent(statementPnlPct)}</strong>
         </article>
         <article>
           <span>Net stop P&L</span>
-          <strong className={netStopPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatCurrency(netStopPnl)}</strong>
+          <strong className={netStopPnl !== null && netStopPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatCurrency(netStopPnl)}</strong>
         </article>
         <article>
           <span>Net stop P&L %</span>
-          <strong className={netStopPnlPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatPercent(netStopPnlPct)}</strong>
+          <strong className={netStopPnlPct !== null && netStopPnlPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatPercent(netStopPnlPct)}</strong>
         </article>
         <article>
           <span>Profitable stops locked</span>
-          <strong className={profitableStopProfit > 0 ? "open-heat-positive" : ""}>{formatCurrency(profitableStopProfit)}</strong>
+          <strong className={profitableStopProfit !== null && profitableStopProfit > 0 ? "open-heat-positive" : ""}>{formatCurrency(profitableStopProfit)}</strong>
         </article>
         <article>
           <span>Worst-case equity</span>
           <strong>{formatCurrency(worstCaseEquity)}</strong>
-        </article>
-        <article>
-          <span>Distance to drawdown floor</span>
-          <strong>{formatCurrency(distanceToDrawdownFloor)}</strong>
-        </article>
-        <article>
-          <span>Survival buffer</span>
-          <strong className={survivalBuffer >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatCurrency(survivalBuffer)}</strong>
         </article>
       </div>
 
@@ -382,29 +419,29 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
               >
                 <td>{row.trade.symbol}</td>
                 <td>{row.trade.side}</td>
-                <td>{formatPrice(row.trade.shares)}</td>
-                <td>{formatPrice(row.trade.avgEntry)}</td>
+                <td>{formatPrice(row.shares)}</td>
+                <td>{formatPrice(row.entryPrice)}</td>
                 <td>
                   {formatPrice(row.currentPrice)}
                   {row.priceDate ? <span>{row.priceDate}</span> : null}
                 </td>
-                <td className={row.floatingPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>
-                  {row.floatingPnl >= 0 ? "+" : ""}
+                <td className={row.floatingPnl !== null && row.floatingPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>
+                  {row.floatingPnl !== null && row.floatingPnl >= 0 ? "+" : ""}
                   {formatCurrency(row.floatingPnl)}
                 </td>
-                <td className={row.floatingPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>
-                  {row.floatingPct >= 0 ? "+" : ""}
+                <td className={row.floatingPct !== null && row.floatingPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>
+                  {row.floatingPct !== null && row.floatingPct >= 0 ? "+" : ""}
                   {formatPercent(row.floatingPct)}
                 </td>
-                <td>{formatPrice(row.trade.stopPrice)}</td>
+                <td>{row.stopLabel}</td>
                 <td>{formatCurrency(row.positionValue)}</td>
                 <td>{formatPercent(row.weightPct)}</td>
-                <td className={row.stopOutcome >= 0 ? "open-heat-positive" : "open-heat-negative"}>
-                  {row.stopOutcome >= 0 ? "+" : ""}
+                <td className={row.stopOutcome !== null && row.stopOutcome >= 0 ? "open-heat-positive" : "open-heat-negative"}>
+                  {row.stopOutcome !== null && row.stopOutcome >= 0 ? "+" : ""}
                   {formatCurrency(row.stopOutcome)}
                 </td>
                 <td className={row.dollarRisk ? "open-heat-negative" : ""}>{formatCurrency(row.dollarRisk)}</td>
-                <td className={row.riskPct ? "open-heat-negative" : ""}>-{formatPercent(row.riskPct)}</td>
+                <td className={row.riskPct ? "open-heat-negative" : ""}>{row.riskPct === null ? "—" : `-${formatPercent(row.riskPct)}`}</td>
               </tr>
             ))}
             {!riskRows.length ? (

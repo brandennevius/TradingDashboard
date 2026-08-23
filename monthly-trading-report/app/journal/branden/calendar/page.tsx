@@ -10,6 +10,7 @@ type CalendarDayTradeRow = {
   date: string;
   pnl: number;
   rMultiple: number;
+  activityKind: "closed" | "partial_exit";
 };
 
 function numberValue(value: unknown) {
@@ -106,7 +107,8 @@ function calendarRowsForDate(trades: TradeLogEntry[], date: string): CalendarDay
           trade,
           date,
           pnl,
-          rMultiple: numberValue(trade.risk) ? pnl / numberValue(trade.risk) : 0
+          rMultiple: numberValue(trade.risk) ? pnl / numberValue(trade.risk) : 0,
+          activityKind: trade.status === "OPEN" ? "partial_exit" : "closed"
         };
       }
 
@@ -119,7 +121,8 @@ function calendarRowsForDate(trades: TradeLogEntry[], date: string): CalendarDay
         trade,
         date,
         pnl,
-        rMultiple: numberValue(trade.rMultiple)
+        rMultiple: numberValue(trade.rMultiple),
+        activityKind: "closed"
       };
     })
     .filter((row): row is CalendarDayTradeRow => Boolean(row));
@@ -127,6 +130,24 @@ function calendarRowsForDate(trades: TradeLogEntry[], date: string): CalendarDay
 
 function calendarRowStatus(row: CalendarDayTradeRow) {
   return tradeStatusForPnl(row.pnl, row.trade.status !== "OPEN", row.rMultiple);
+}
+
+function summarizeCalendarRows(rows: CalendarDayTradeRow[]) {
+  const closedTradeIds = new Set(rows.filter((row) => row.activityKind === "closed").map((row) => row.trade.id));
+  const partialExitIds = new Set(rows.filter((row) => row.activityKind === "partial_exit").map((row) => row.trade.id));
+
+  return {
+    closedTradeCount: closedTradeIds.size,
+    partialExitCount: partialExitIds.size,
+    activityCount: rows.length
+  };
+}
+
+function calendarActivityLabel(summary: ReturnType<typeof summarizeCalendarRows>) {
+  const parts: string[] = [];
+  if (summary.closedTradeCount) parts.push(pluralize(summary.closedTradeCount, "closed trade"));
+  if (summary.partialExitCount) parts.push(pluralize(summary.partialExitCount, "trim"));
+  return parts.join(" / ");
 }
 
 export default function BrandenCalendarPage() {
@@ -210,6 +231,7 @@ export default function BrandenCalendarPage() {
       const date = inMonth ? `${calendarMonth}-${String(day).padStart(2, "0")}` : "";
       const dayRows = date ? rowsByDate[date] || [] : [];
       const pnl = dayRows.reduce((total, row) => total + row.pnl, 0);
+      const daySummary = summarizeCalendarRows(dayRows);
 
       return {
         date,
@@ -217,7 +239,10 @@ export default function BrandenCalendarPage() {
         inMonth,
         pnl,
         trades: dayRows.map((row) => row.trade),
-        rows: dayRows
+        rows: dayRows,
+        closedTradeCount: daySummary.closedTradeCount,
+        partialExitCount: daySummary.partialExitCount,
+        activityLabel: calendarActivityLabel(daySummary)
       };
     });
     const weeks = Array.from({ length: 6 }, (_, weekIndex) => {
@@ -238,14 +263,14 @@ export default function BrandenCalendarPage() {
     const monthRows = Object.values(rowsByDate).flat();
     const monthPnl = monthRows.reduce((total, row) => total + row.pnl, 0);
     const activeDays = Object.values(rowsByDate).filter((dayRows) => dayRows.length > 0).length;
-    const distinctTrades = new Set(monthRows.map((row) => row.trade.id)).size;
+    const closedTradeCount = summarizeCalendarRows(monthRows).closedTradeCount;
 
     return {
       cells,
       weeks,
       monthPnl,
       activeDays,
-      tradeCount: distinctTrades
+      tradeCount: closedTradeCount
     };
   }, [calendarMonth, filteredTrades]);
   const selectedCalendarDay = useMemo(
@@ -282,7 +307,7 @@ export default function BrandenCalendarPage() {
               <div className="calendar-month-stats">
                 <strong className={calendarSummary.monthPnl >= 0 ? "trade-positive" : "trade-negative"}>{money(calendarSummary.monthPnl)}</strong>
                 <em>{pluralize(calendarSummary.activeDays, "day")}</em>
-                <em>{pluralize(calendarSummary.tradeCount, "realized trade")}</em>
+                <em>{pluralize(calendarSummary.tradeCount, "closed trade")}</em>
               </div>
             </div>
 
@@ -310,7 +335,7 @@ export default function BrandenCalendarPage() {
                       {cell.trades.length ? (
                         <span className="calendar-day-content">
                           <strong>{money(cell.pnl)}</strong>
-                          <small>{pluralize(cell.trades.length, "trade")}</small>
+                          <small>{cell.activityLabel || "No closed trades"}</small>
                         </span>
                       ) : null}
                     </button>
@@ -353,14 +378,15 @@ export default function BrandenCalendarPage() {
                   year: "numeric"
                 })}</h3>
                 <p>
-                  {money(selectedCalendarDay.pnl)} / {pluralize(selectedCalendarDay.rows.length, "realized trade")}
+                  {money(selectedCalendarDay.pnl)} / {selectedCalendarDay.activityLabel || "No closed trades"}
                 </p>
               </div>
               <button className="trade-muted-button" type="button" onClick={() => setSelectedCalendarDate("")}>Close</button>
             </div>
             <div className="calendar-day-modal-summary">
               <article><span>P&L</span><strong className={selectedCalendarDay.pnl >= 0 ? "trade-positive" : "trade-negative"}>{money(selectedCalendarDay.pnl)}</strong></article>
-              <article><span>Realized trades</span><strong>{selectedCalendarDay.rows.length}</strong></article>
+              <article><span>Closed trades</span><strong>{selectedCalendarDay.closedTradeCount}</strong></article>
+              <article><span>Trims</span><strong>{selectedCalendarDay.partialExitCount}</strong></article>
               <article><span>Total R</span><strong>{selectedCalendarDay.rows.reduce((total, row) => total + row.rMultiple, 0).toFixed(2)}R</strong></article>
             </div>
             <div className="trade-table-wrap calendar-day-table-wrap">

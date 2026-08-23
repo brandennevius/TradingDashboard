@@ -8,7 +8,7 @@ export type MarketCandle = {
 };
 
 export type MarketTimeframe = "1h" | "4h" | "1d" | "1wk" | "1mo";
-export type MarketDataProvider = "stooq" | "yahoo" | "unavailable";
+export type MarketDataProvider = "fmp" | "stooq" | "yahoo" | "unavailable";
 
 export type ExactMarketSessionPrice = {
   symbol: string;
@@ -37,6 +37,7 @@ export function marketProviderSymbols(value: string) {
     const quote = forexPair[2];
     return {
       symbol: `${base}/${quote}`,
+      fmp: `${base}${quote}`,
       stooq: `${base}${quote}`.toLowerCase(),
       yahoo: `${base}${quote}=X`
     };
@@ -45,6 +46,7 @@ export function marketProviderSymbols(value: string) {
   const symbol = cleanMarketSymbol(value);
   return {
     symbol,
+    fmp: symbol,
     stooq: !symbol || symbol.startsWith("^")
       ? null
       : symbol.includes(".") || symbol.includes("=")
@@ -122,6 +124,58 @@ function dateInTimeZone(unixTimestamp: number, timeZone: string) {
 function validPositiveNumber(value: unknown) {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : null;
+}
+
+function isoDate(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function fmpDateBounds(now = new Date()) {
+  const start = new Date(now);
+  start.setUTCFullYear(start.getUTCFullYear() - 2);
+  return { from: isoDate(start), to: isoDate(now) };
+}
+
+function parseFmpEodResponse(payload: unknown, from: string, to: string): MarketCandle[] {
+  if (!Array.isArray(payload)) return [];
+
+  const byDate = new Map<string, MarketCandle>();
+  payload.forEach((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return;
+    const row = item as Record<string, unknown>;
+    const time = String(row.date || "");
+    const open = Number(row.open);
+    const high = Number(row.high);
+    const low = Number(row.low);
+    const close = Number(row.close);
+    const volume = Number(row.volume ?? 0);
+
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(time) ||
+      time < from ||
+      time > to ||
+      ![open, high, low, close].every(Number.isFinite) ||
+      open <= 0 ||
+      high <= 0 ||
+      low <= 0 ||
+      close <= 0 ||
+      high < Math.max(open, close, low) ||
+      low > Math.min(open, close, high)
+    ) {
+      return;
+    }
+
+    byDate.set(time, {
+      time,
+      open,
+      high,
+      low,
+      close,
+      volume: Number.isFinite(volume) && volume >= 0 ? volume : 0
+    });
+  });
+
+  return Array.from(byDate.values()).sort((a, b) => a.time.localeCompare(b.time));
 }
 
 function parseYahooResponse(payload: unknown, timeframe: MarketTimeframe): MarketCandle[] {
@@ -216,6 +270,43 @@ async function fetchStooqCandles(symbolValue: string, timeframe: MarketTimeframe
   }
 
   return parseStooqCsv(await response.text());
+}
+
+async function fetchFmpCandles(symbolValue: string, timeframe: MarketTimeframe) {
+  const apiKey = process.env.FMP_API_KEY?.trim();
+  const symbol = marketProviderSymbols(symbolValue).fmp;
+  if (!apiKey || !symbol || timeframe !== "1d") return [];
+
+  const { from, to } = fmpDateBounds();
+  const url = new URL("https://financialmodelingprep.com/stable/historical-price-eod/full");
+  url.searchParams.set("symbol", symbol);
+  url.searchParams.set("from", from);
+  url.searchParams.set("to", to);
+  const response = await fetch(url, {
+    headers: { apikey: apiKey },
+    next: { revalidate: 60 * 60 * 6 }
+  });
+
+  if (!response.ok) return [];
+  return parseFmpEodResponse(await response.json(), from, to);
+}
+
+async function fetchExactFmpSession(symbolValue: string, session: string) {
+  const apiKey = process.env.FMP_API_KEY?.trim();
+  const providerSymbol = marketProviderSymbols(symbolValue).fmp;
+  if (!apiKey || !providerSymbol) return null;
+
+  const url = new URL("https://financialmodelingprep.com/stable/historical-price-eod/full");
+  url.searchParams.set("symbol", providerSymbol);
+  url.searchParams.set("from", session);
+  url.searchParams.set("to", session);
+  const response = await fetch(url, {
+    headers: { apikey: apiKey },
+    cache: "no-store"
+  });
+
+  if (!response.ok) return null;
+  return parseFmpEodResponse(await response.json(), session, session).find((candle) => candle.time === session) || null;
 }
 
 async function fetchExactStooqSession(symbolValue: string, session: string) {
@@ -315,6 +406,19 @@ export async function getExactMarketSessionPrice(symbolValue: string, session: s
   };
   if (!symbol || !/^\d{4}-\d{2}-\d{2}$/.test(session)) return unavailable;
 
+  const fmpCandle = await fetchExactFmpSession(symbol, session).catch(() => null);
+  if (fmpCandle) {
+    return {
+      symbol,
+      requestedSession: session,
+      sessionDate: session,
+      price: fmpCandle.close,
+      timestamp: null,
+      provider: "fmp",
+      priceType: "delayed_close"
+    };
+  }
+
   const stooqCandle = await fetchExactStooqSession(symbol, session).catch(() => null);
   if (stooqCandle) {
     return {
@@ -354,10 +458,19 @@ export async function getMarketCandlesWithProvider(symbolValue: string, timefram
     return { symbol, timeframe, provider: "unavailable" as MarketDataProvider, candles: [] as MarketCandle[] };
   }
 
-  const stooqCandles = await fetchStooqCandles(symbol, timeframe).catch(() => []);
-  const yahooCandles = stooqCandles.length ? [] : await getYahooMarketCandles(symbol, timeframe).catch(() => []);
-  const candles = (stooqCandles.length ? stooqCandles : yahooCandles).slice(-520);
-  const provider: MarketDataProvider = stooqCandles.length ? "stooq" : yahooCandles.length ? "yahoo" : "unavailable";
+  const fmpCandles = await fetchFmpCandles(symbol, timeframe).catch(() => []);
+  const stooqCandles = fmpCandles.length ? [] : await fetchStooqCandles(symbol, timeframe).catch(() => []);
+  const yahooCandles = fmpCandles.length || stooqCandles.length
+    ? []
+    : await getYahooMarketCandles(symbol, timeframe).catch(() => []);
+  const candles = (fmpCandles.length ? fmpCandles : stooqCandles.length ? stooqCandles : yahooCandles).slice(-520);
+  const provider: MarketDataProvider = fmpCandles.length
+    ? "fmp"
+    : stooqCandles.length
+      ? "stooq"
+      : yahooCandles.length
+        ? "yahoo"
+        : "unavailable";
   return { symbol, timeframe, provider, candles };
 }
 
