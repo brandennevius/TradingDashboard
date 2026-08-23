@@ -44,7 +44,6 @@ const brandenSidebarGroups = [
   {
     title: "Tools",
     items: [
-      { href: "/journal/branden/market-cycle", label: "Market Cycle", icon: "M" },
       { href: "/journal/branden/market-gauge", label: "Market Gauge", icon: "G" },
       { href: "/journal/branden/bottom-to-bull", label: "Bottom to Bull", icon: "B" },
       { href: "/journal/branden/time-stop", label: "Time Stop", icon: "T" },
