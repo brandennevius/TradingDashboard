@@ -135,3 +135,45 @@ test("Trade Log planned risk remains a fallback without inventing a current pric
   assert.equal(row.dollarRisk, 146);
 });
 
+test("floating P&L uses FIFO remaining lots after adds and trims", () => {
+  const tradeRow = trade({
+    symbol: "CPRT",
+    avgEntry: 30.55,
+    shares: 25,
+    stopPrice: 29,
+    risk: 200,
+    executions: [
+      { id: "entry-1", type: "ENTRY", date: "2026-08-14", time: "09:35:00", side: "LONG", shares: 55, price: 29.96, pnl: 0, commission: 0, source: "broker", sourceKey: "1" },
+      { id: "entry-2", type: "ENTRY", date: "2026-08-20", time: "10:00:00", side: "LONG", shares: 25, price: 31.846, pnl: 0, commission: 0, source: "broker", sourceKey: "2" },
+      { id: "exit-1", type: "EXIT", date: "2026-08-21", time: "10:30:00", side: "LONG", shares: 55, price: 34.02, pnl: 223.3, commission: 0, source: "broker", sourceKey: "3" }
+    ]
+  });
+
+  const row = buildOpenPositionRiskRow(
+    tradeRow,
+    { price: 33.8, date: "2026-08-21" },
+    704420,
+    undefined,
+    undefined
+  );
+
+  assert.equal(row.status, "ready");
+  assert.equal(row.stopLabel, "25 @ 29");
+  assert.equal(Number(row.entryPrice.toFixed(2)), 31.85);
+  assert.equal(Number(row.floatingPnl?.toFixed(2)), 48.85);
+});
+
+test("saved Trade Log stops remain visible when authenticated review trades are used", () => {
+  const tradeRow = trade({ symbol: "KARO", avgEntry: 63.14, shares: 20, stopPrice: 56.29, risk: 137 });
+  const row = buildOpenPositionRiskRow(
+    tradeRow,
+    { price: 63.96, date: "2026-08-21" },
+    704420,
+    undefined,
+    undefined
+  );
+
+  assert.equal(row.status, "ready");
+  assert.equal(row.stopLabel, "20 @ 56.29");
+  assert.equal(Number(row.dollarRisk?.toFixed(2)), 153.4);
+});

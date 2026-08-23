@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import type { BrokerPortfolioPosition, BrokerPortfolioSnapshot } from "@/lib/broker-portfolio-snapshot";
-import type { TradeLogEntry } from "@/lib/types";
+import type { TradeExecution, TradeLogEntry } from "@/lib/types";
 
 type Props = {
   trades: TradeLogEntry[];
@@ -34,6 +34,12 @@ type RiskRow = {
   weightPct: number | null;
   status: "ready" | "fallback" | "missing";
   note: string;
+};
+
+type OpenLot = {
+  shares: number;
+  price: number;
+  commission: number;
 };
 type PortfolioMeta = {
   currentEquity?: number;
@@ -105,6 +111,65 @@ function positive(value: unknown) {
   return Number.isFinite(number) && number > 0 ? number : null;
 }
 
+function executionTimestamp(execution: TradeExecution) {
+  return `${execution.date || "0000-00-00"}T${execution.time || "00:00:00"}`;
+}
+
+function remainingFifoLots(trade: TradeLogEntry) {
+  const executions = [...(trade.executions || [])].sort((a, b) => executionTimestamp(a).localeCompare(executionTimestamp(b)));
+  const lots: OpenLot[] = [];
+
+  executions.forEach((execution) => {
+    const shares = positive(execution.shares) ?? 0;
+    const price = positive(execution.price) ?? 0;
+
+    if (!shares || !price) {
+      return;
+    }
+
+    if (execution.type === "ENTRY") {
+      lots.push({ shares, price, commission: Number(execution.commission) || 0 });
+      return;
+    }
+
+    let remainingExitShares = shares;
+
+    while (remainingExitShares > 0.000001 && lots.length) {
+      const lot = lots[0];
+      const matchedShares = Math.min(remainingExitShares, lot.shares);
+      lot.shares -= matchedShares;
+      remainingExitShares -= matchedShares;
+
+      if (lot.shares <= 0.000001) {
+        lots.shift();
+      }
+    }
+  });
+
+  return lots.filter((lot) => lot.shares > 0.000001);
+}
+
+function fifoCostBasis(trade: TradeLogEntry, fallbackShares: number, fallbackEntryPrice: number) {
+  const lots = remainingFifoLots(trade);
+  const lotShares = lots.reduce((sum, lot) => sum + lot.shares, 0);
+
+  if (!lotShares) {
+    return {
+      costBasis: fallbackEntryPrice * fallbackShares,
+      averageEntry: fallbackEntryPrice,
+      basisSource: "average_entry" as const
+    };
+  }
+
+  const costBasis = lots.reduce((sum, lot) => sum + lot.price * lot.shares + lot.commission, 0);
+
+  return {
+    costBasis,
+    averageEntry: costBasis / lotShares,
+    basisSource: "fifo_lots" as const
+  };
+}
+
 function brokerPositionForTrade(snapshot: BrokerPortfolioSnapshot | undefined, trade: TradeLogEntry) {
   if (
     snapshot
@@ -169,17 +234,19 @@ export function buildOpenPositionRiskRow(
   const stopPrice = positive(brokerPosition?.stopPrice) ?? positive(trade.stopPrice);
   const storedRisk = Math.abs(Number(trade.risk) || 0);
   const positionValue = currentPrice && shares ? currentPrice * shares : null;
+  const basis = fifoCostBasis(trade, shares, entryPrice);
+  const effectiveEntryPrice = basis.averageEntry || entryPrice;
   const floatingPnl =
-    entryPrice && currentPrice && shares
+    currentPrice && shares && basis.costBasis
       ? trade.side === "SHORT"
-        ? (entryPrice - currentPrice) * shares
-        : (currentPrice - entryPrice) * shares
+        ? basis.costBasis - currentPrice * shares
+        : currentPrice * shares - basis.costBasis
       : null;
   const floatingPct =
-    entryPrice && currentPrice
+    basis.costBasis && floatingPnl !== null
       ? trade.side === "SHORT"
-        ? ((entryPrice - currentPrice) / entryPrice) * 100
-        : ((currentPrice - entryPrice) / entryPrice) * 100
+        ? (floatingPnl / basis.costBasis) * 100
+        : (floatingPnl / basis.costBasis) * 100
       : null;
   const levels = protectiveLevels(trade, shares, stopPrice, brokerSnapshot);
   let stopOutcome: number | null = null;
@@ -187,11 +254,11 @@ export function buildOpenPositionRiskRow(
   let status: RiskRow["status"] = "missing";
   let note = "Needs quantity-aware stop or saved risk data.";
 
-  if (entryPrice && currentPrice && shares && levels.length) {
+  if (effectiveEntryPrice && currentPrice && shares && levels.length) {
     stopOutcome = levels.reduce(
       (total, level) => total + (trade.side === "SHORT"
-        ? (entryPrice - level.price) * level.quantity
-        : (level.price - entryPrice) * level.quantity),
+        ? (effectiveEntryPrice - level.price) * level.quantity
+        : (level.price - effectiveEntryPrice) * level.quantity),
       0
     );
     barRisk = levels.reduce(
@@ -214,7 +281,7 @@ export function buildOpenPositionRiskRow(
   return {
     trade,
     shares,
-    entryPrice,
+    entryPrice: effectiveEntryPrice,
     stopLabel: levels.map((level) => `${formatPrice(level.quantity)} @ ${formatPrice(level.price)}`).join("; ") || "—",
     currentPrice,
     priceDate: marketPrice ? price?.date || "" : statementPrice ? brokerSnapshot?.coverageDate || "" : "",
@@ -226,7 +293,7 @@ export function buildOpenPositionRiskRow(
     riskPct: currentEquity && barRisk !== null ? (barRisk / currentEquity) * 100 : null,
     weightPct: currentEquity && positionValue !== null ? (positionValue / currentEquity) * 100 : null,
     status,
-    note
+    note: basis.basisSource === "fifo_lots" ? `${note} Floating P&L uses FIFO remaining-lot basis.` : note
   };
 }
 
