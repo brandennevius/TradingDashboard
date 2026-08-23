@@ -6,6 +6,7 @@ import type { TradeLogEntry } from "@/lib/types";
 type Props = {
   trades: TradeLogEntry[];
   activePortfolio: string;
+  compact?: boolean;
 };
 
 type Candle = {
@@ -202,7 +203,7 @@ function monitorPosition(
   };
 }
 
-export default function TimeStopMonitor({ trades, activePortfolio }: Props) {
+export default function TimeStopMonitor({ trades, activePortfolio, compact = false }: Props) {
   const [timeStopDays, setTimeStopDays] = useState(DEFAULT_TIME_STOP_DAYS);
   const [sortKey, setSortKey] = useState<SortKey>("status");
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
@@ -373,6 +374,7 @@ export default function TimeStopMonitor({ trades, activePortfolio }: Props) {
         <div>
           <p className="eyebrow">Time Stop / Opportunity Cost</p>
           <h3>Time Stop Monitor</h3>
+          {compact ? <span>Open-position lag check versus SPY.</span> : null}
         </div>
         <div className="time-stop-actions">
           <label>
@@ -388,50 +390,58 @@ export default function TimeStopMonitor({ trades, activePortfolio }: Props) {
         </div>
       </div>
 
-      <div className="time-stop-kpis">
-        <article>
-          <span>Open equity positions</span>
-          <strong>{monitoredPositions.length}</strong>
-        </article>
-        <article>
-          <span>Dead money</span>
-          <strong className={deadMoneyCount ? "time-stop-danger" : ""}>{deadMoneyCount}</strong>
-        </article>
-        <article>
-          <span>Not leader standard</span>
-          <strong className={notLeaderCount ? "time-stop-warning" : ""}>{notLeaderCount}</strong>
-        </article>
-        <article>
-          <span>Watch</span>
-          <strong>{watchCount}</strong>
-        </article>
-        <article>
-          <span>Healthy</span>
-          <strong className="time-stop-good">{healthyCount}</strong>
-        </article>
-        <article>
-          <span>Avg relative multiple</span>
-          <strong>{multiple(averageMultiple)}</strong>
-        </article>
-      </div>
+      {!compact ? (
+        <div className="time-stop-kpis">
+          <article>
+            <span>Open equity positions</span>
+            <strong>{monitoredPositions.length}</strong>
+          </article>
+          <article>
+            <span>Dead money</span>
+            <strong className={deadMoneyCount ? "time-stop-danger" : ""}>{deadMoneyCount}</strong>
+          </article>
+          <article>
+            <span>Not leader standard</span>
+            <strong className={notLeaderCount ? "time-stop-warning" : ""}>{notLeaderCount}</strong>
+          </article>
+          <article>
+            <span>Watch</span>
+            <strong>{watchCount}</strong>
+          </article>
+          <article>
+            <span>Healthy</span>
+            <strong className="time-stop-good">{healthyCount}</strong>
+          </article>
+          <article>
+            <span>Avg relative multiple</span>
+            <strong>{multiple(averageMultiple)}</strong>
+          </article>
+        </div>
+      ) : null}
 
       {isLoading ? <p className="benchmark-note">Loading open position and benchmark candles...</p> : null}
       {error ? <p className="benchmark-error">{error}</p> : null}
 
-      <div className="time-stop-rule-grid">
-        <article>
-          <strong>Dead money</strong>
-          <span>Held &gt; {timeStopDays} trading days and relative multiple &lt; 1.0.</span>
-        </article>
-        <article>
-          <strong>Not meeting leader standard</strong>
-          <span>Held &gt; {timeStopDays} trading days and relative multiple &lt; 2.0.</span>
-        </article>
-        <article>
-          <strong>Index-like risk</strong>
-          <span>Stock is up, but the RS line is flat while the benchmark does the heavy lifting.</span>
-        </article>
-      </div>
+      {!compact ? (
+        <div className="time-stop-rule-grid">
+          <article>
+            <strong>Dead money</strong>
+            <span>Held &gt; {timeStopDays} trading days and relative multiple &lt; 1.0.</span>
+          </article>
+          <article>
+            <strong>Not meeting leader standard</strong>
+            <span>Held &gt; {timeStopDays} trading days and relative multiple &lt; 2.0.</span>
+          </article>
+          <article>
+            <strong>Index-like risk</strong>
+            <span>Stock is up, but the RS line is flat while the benchmark does the heavy lifting.</span>
+          </article>
+        </div>
+      ) : (
+        <p className="benchmark-note">
+          Flags open equity positions held longer than {timeStopDays} trading days that are not clearly outperforming SPY.
+        </p>
+      )}
 
       <div className="time-stop-table-wrap">
         <table className="time-stop-table">

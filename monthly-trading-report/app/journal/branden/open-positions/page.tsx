@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import OpenHeatDashboard from "@/app/components/OpenHeatDashboard";
+import TimeStopMonitor from "@/app/components/TimeStopMonitor";
 import type { BrokerPortfolioSnapshot } from "@/lib/broker-portfolio-snapshot";
 import type { TradeLogEntry, TraderUser } from "@/lib/types";
 
@@ -133,6 +134,7 @@ export default function BrandenOpenPositionsPage() {
               portfolioMeta={portfolioMeta}
               brokerPortfolioSnapshots={brokerPortfolioSnapshots}
             />
+            <TimeStopMonitor trades={brandenTrades} activePortfolio={activePortfolio} compact />
           </div>
         ) : null}
       </div>
