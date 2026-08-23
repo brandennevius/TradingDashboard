@@ -16,7 +16,7 @@ type Candle = {
 
 type TimeStopStatus = "healthy" | "watch" | "lagging" | "notLeader" | "deadMoney" | "missing";
 type SortDirection = "asc" | "desc";
-type SortKey = "status" | "symbol" | "entryDate" | "daysHeld" | "stockReturn" | "spyReturn" | "excessReturn" | "spyMultiple" | "rsSlope" | "flags";
+type SortKey = "status" | "symbol" | "entryDate" | "daysHeld" | "stockReturn" | "spyReturn" | "excessReturn" | "spyMultiple" | "rsSlope" | "action";
 
 type MonitoredPosition = {
   trade: TradeLogEntry;
@@ -28,6 +28,7 @@ type MonitoredPosition = {
   spyRsSlope: number | null;
   status: TimeStopStatus;
   flags: string[];
+  action: string;
 };
 
 const DEFAULT_TIME_STOP_DAYS = 10;
@@ -164,6 +165,30 @@ function statusSeverity(status: TimeStopStatus) {
   return { deadMoney: 5, notLeader: 4, lagging: 3, watch: 2, missing: 1, healthy: 0 }[status];
 }
 
+function actionFor(status: TimeStopStatus, flags: string[]) {
+  if (status === "missing") {
+    return "Fix missing data";
+  }
+
+  if (status === "deadMoney") {
+    return "Exit candidate";
+  }
+
+  if (status === "notLeader") {
+    return "Reduce or tighten";
+  }
+
+  if (status === "lagging") {
+    return flags.includes("Negative after trigger") ? "Reduce or exit" : "Review / tighten";
+  }
+
+  if (status === "watch") {
+    return "Review thesis";
+  }
+
+  return "No action";
+}
+
 function monitorPosition(
   trade: TradeLogEntry,
   stockCandles: Candle[],
@@ -222,7 +247,8 @@ function monitorPosition(
     spyMultiple,
     spyRsSlope,
     status,
-    flags
+    flags,
+    action: actionFor(status, flags)
   };
 }
 
@@ -355,8 +381,8 @@ export default function TimeStopMonitor({ trades, activePortfolio, compact = fal
           return position.spyMultiple ?? -Infinity;
         case "rsSlope":
           return position.spyRsSlope ?? -Infinity;
-        case "flags":
-          return position.flags.join(", ");
+        case "action":
+          return position.action;
         default:
           return "";
       }
@@ -381,7 +407,7 @@ export default function TimeStopMonitor({ trades, activePortfolio, compact = fal
     }
 
     setSortKey(nextKey);
-    setSortDirection(nextKey === "symbol" || nextKey === "entryDate" || nextKey === "flags" ? "asc" : "desc");
+    setSortDirection(nextKey === "symbol" || nextKey === "entryDate" || nextKey === "action" ? "asc" : "desc");
   }
 
   function sortableHeader(key: SortKey, label: string) {
@@ -482,7 +508,7 @@ export default function TimeStopMonitor({ trades, activePortfolio, compact = fal
               <th>{sortableHeader("excessReturn", "Excess vs SPY")}</th>
               <th>{sortableHeader("spyMultiple", "SPY multiple")}</th>
               <th>{sortableHeader("rsSlope", "RS slope")}</th>
-              <th>{sortableHeader("flags", "Flags")}</th>
+              <th>{sortableHeader("action", "Action")}</th>
             </tr>
           </thead>
           <tbody>
@@ -499,7 +525,10 @@ export default function TimeStopMonitor({ trades, activePortfolio, compact = fal
                 <td className={returnClass(position.excessReturn)}>{pct(position.excessReturn)}</td>
                 <td>{multiple(position.spyMultiple)}</td>
                 <td>{pct(position.spyRsSlope)}</td>
-                <td>{position.flags.length ? position.flags.join(", ") : "No time stop issues"}</td>
+                <td>
+                  <strong>{position.action}</strong>
+                  {position.flags.length ? <small>{position.flags.join(", ")}</small> : null}
+                </td>
               </tr>
             ))}
             {!monitoredPositions.length ? (
