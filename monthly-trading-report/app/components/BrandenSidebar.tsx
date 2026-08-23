@@ -45,7 +45,6 @@ const brandenSidebarGroups = [
     title: "Tools",
     items: [
       { href: "/journal/branden/market-gauge", label: "Market Gauge", icon: "G" },
-      { href: "/journal/branden/bottom-to-bull", label: "Bottom to Bull", icon: "B" },
       { href: "/journal/branden/time-stop", label: "Time Stop", icon: "T" },
       { href: "/journal/branden/benchmark", label: "Benchmark", icon: "X" },
       { href: "/journal/branden/rprp", label: "RPRP Sizer", icon: "R" },
