@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import crypto from "node:crypto";
 import { getSessionUser } from "@/lib/auth";
 import { buildCfTradesFromExecutionHistory, parseCfStatementText } from "@/lib/cf-statement";
 import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders } from "@/lib/cf-import-idempotency";
@@ -84,6 +85,7 @@ export async function POST(request: Request) {
   try {
     const PDFParser = (await import("pdf2json")).default;
     const buffer = Buffer.from(await file.arrayBuffer());
+    const sourceHash = crypto.createHash("sha256").update(buffer).digest("hex");
     const parser = new PDFParser(undefined, true);
 
     const sourceText = await new Promise<string>((resolve, reject) => {
@@ -105,6 +107,13 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "No importable CF trades were found in that statement." }, { status: 400 });
     }
 
+    if (!parsedStatement.equityStatementDate) {
+      return NextResponse.json(
+        { error: "The statement coverage date could not be determined, so a dated broker snapshot was not stored." },
+        { status: 400 }
+      );
+    }
+
     const existingCfTrades = await listCfStatementTrades(user.id, portfolioTag);
     const existingKeys = new Set(existingCfTrades.map((trade) => trade.importRowKey));
     const existingExecutionHistory = existingCfTrades.flatMap(executionHistoryFromTrade);
@@ -119,13 +128,26 @@ export async function POST(request: Request) {
     ).map((trade) => applyManualFields(trade, existingCfTrades));
 
     const tradesChanged = !cfImportTradesEquivalent(existingCfTrades, rebuiltTrades);
+    const activeWorkingOrders = replaceActiveWorkingOrders(parsedStatement.workingOrders);
     const saved = await replaceCfStatementImport(user.id, portfolioTag, rebuiltTrades, {
       currentEquity: parsedStatement.currentEquity,
       statementEquity: parsedStatement.statementEquity,
       floatingPnl: parsedStatement.floatingPnl,
       equitySource: "CF Import",
       equityStatementDate: parsedStatement.equityStatementDate,
-      workingOrders: replaceActiveWorkingOrders(parsedStatement.workingOrders)
+      workingOrders: activeWorkingOrders
+    }, {
+      userId: user.id,
+      portfolioTag,
+      coverageDate: parsedStatement.equityStatementDate,
+      sourceHash,
+      sourceFilename: file.name,
+      balance: parsedStatement.balance,
+      currentEquity: parsedStatement.statementEquity,
+      statementEquity: parsedStatement.statementEquity,
+      floatingPnl: parsedStatement.floatingPnl,
+      openPositions: parsedStatement.openPositions,
+      workingOrders: activeWorkingOrders
     }, tradesChanged);
     const created = rebuiltTrades.filter((trade) => !existingKeys.has(trade.importRowKey)).length;
     const updated = tradesChanged ? rebuiltTrades.length - created : 0;

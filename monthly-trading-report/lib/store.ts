@@ -2,6 +2,12 @@ import fs from "fs/promises";
 import crypto from "crypto";
 import path from "path";
 import { Pool, type PoolClient } from "pg";
+import {
+  normalizeBrokerPortfolioSnapshot,
+  upsertBrokerPortfolioSnapshotCollection,
+  type BrokerPortfolioSnapshot,
+  type BrokerPortfolioSnapshotInput
+} from "./broker-portfolio-snapshot";
 import { runAtomicCfImport, type CfWorkingOrderMetadata } from "./cf-import-idempotency";
 import { normalizeTradeReviewSections } from "./trade-review";
 import { createUserDefinedWeeklyFocus, normalizeWeeklyFocus, type WeeklyFocus } from "./weekly-focus";
@@ -853,6 +859,30 @@ async function ensureSettingsTable() {
   `);
 }
 
+async function ensureBrokerPortfolioSnapshotTable() {
+  const db = getPool();
+  if (!db) return;
+  await db.query(`
+    create table if not exists broker_portfolio_snapshots (
+      user_id text not null,
+      portfolio_tag text not null,
+      coverage_date text not null,
+      source_hash text not null,
+      source_filename text not null default '',
+      source text not null default 'CF_STATEMENT_PDF',
+      balance numeric,
+      current_equity numeric,
+      statement_equity numeric,
+      floating_pnl numeric,
+      open_positions jsonb not null default '[]'::jsonb,
+      working_orders jsonb not null default '[]'::jsonb,
+      imported_at timestamptz not null default now(),
+      primary key (user_id, portfolio_tag, coverage_date)
+    );
+  `);
+  await db.query("create index if not exists broker_portfolio_snapshots_lookup_idx on broker_portfolio_snapshots (user_id, portfolio_tag, coverage_date desc)");
+}
+
 async function readLocalReports(): Promise<MonthlyReport[]> {
   if (process.env.NODE_ENV === "production") {
     return [];
@@ -1216,6 +1246,100 @@ export async function saveChecklistGradeBands(bands: ChecklistGradeBand[]) {
 export async function getBrandenPortfolioNames() {
   const settings = await getBrandenPortfolioSettings();
   return settings.portfolios;
+}
+
+function normalizeBrokerPortfolioSnapshotList(value: unknown): BrokerPortfolioSnapshot[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    try {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+      return [normalizeBrokerPortfolioSnapshot(item as BrokerPortfolioSnapshot)];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function rowToBrokerPortfolioSnapshot(row: Record<string, unknown>): BrokerPortfolioSnapshot {
+  return normalizeBrokerPortfolioSnapshot({
+    userId: String(row.user_id || ""),
+    portfolioTag: String(row.portfolio_tag || ""),
+    coverageDate: String(row.coverage_date || ""),
+    sourceHash: String(row.source_hash || ""),
+    sourceFilename: String(row.source_filename || ""),
+    source: "CF_STATEMENT_PDF",
+    importedAt: new Date(String(row.imported_at)).toISOString(),
+    balance: row.balance === null ? undefined : Number(row.balance),
+    currentEquity: row.current_equity === null ? undefined : Number(row.current_equity),
+    statementEquity: row.statement_equity === null ? undefined : Number(row.statement_equity),
+    floatingPnl: row.floating_pnl === null ? undefined : Number(row.floating_pnl),
+    openPositions: Array.isArray(row.open_positions) ? row.open_positions as never[] : [],
+    workingOrders: Array.isArray(row.working_orders) ? row.working_orders as CfWorkingOrderMetadata[] : []
+  });
+}
+
+export async function listBrokerPortfolioSnapshots(userId: string, portfolioTag?: string) {
+  const db = getPool();
+  if (!db) {
+    const settings = await readLocalSettings();
+    return normalizeBrokerPortfolioSnapshotList(settings.brandenBrokerPortfolioSnapshots)
+      .filter((snapshot) => snapshot.userId === userId && (!portfolioTag || snapshot.portfolioTag === portfolioTag));
+  }
+  try {
+    const result = portfolioTag
+      ? await db.query(
+          "select * from broker_portfolio_snapshots where user_id = $1 and portfolio_tag = $2 order by coverage_date",
+          [userId, portfolioTag]
+        )
+      : await db.query(
+          "select * from broker_portfolio_snapshots where user_id = $1 order by portfolio_tag, coverage_date",
+          [userId]
+        );
+    return result.rows.map(rowToBrokerPortfolioSnapshot);
+  } catch (error) {
+    if ((error as { code?: string }).code === "42P01") return [];
+    throw error;
+  }
+}
+
+async function upsertBrokerPortfolioSnapshotWithClient(
+  client: PoolClient,
+  input: BrokerPortfolioSnapshotInput,
+  importedAt: string
+) {
+  const snapshot = normalizeBrokerPortfolioSnapshot(input, importedAt);
+  await client.query(
+    `
+      insert into broker_portfolio_snapshots (
+        user_id, portfolio_tag, coverage_date, source_hash, source_filename, source,
+        balance, current_equity, statement_equity, floating_pnl, open_positions, working_orders, imported_at
+      ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb, $13)
+      on conflict (user_id, portfolio_tag, coverage_date) do update set
+        source_hash = excluded.source_hash,
+        source_filename = excluded.source_filename,
+        source = excluded.source,
+        balance = excluded.balance,
+        current_equity = excluded.current_equity,
+        statement_equity = excluded.statement_equity,
+        floating_pnl = excluded.floating_pnl,
+        open_positions = excluded.open_positions,
+        working_orders = excluded.working_orders,
+        imported_at = excluded.imported_at
+      where broker_portfolio_snapshots.source_hash is distinct from excluded.source_hash
+         or broker_portfolio_snapshots.balance is distinct from excluded.balance
+         or broker_portfolio_snapshots.current_equity is distinct from excluded.current_equity
+         or broker_portfolio_snapshots.statement_equity is distinct from excluded.statement_equity
+         or broker_portfolio_snapshots.floating_pnl is distinct from excluded.floating_pnl
+         or broker_portfolio_snapshots.open_positions is distinct from excluded.open_positions
+         or broker_portfolio_snapshots.working_orders is distinct from excluded.working_orders
+    `,
+    [
+      snapshot.userId, snapshot.portfolioTag, snapshot.coverageDate, snapshot.sourceHash,
+      snapshot.sourceFilename, snapshot.source, snapshot.balance, snapshot.currentEquity,
+      snapshot.statementEquity, snapshot.floatingPnl, JSON.stringify(snapshot.openPositions),
+      JSON.stringify(snapshot.workingOrders), snapshot.importedAt
+    ]
+  );
 }
 
 export async function getBrandenPortfolioSettings(): Promise<BrandenPortfolioSettings> {
@@ -2846,6 +2970,7 @@ export async function replaceCfStatementImport(
     equityStatementDate?: string;
     workingOrders?: CfWorkingOrderMetadata[];
   },
+  brokerSnapshot: BrokerPortfolioSnapshotInput,
   replaceTrades: boolean
 ) {
   const now = new Date().toISOString();
@@ -2856,6 +2981,11 @@ export async function replaceCfStatementImport(
     const previousSettings = await readLocalSettings();
     const currentPortfolioSettings = normalizeBrandenPortfolioSettings(previousSettings.brandenPortfolioNames);
     const nextPortfolioSettings = portfolioSettingsWithImportMeta(currentPortfolioSettings, portfolioTag.trim(), meta, now);
+    const nextBrokerSnapshots = upsertBrokerPortfolioSnapshotCollection(
+      normalizeBrokerPortfolioSnapshotList(previousSettings.brandenBrokerPortfolioSnapshots),
+      brokerSnapshot,
+      now
+    );
     try {
       if (replaceTrades) {
         const retained = previousTrades.filter(
@@ -2863,7 +2993,11 @@ export async function replaceCfStatementImport(
         );
         await writeLocalTrades([...retained, ...materializeCfStatementTrades(trades, portfolioTag, now)].sort(tradeLogOrder));
       }
-      await writeLocalSettings({ ...previousSettings, brandenPortfolioNames: nextPortfolioSettings });
+      await writeLocalSettings({
+        ...previousSettings,
+        brandenPortfolioNames: nextPortfolioSettings,
+        brandenBrokerPortfolioSnapshots: nextBrokerSnapshots
+      });
       return { count: trades.length, tradesReplaced: replaceTrades };
     } catch (error) {
       await writeLocalTrades(previousTrades);
@@ -2874,6 +3008,7 @@ export async function replaceCfStatementImport(
 
   await ensureTradeTable();
   await ensureSettingsTable();
+  await ensureBrokerPortfolioSnapshotTable();
   const client = await db.connect();
   try {
     return await runAtomicCfImport(
@@ -2883,6 +3018,7 @@ export async function replaceCfStatementImport(
         const currentSettings = normalizeBrandenPortfolioSettings(settingsResult.rows[0]?.value);
         const nextSettings = portfolioSettingsWithImportMeta(currentSettings, portfolioTag.trim(), meta, now);
         if (replaceTrades) await replaceCfStatementTradesWithClient(client, userId, portfolioTag, trades);
+        await upsertBrokerPortfolioSnapshotWithClient(client, brokerSnapshot, now);
         await client.query(
           `insert into app_settings (key, value) values ($1, $2::jsonb)
            on conflict (key) do update set value = excluded.value, updated_at = now()`,

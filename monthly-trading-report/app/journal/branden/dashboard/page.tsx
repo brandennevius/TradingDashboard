@@ -9,11 +9,6 @@ import {
   BarChart,
   CartesianGrid,
   Line,
-  PolarAngleAxis,
-  PolarGrid,
-  PolarRadiusAxis,
-  Radar,
-  RadarChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -330,22 +325,6 @@ export default function BrandenDashboardPage() {
     }));
   }, [closedTrades, setupTemplates]);
 
-  const tradeScoreData = useMemo(() => {
-    const profitability = Math.max(0, Math.min(100, summary.profitFactor * 35));
-    const consistency = Math.max(0, Math.min(100, summary.winRate));
-    const expectancy = Math.max(0, Math.min(100, (summary.expectancy + 1) * 50));
-    const risk = Math.max(0, Math.min(100, 100 - Math.abs(summary.avgRLoss) * 35));
-    const review = Math.max(0, Math.min(100, filteredTrades.length ? 100 - (summary.needsReview / filteredTrades.length) * 100 : 100));
-    const data = [
-      { metric: "Profit", score: profitability },
-      { metric: "Win %", score: consistency },
-      { metric: "Expectancy", score: expectancy },
-      { metric: "Risk", score: risk },
-      { metric: "Review", score: review }
-    ];
-    return { data, totalScore: average(data.map((item) => item.score)) };
-  }, [filteredTrades.length, summary]);
-
   if (tradeId) {
     return <LegacyTradeDetailHost />;
   }
@@ -465,22 +444,6 @@ export default function BrandenDashboardPage() {
                       <Bar dataKey="avgR" name="Avg R" fill="#6f8f5f" radius={[6, 6, 0, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
-                </article>
-              </div>
-
-              <div className="trade-chart-row trade-chart-row-one">
-                <article className="trade-chart-panel top-chart trade-score-card">
-                  <div className="trade-chart-heading"><h3>Trade score radar chart</h3><span>100</span></div>
-                  <ResponsiveContainer width="100%" height={320}>
-                    <RadarChart data={tradeScoreData.data} outerRadius="72%">
-                      <PolarGrid stroke="rgba(111, 116, 105, 0.28)" />
-                      <PolarAngleAxis dataKey="metric" tick={{ fill: "#6f7469", fontSize: 12, fontWeight: 800 }} />
-                      <PolarRadiusAxis angle={90} domain={[0, 100]} tick={false} axisLine={false} />
-                      <Radar name="Trade score" dataKey="score" stroke="#6f5bd4" fill="#8f7cf2" fillOpacity={0.34} strokeWidth={2.5} />
-                      <Tooltip contentStyle={chartTooltipStyle} formatter={(value) => `${Number(value).toFixed(1)} / 100`} />
-                    </RadarChart>
-                  </ResponsiveContainer>
-                  <div className="trade-score-footer"><div><span>Your Trade Score</span><strong>{tradeScoreData.totalScore.toFixed(1)}</strong></div></div>
                 </article>
               </div>
             </div>

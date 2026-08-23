@@ -10,7 +10,6 @@ type CalendarDayTradeRow = {
   date: string;
   pnl: number;
   rMultiple: number;
-  executionCount: number;
 };
 
 function numberValue(value: unknown) {
@@ -24,10 +23,6 @@ function money(value: number) {
     currency: "USD",
     maximumFractionDigits: 0
   }).format(Number.isFinite(value) ? value : 0);
-}
-
-function pct(value: number) {
-  return `${(Number.isFinite(value) ? value : 0).toFixed(2)}%`;
 }
 
 function pluralize(count: number, singular: string) {
@@ -46,6 +41,23 @@ function shiftMonth(value: string, amount: number) {
   const [year, month] = value.split("-").map(Number);
   const next = new Date(year, month - 1 + amount, 1);
   return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function formatWeekRange(start: string, end: string) {
+  const startDate = new Date(`${start}T12:00:00Z`);
+  const endDate = new Date(`${end}T12:00:00Z`);
+  const sameMonth = startDate.getUTCMonth() === endDate.getUTCMonth();
+  const startLabel = startDate.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC"
+  });
+  const endLabel = endDate.toLocaleDateString("en-US", {
+    month: sameMonth ? undefined : "short",
+    day: "numeric",
+    timeZone: "UTC"
+  });
+  return `${startLabel}–${endLabel}`;
 }
 
 function hasPartialExitTag(tags: string[]) {
@@ -84,7 +96,9 @@ function tradePnlDate(trade: TradeLogEntry) {
 function calendarRowsForDate(trades: TradeLogEntry[], date: string): CalendarDayTradeRow[] {
   return trades
     .map((trade) => {
-      const executionsForDate = (trade.executions || []).filter((execution) => execution.date === date);
+      const executionsForDate = (trade.executions || []).filter(
+        (execution) => execution.type === "EXIT" && execution.date === date
+      );
 
       if (executionsForDate.length) {
         const pnl = executionsForDate.reduce((total, execution) => total + numberValue(execution.pnl), 0);
@@ -92,12 +106,11 @@ function calendarRowsForDate(trades: TradeLogEntry[], date: string): CalendarDay
           trade,
           date,
           pnl,
-          rMultiple: numberValue(trade.risk) ? pnl / numberValue(trade.risk) : 0,
-          executionCount: executionsForDate.length
+          rMultiple: numberValue(trade.risk) ? pnl / numberValue(trade.risk) : 0
         };
       }
 
-      if (tradePnlDate(trade) !== date) {
+      if ((trade.executions || []).length || trade.status === "OPEN" || tradePnlDate(trade) !== date) {
         return null;
       }
 
@@ -106,17 +119,10 @@ function calendarRowsForDate(trades: TradeLogEntry[], date: string): CalendarDay
         trade,
         date,
         pnl,
-        rMultiple: numberValue(trade.rMultiple),
-        executionCount: 0
+        rMultiple: numberValue(trade.rMultiple)
       };
     })
     .filter((row): row is CalendarDayTradeRow => Boolean(row));
-}
-
-function dayWinRate(rows: CalendarDayTradeRow[]) {
-  const closed = rows.filter((row) => calendarRowStatus(row) !== "OPEN");
-  const wins = closed.filter((row) => calendarRowStatus(row) === "WIN");
-  return closed.length ? (wins.length / closed.length) * 100 : 0;
 }
 
 function calendarRowStatus(row: CalendarDayTradeRow) {
@@ -211,31 +217,35 @@ export default function BrandenCalendarPage() {
         inMonth,
         pnl,
         trades: dayRows.map((row) => row.trade),
-        rows: dayRows,
-        winRate: dayWinRate(dayRows)
+        rows: dayRows
       };
     });
     const weeks = Array.from({ length: 6 }, (_, weekIndex) => {
       const weekCells = cells.slice(weekIndex * 7, weekIndex * 7 + 7);
+      const inMonthCells = weekCells.filter((cell) => cell.inMonth && cell.date);
       const pnl = weekCells.reduce((total, cell) => total + cell.pnl, 0);
       const activeDays = weekCells.filter((cell) => cell.trades.length > 0).length;
 
       return {
-        label: `Week ${weekIndex + 1}`,
+        label: inMonthCells.length
+          ? formatWeekRange(inMonthCells[0]!.date, inMonthCells[inMonthCells.length - 1]!.date)
+          : "",
         pnl,
-        activeDays
+        activeDays,
+        inMonth: inMonthCells.length > 0
       };
-    });
+    }).filter((week) => week.inMonth);
     const monthRows = Object.values(rowsByDate).flat();
     const monthPnl = monthRows.reduce((total, row) => total + row.pnl, 0);
     const activeDays = Object.values(rowsByDate).filter((dayRows) => dayRows.length > 0).length;
+    const distinctTrades = new Set(monthRows.map((row) => row.trade.id)).size;
 
     return {
       cells,
       weeks,
       monthPnl,
       activeDays,
-      tradeCount: monthRows.length
+      tradeCount: distinctTrades
     };
   }, [calendarMonth, filteredTrades]);
   const selectedCalendarDay = useMemo(
@@ -249,7 +259,7 @@ export default function BrandenCalendarPage() {
         <div className="section-heading">
           <p className="eyebrow">Branden journal</p>
           <h1>Calendar</h1>
-          <p>Daily and weekly P&L grouped by the trade P&L date.</p>
+          <p>Daily and weekly realized P&amp;L grouped by exit date.</p>
         </div>
 
         {isLoading ? <p className="status">Loading calendar...</p> : null}
@@ -272,7 +282,7 @@ export default function BrandenCalendarPage() {
               <div className="calendar-month-stats">
                 <strong className={calendarSummary.monthPnl >= 0 ? "trade-positive" : "trade-negative"}>{money(calendarSummary.monthPnl)}</strong>
                 <em>{pluralize(calendarSummary.activeDays, "day")}</em>
-                <em>{pluralize(calendarSummary.tradeCount, "trade")}</em>
+                <em>{pluralize(calendarSummary.tradeCount, "realized trade")}</em>
               </div>
             </div>
 
@@ -301,7 +311,6 @@ export default function BrandenCalendarPage() {
                         <span className="calendar-day-content">
                           <strong>{money(cell.pnl)}</strong>
                           <small>{pluralize(cell.trades.length, "trade")}</small>
-                          <small>{pct(cell.winRate)}</small>
                         </span>
                       ) : null}
                     </button>
@@ -344,15 +353,14 @@ export default function BrandenCalendarPage() {
                   year: "numeric"
                 })}</h3>
                 <p>
-                  {money(selectedCalendarDay.pnl)} / {pluralize(selectedCalendarDay.rows.length, "trade")} / {pct(selectedCalendarDay.winRate)}
+                  {money(selectedCalendarDay.pnl)} / {pluralize(selectedCalendarDay.rows.length, "realized trade")}
                 </p>
               </div>
               <button className="trade-muted-button" type="button" onClick={() => setSelectedCalendarDate("")}>Close</button>
             </div>
             <div className="calendar-day-modal-summary">
               <article><span>P&L</span><strong className={selectedCalendarDay.pnl >= 0 ? "trade-positive" : "trade-negative"}>{money(selectedCalendarDay.pnl)}</strong></article>
-              <article><span>Trades</span><strong>{selectedCalendarDay.rows.length}</strong></article>
-              <article><span>Win rate</span><strong>{pct(selectedCalendarDay.winRate)}</strong></article>
+              <article><span>Realized trades</span><strong>{selectedCalendarDay.rows.length}</strong></article>
               <article><span>Total R</span><strong>{selectedCalendarDay.rows.reduce((total, row) => total + row.rMultiple, 0).toFixed(2)}R</strong></article>
             </div>
             <div className="trade-table-wrap calendar-day-table-wrap">

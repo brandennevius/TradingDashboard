@@ -2102,6 +2102,87 @@ th {
   padding: 18px;
 }
 
+.daily-weekly-focus {
+  padding: 15px 18px;
+}
+
+.daily-weekly-focus-heading {
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.daily-weekly-focus-heading > div:first-child {
+  min-width: 0;
+}
+
+.daily-weekly-focus-summary {
+  color: #303a2d;
+  font-size: 0.96rem;
+  font-weight: 800;
+  line-height: 1.45;
+  margin: 7px 0 0;
+}
+
+.daily-weekly-focus-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.daily-weekly-focus-actions > span,
+.daily-review-provenance > strong {
+  background: rgba(215, 240, 208, 0.62);
+  border-radius: 999px;
+  color: #566451;
+  font-size: 0.72rem;
+  font-weight: 950;
+  letter-spacing: 0.04em;
+  padding: 6px 9px;
+}
+
+.daily-weekly-focus-actions button {
+  min-height: 32px;
+  padding: 5px 11px;
+}
+
+.daily-weekly-focus-meta,
+.daily-review-provenance {
+  align-items: center;
+  color: #6f7469;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 0.76rem;
+  font-weight: 800;
+  gap: 6px 14px;
+}
+
+.daily-weekly-focus-editor {
+  border-top: 1px solid rgba(185, 214, 168, 0.6);
+  display: grid;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.daily-weekly-focus-editor > p {
+  color: #6f7469;
+  font-size: 0.8rem;
+  font-weight: 750;
+  margin: 0;
+}
+
+.daily-review-provenance {
+  background: rgba(241, 249, 235, 0.84);
+  border: 1px solid rgba(185, 214, 168, 0.76);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.daily-review-provenance > strong {
+  color: #3d5f38;
+}
+
 .daily-card-heading {
   align-items: center;
   display: flex;
@@ -2227,6 +2308,22 @@ th {
   line-height: 1.5;
   margin: 0;
   padding: 0 4px 2px;
+}
+
+@media (max-width: 680px) {
+  .daily-weekly-focus-heading {
+    align-items: stretch;
+    display: grid;
+  }
+
+  .daily-weekly-focus-actions {
+    justify-content: space-between;
+  }
+
+  .daily-review-provenance {
+    align-items: flex-start;
+    display: grid;
+  }
 }
 
 .branden-settings-grid {

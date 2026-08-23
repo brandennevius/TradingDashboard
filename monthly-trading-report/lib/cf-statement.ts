@@ -65,6 +65,7 @@ type ParsedCfStatement = {
   transactions: RawTransactionRow[];
   openPositions: ParsedOpenPositionRow[];
   workingOrders: ParsedWorkingOrderRow[];
+  balance: number;
   currentEquity: number;
   statementEquity: number;
   floatingPnl: number;
@@ -907,6 +908,7 @@ export function parseCfStatementText(text: string, userId: string, portfolioTag:
     transactions: transactionRows,
     openPositions,
     workingOrders,
+    balance: summary.balance,
     currentEquity: summary.balance || summary.equity,
     statementEquity: summary.equity,
     floatingPnl: summary.floatingPnl,

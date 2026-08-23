@@ -1,18 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import {
+  resolveDailyReviewProvenance,
+  type BrokerPortfolioSnapshot
+} from "@/lib/broker-portfolio-snapshot";
 import type { TradeExecution, TradeLogEntry, TraderUser } from "@/lib/types";
 import type { WeeklyFocus } from "@/lib/weekly-focus";
-
-type PortfolioMeta = {
-  currentEquity?: number;
-};
-
-type PortfolioSettingsResponse = {
-  portfolios?: string[];
-  defaultPortfolio?: string;
-  portfolioMeta?: Record<string, PortfolioMeta>;
-};
 
 type Candle = {
   time: string;
@@ -237,7 +231,7 @@ function ActivitySection({
 export default function DailyReviewPage() {
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
-  const [portfolioMeta, setPortfolioMeta] = useState<Record<string, PortfolioMeta>>({});
+  const [brokerPortfolioSnapshots, setBrokerPortfolioSnapshots] = useState<BrokerPortfolioSnapshot[]>([]);
   const [activePortfolio, setActivePortfolio] = useState("");
   const [selectedDate, setSelectedDate] = useState("");
   const [marketSeries, setMarketSeries] = useState<Record<string, Candle[]>>({});
@@ -249,6 +243,7 @@ export default function DailyReviewPage() {
   const [weeklyFocusItems, setWeeklyFocusItems] = useState("");
   const [weeklyFocusMessage, setWeeklyFocusMessage] = useState("");
   const [isSavingWeeklyFocus, setIsSavingWeeklyFocus] = useState(false);
+  const [isWeeklyFocusExpanded, setIsWeeklyFocusExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -283,7 +278,7 @@ export default function DailyReviewPage() {
 
       setUser(reviewData.user || null);
       setTrades(nextTrades);
-      setPortfolioMeta(reviewData.portfolioMeta || {});
+      setBrokerPortfolioSnapshots(Array.isArray(reviewData.brokerPortfolioSnapshots) ? reviewData.brokerPortfolioSnapshots : []);
       setActivePortfolio(String(reviewData.defaultPortfolio || ""));
       setSelectedDate(params.get("date") || latestExecutionDate || new Date().toISOString().slice(0, 10));
       if (focusResponse.ok && focusData.focus) {
@@ -315,6 +310,11 @@ export default function DailyReviewPage() {
         (trade) => trade.userId === "branden" && !trade.hidden && (!activePortfolio || trade.portfolioTag === activePortfolio)
       ),
     [activePortfolio, trades]
+  );
+
+  const provenance = useMemo(
+    () => resolveDailyReviewProvenance(brokerPortfolioSnapshots, activePortfolio, selectedDate),
+    [activePortfolio, brokerPortfolioSnapshots, selectedDate]
   );
 
   const activities = useMemo<DailyActivity[]>(() => {
@@ -357,18 +357,18 @@ export default function DailyReviewPage() {
     return rows.sort((a, b) => a.symbol.localeCompare(b.symbol));
   }, [brandenTrades, selectedDate]);
 
-  const relevantSymbols = useMemo(
-    () =>
-      sortedUnique(
-        brandenTrades
+  const relevantSymbols = useMemo(() => {
+    const executionSymbols = brandenTrades
           .filter((trade) => {
             const executions = normalizedExecutions(trade);
             return sharesBefore(executions, selectedDate) > 0 || executions.some((execution) => execution.date === selectedDate);
           })
-          .map((trade) => trade.symbol)
-      ),
-    [brandenTrades, selectedDate]
-  );
+          .map((trade) => trade.symbol);
+    const exactSnapshotSymbols = provenance.kind === "BROKER_SNAPSHOT"
+      ? provenance.snapshot?.openPositions.map((position) => position.symbol) || []
+      : [];
+    return sortedUnique([...executionSymbols, ...exactSnapshotSymbols]);
+  }, [brandenTrades, provenance, selectedDate]);
 
   useEffect(() => {
     let cancelled = false;
@@ -420,19 +420,28 @@ export default function DailyReviewPage() {
     return relevantSymbols
       .map((symbol) => {
         const symbolTrades = brandenTrades.filter((trade) => trade.symbol === symbol);
-        const side = symbolTrades[0]?.side || "LONG";
+        const snapshotPositions = provenance.kind === "BROKER_SNAPSHOT"
+          ? provenance.snapshot?.openPositions.filter((position) => position.symbol === symbol) || []
+          : [];
+        const side = snapshotPositions[0]?.side || symbolTrades[0]?.side || "LONG";
         const allExecutions = symbolTrades.flatMap(normalizedExecutions);
-        const startingShares = sharesBefore(allExecutions, selectedDate);
         const entries = allExecutions.filter((execution) => execution.date === selectedDate && execution.type === "ENTRY");
         const exits = allExecutions.filter((execution) => execution.date === selectedDate && execution.type === "EXIT");
         const entryShares = entries.reduce((sum, execution) => sum + execution.shares, 0);
         const exitShares = exits.reduce((sum, execution) => sum + execution.shares, 0);
-        const endingShares = Math.max(0, startingShares + entryShares - exitShares);
+        const reconstructedStartingShares = sharesBefore(allExecutions, selectedDate);
+        const reconstructedEndingShares = Math.max(0, reconstructedStartingShares + entryShares - exitShares);
+        const snapshotShares = snapshotPositions.length
+          ? snapshotPositions.reduce((sum, position) => sum + position.shares, 0)
+          : null;
+        const endingShares = snapshotShares ?? reconstructedEndingShares;
+        const startingShares = snapshotShares !== null
+          ? Math.max(0, endingShares - entryShares + exitShares)
+          : reconstructedStartingShares;
         const candles = (marketSeries[symbol] || []).filter((candle) => candle.time <= selectedDate);
         const selectedIndex = candles.findIndex((candle) => candle.time === selectedDate);
-        const closeIndex = selectedIndex >= 0 ? selectedIndex : candles.length - 1;
-        const close = candles[closeIndex]?.close || 0;
-        const previousClose = candles[closeIndex - 1]?.close || 0;
+        const close = selectedIndex >= 0 ? candles[selectedIndex]?.close || 0 : 0;
+        const previousClose = selectedIndex > 0 ? candles[selectedIndex - 1]?.close || 0 : 0;
 
         if (!close || !previousClose) {
           return null;
@@ -454,15 +463,21 @@ export default function DailyReviewPage() {
       })
       .filter((row): row is PerformanceRow => row !== null)
       .sort((a, b) => b.returnPercent - a.returnPercent);
-  }, [brandenTrades, marketSeries, relevantSymbols, selectedDate]);
+  }, [brandenTrades, marketSeries, provenance, relevantSymbols, selectedDate]);
 
-  const dailyPnl = performance.reduce((sum, row) => sum + row.dailyPnl, 0);
+  const missingMarketSymbols = useMemo(() => relevantSymbols.filter((symbol) => {
+    const candles = (marketSeries[symbol] || []).filter((candle) => candle.time <= selectedDate);
+    const selectedIndex = candles.findIndex((candle) => candle.time === selectedDate);
+    return selectedIndex <= 0 || !candles[selectedIndex]?.close || !candles[selectedIndex - 1]?.close;
+  }), [marketSeries, relevantSymbols, selectedDate]);
+  const marketEvidenceComplete = !isLoadingMarket && missingMarketSymbols.length === 0;
+  const dailyPnl = marketEvidenceComplete ? performance.reduce((sum, row) => sum + row.dailyPnl, 0) : null;
   const startingMarketValue = performance.reduce((sum, row) => sum + Math.abs(row.startShares * row.previousClose), 0);
-  const dailyReturn = startingMarketValue ? (dailyPnl / startingMarketValue) * 100 : 0;
+  const dailyReturn = dailyPnl !== null && startingMarketValue ? (dailyPnl / startingMarketValue) * 100 : null;
   const closedActivities = activities.filter((activity) => activity.kind === "closed");
   const openedActivities = activities.filter((activity) => activity.kind === "opened");
   const updatedActivities = activities.filter((activity) => activity.kind === "added" || activity.kind === "reduced");
-  const selectedPortfolioEquity = activePortfolio ? portfolioMeta[activePortfolio]?.currentEquity : undefined;
+  const selectedPortfolioEquity = provenance.accountEquity;
 
   async function saveWeeklyFocus(clear = false) {
     setIsSavingWeeklyFocus(true);
@@ -513,19 +528,34 @@ export default function DailyReviewPage() {
 
         {!isLoading && !error ? (
           <>
-            <section className="daily-review-card">
-              <div className="daily-card-heading">
+            <section className="daily-review-card daily-weekly-focus">
+              <div className="daily-card-heading daily-weekly-focus-heading">
                 <div>
                   <p className="eyebrow">Weekend review</p>
                   <h2>Weekly Process Focus</h2>
+                  <p className="daily-weekly-focus-summary">
+                    {weeklyFocus?.summary || "No weekly process focus is currently set."}
+                  </p>
                 </div>
-                <span>{weeklyFocus?.status || "NOT_SET"}</span>
+                <div className="daily-weekly-focus-actions">
+                  <span>{weeklyFocus?.status || "NOT_SET"}</span>
+                  <button
+                    type="button"
+                    className="secondary"
+                    aria-expanded={isWeeklyFocusExpanded}
+                    aria-controls="weekly-focus-editor"
+                    onClick={() => setIsWeeklyFocusExpanded((expanded) => !expanded)}
+                  >
+                    {isWeeklyFocusExpanded ? "Close" : user?.readOnly ? "View" : "Edit"}
+                  </button>
+                </div>
               </div>
-              <p>
-                This is copied exactly into each daily snapshot until you replace or clear it.
-                {weeklyFocus?.week_start ? ` Active week starts ${formatDate(weeklyFocus.week_start)}.` : ""}
-              </p>
-              <div style={{ display: "grid", gap: "0.75rem" }}>
+              <div className="daily-weekly-focus-meta">
+                <span>{weeklyFocus?.week_start ? `Week of ${formatDate(weeklyFocus.week_start)}` : "No active week"}</span>
+                <span>Used unchanged by Daily Snapshot and Market Review</span>
+              </div>
+              {isWeeklyFocusExpanded ? <div id="weekly-focus-editor" className="daily-weekly-focus-editor">
+                <p>This is copied exactly into each daily snapshot and market review until you replace or clear it.</p>
                 <label>
                   Summary
                   <textarea
@@ -557,31 +587,48 @@ export default function DailyReviewPage() {
                   </div>
                 ) : null}
                 {weeklyFocusMessage ? <p className="status">{weeklyFocusMessage}</p> : null}
-              </div>
+              </div> : null}
+            </section>
+
+            <section className="daily-review-provenance" aria-label="Daily Review data provenance">
+              <strong>{provenance.label}</strong>
+              <span>Selected session: {selectedDate}</span>
+              {provenance.anchorCoverageDate ? <span>Broker anchor: {provenance.anchorCoverageDate}</span> : <span>No dated broker anchor</span>}
+              <span>Valuation: exact-session historical closes</span>
+              {provenance.kind === "BROKER_SNAPSHOT" && provenance.snapshot ? (
+                <span title={provenance.snapshot.sourceHash}>Source SHA-256: {provenance.snapshot.sourceHash.slice(0, 12)}…</span>
+              ) : null}
             </section>
 
             <section className="daily-review-hero">
               <div>
                 <span>Tracked daily return</span>
-                <strong className={dailyReturn >= 0 ? "daily-positive" : "daily-negative"}>
-                  {isLoadingMarket ? "Loading..." : formatPercent(dailyReturn)}
+                <strong className={dailyReturn === null ? "" : dailyReturn >= 0 ? "daily-positive" : "daily-negative"}>
+                  {isLoadingMarket ? "Loading..." : dailyReturn === null ? "—" : formatPercent(dailyReturn)}
                 </strong>
               </div>
               <div>
                 <span>Tracked daily P&amp;L</span>
-                <strong className={dailyPnl >= 0 ? "daily-positive" : "daily-negative"}>
-                  {isLoadingMarket ? "Loading..." : formatCurrency(dailyPnl)}
+                <strong className={dailyPnl === null ? "" : dailyPnl >= 0 ? "daily-positive" : "daily-negative"}>
+                  {isLoadingMarket ? "Loading..." : dailyPnl === null ? "—" : formatCurrency(dailyPnl)}
                 </strong>
               </div>
               <div>
-                <span>Portfolio equity</span>
-                <strong>{selectedPortfolioEquity ? formatCurrency(selectedPortfolioEquity) : "—"}</strong>
+                <span>Broker-exact equity</span>
+                <strong>{selectedPortfolioEquity !== null ? formatCurrency(selectedPortfolioEquity) : "—"}</strong>
+                <small>{provenance.kind === "BROKER_SNAPSHOT" ? `As of ${selectedDate}` : "Requires an exact-date broker snapshot"}</small>
               </div>
               <div>
                 <span>Position changes</span>
                 <strong>{activities.length}</strong>
               </div>
             </section>
+
+            {!isLoadingMarket && missingMarketSymbols.length ? (
+              <p className="status error">
+                Exact-session historical closes are unavailable for {missingMarketSymbols.join(", ")}. Daily P&amp;L and return remain unavailable rather than using stale prices.
+              </p>
+            ) : null}
 
             <section className="daily-activity-overview">
               <div className="daily-section-heading">
@@ -663,8 +710,11 @@ export default function DailyReviewPage() {
             </section>
 
             <p className="daily-review-disclaimer">
-              This version reconstructs activity from saved executions and estimates daily performance from market closes.
-              Broker-exact total return will require storing a portfolio equity snapshot at each market close.
+              {provenance.kind === "BROKER_SNAPSHOT"
+                ? "Position state and equity use the dated broker snapshot. Daily performance uses exact-session historical closes and saved executions."
+                : provenance.kind === "BROKER_ANCHORED_RECONSTRUCTION"
+                  ? `Position activity is reconstructed from the ${provenance.anchorCoverageDate} broker anchor and saved executions. Daily performance uses exact-session historical closes; equity is not claimed for ${selectedDate}.`
+                  : "Position activity is reconstructed from saved executions and exact-session historical closes. No broker-exact equity is claimed for this date."}
             </p>
           </>
         ) : null}

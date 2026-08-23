@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createApiTimer } from "@/lib/apiTiming";
 import { getSessionUser } from "@/lib/auth";
-import { getBrandenPortfolioSettings, listBrandenDailyReviewTrades } from "@/lib/store";
+import { getBrandenPortfolioSettings, listBrandenDailyReviewTrades, listBrokerPortfolioSnapshots } from "@/lib/store";
 
 export async function GET() {
   const logTiming = createApiTimer("/api/journal/branden/daily-review");
@@ -13,7 +13,11 @@ export async function GET() {
   }
 
   try {
-    const [trades, portfolioSettings] = await Promise.all([listBrandenDailyReviewTrades(), getBrandenPortfolioSettings()]);
+    const [trades, portfolioSettings, brokerPortfolioSnapshots] = await Promise.all([
+      listBrandenDailyReviewTrades(),
+      getBrandenPortfolioSettings(),
+      listBrokerPortfolioSnapshots(user.id)
+    ]);
     logTiming(200, { trades: trades.length, portfolios: portfolioSettings.portfolios.length });
 
     return NextResponse.json({
@@ -21,7 +25,7 @@ export async function GET() {
       trades,
       portfolios: portfolioSettings.portfolios,
       defaultPortfolio: portfolioSettings.defaultPortfolio,
-      portfolioMeta: portfolioSettings.portfolioMeta || {}
+      brokerPortfolioSnapshots
     });
   } catch (error) {
     logTiming(500, { error: error instanceof Error ? error.message : "unknown" });

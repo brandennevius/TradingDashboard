@@ -65,13 +65,6 @@ const brandenSidebarGroups = [
 export default function BrandenSidebar({ activeHref, accountActions = [] }: BrandenSidebarProps) {
   return (
     <aside className="branden-journal-sidebar">
-      <div className="branden-sidebar-brand">
-        <span className="branden-sidebar-badge">BN</span>
-        <div>
-          <strong>Dashboard</strong>
-          <span>Branden journal</span>
-        </div>
-      </div>
       <nav className="branden-sidebar-nav" aria-label="Branden journal navigation">
         {brandenSidebarGroups.map((group) => {
           const items: BrandenSidebarItem[] =
