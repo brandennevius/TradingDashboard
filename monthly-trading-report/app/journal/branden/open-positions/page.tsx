@@ -104,24 +104,11 @@ export default function BrandenOpenPositionsPage() {
     () => trades.filter((trade) => trade.userId === "branden" && !trade.hidden),
     [trades]
   );
-  const openPositionCount = useMemo(
-    () =>
-      brandenTrades.filter((trade) => trade.status === "OPEN" && (!activePortfolio || trade.portfolioTag === activePortfolio)).length,
-    [activePortfolio, brandenTrades]
-  );
   const openTradeDetail = (tradeId: string) => {
     window.location.href = `/journal/branden/dashboard?tradeId=${encodeURIComponent(tradeId)}`;
   };
   return (
     <div className="branden-journal-content">
-        <header className="branden-route-header">
-          <div>
-            <p className="eyebrow">Branden journal</p>
-            <h1>Open Positions</h1>
-            <span>{openPositionCount} open {openPositionCount === 1 ? "position" : "positions"}</span>
-          </div>
-        </header>
-
         {error ? <p className="status error">{error}</p> : null}
         {isLoading ? <p className="status">Loading open positions...</p> : null}
 

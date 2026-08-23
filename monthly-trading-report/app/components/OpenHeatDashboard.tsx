@@ -401,56 +401,36 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
         <div>
           <p className="eyebrow">REBAR / Balance at Risk</p>
           <h3>Open Positions</h3>
+          <span>
+            {openPositions.length} open {openPositions.length === 1 ? "position" : "positions"} · Position state through{" "}
+            {brokerSnapshot?.coverageDate || importedMeta?.equityStatementDate || "Trade Log"} · Prices through {latestPriceDate}
+          </span>
         </div>
         <span className={`open-heat-status ${riskState === "complete" ? "allowed" : "blocked"}`}>
           {riskState === "complete" ? "Risk data complete" : riskState === "fallback" ? "Trade Log fallback" : "Risk data incomplete"}
         </span>
       </div>
 
-      <div className="open-heat-warning">
-        <strong>Position state through {brokerSnapshot?.coverageDate || importedMeta?.equityStatementDate || "Trade Log"}. Prices through {latestPriceDate}.</strong>
-      </div>
-
       <div className="open-heat-kpi-grid">
         <article>
-          <span>Statement balance</span>
-          <strong>{formatCurrency(accountBalance)}</strong>
-        </article>
-        <article>
-          <span>Statement equity</span>
+          <span>Account equity</span>
           <strong>{formatCurrency(accountEquity)}</strong>
+          <small>Balance {formatCurrency(accountBalance)} · Statement P&L {formatCurrency(statementPnl)} / {formatPercent(statementPnlPct)}</small>
         </article>
         <article>
-          <span>B-A-R / giveback $</span>
+          <span>Balance at risk</span>
           <strong className={totalOpenHeat !== null && totalOpenHeat > 0 ? "open-heat-negative" : ""}>{formatCurrency(totalOpenHeat)}</strong>
+          <small>{balanceAtRiskPct === null ? "—" : `-${formatPercent(balanceAtRiskPct)}`} if all current stops are hit</small>
         </article>
         <article>
-          <span>B-A-R / giveback %</span>
-          <strong className={balanceAtRiskPct !== null && balanceAtRiskPct > 0 ? "open-heat-negative" : ""}>{balanceAtRiskPct === null ? "—" : `-${formatPercent(balanceAtRiskPct)}`}</strong>
-        </article>
-        <article>
-          <span>Statement P&L $</span>
-          <strong className={statementPnl !== null && statementPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatCurrency(statementPnl)}</strong>
-        </article>
-        <article>
-          <span>Statement P&L %</span>
-          <strong className={statementPnlPct !== null && statementPnlPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatPercent(statementPnlPct)}</strong>
-        </article>
-        <article>
-          <span>Net stop P&L</span>
+          <span>Stop outcome</span>
           <strong className={netStopPnl !== null && netStopPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatCurrency(netStopPnl)}</strong>
-        </article>
-        <article>
-          <span>Net stop P&L %</span>
-          <strong className={netStopPnlPct !== null && netStopPnlPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>{formatPercent(netStopPnlPct)}</strong>
-        </article>
-        <article>
-          <span>Profitable stops locked</span>
-          <strong className={profitableStopProfit !== null && profitableStopProfit > 0 ? "open-heat-positive" : ""}>{formatCurrency(profitableStopProfit)}</strong>
+          <small>Profit locked {formatCurrency(profitableStopProfit)} · Net stop P&L {formatPercent(netStopPnlPct)}</small>
         </article>
         <article>
           <span>Worst-case equity</span>
           <strong>{formatCurrency(worstCaseEquity)}</strong>
+          <small>Current equity minus balance at risk</small>
         </article>
       </div>
 

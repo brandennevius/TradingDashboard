@@ -3227,7 +3227,7 @@ th {
   border: 1px solid #b9d6a8;
   border-radius: 8px;
   display: grid;
-  gap: 16px;
+  gap: 14px;
   padding: clamp(14px, 2vw, 22px);
 }
 
@@ -3301,9 +3301,9 @@ th {
   border: 1px solid rgba(185, 214, 168, 0.72);
   border-radius: 8px;
   display: grid;
-  gap: 6px;
-  min-height: 96px;
-  padding: 14px;
+  gap: 7px;
+  min-height: 82px;
+  padding: 12px 14px;
 }
 
 .open-heat-kpi-grid span {
@@ -3316,8 +3316,15 @@ th {
 
 .open-heat-kpi-grid strong {
   color: #2f352d;
-  font-size: clamp(1.35rem, 2vw, 2rem);
+  font-size: clamp(1.25rem, 1.8vw, 1.85rem);
   line-height: 1;
+}
+
+.open-heat-kpi-grid small {
+  color: #6f7469;
+  font-size: 0.78rem;
+  font-weight: 850;
+  line-height: 1.25;
 }
 
 .open-heat-positive {
