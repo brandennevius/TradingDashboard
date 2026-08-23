@@ -4028,6 +4028,7 @@ th {
 }
 
 .time-stop-status.watch,
+.time-stop-status.lagging,
 .time-stop-status.not-leader {
   background: rgba(246, 230, 200, 0.72);
   color: #8c6a4a;

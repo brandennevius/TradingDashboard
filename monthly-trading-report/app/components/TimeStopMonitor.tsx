@@ -14,15 +14,16 @@ type Candle = {
   close: number;
 };
 
-type TimeStopStatus = "healthy" | "watch" | "notLeader" | "deadMoney" | "missing";
+type TimeStopStatus = "healthy" | "watch" | "lagging" | "notLeader" | "deadMoney" | "missing";
 type SortDirection = "asc" | "desc";
-type SortKey = "status" | "symbol" | "entryDate" | "daysHeld" | "stockReturn" | "spyReturn" | "spyMultiple" | "rsSlope" | "flags";
+type SortKey = "status" | "symbol" | "entryDate" | "daysHeld" | "stockReturn" | "spyReturn" | "excessReturn" | "spyMultiple" | "rsSlope" | "flags";
 
 type MonitoredPosition = {
   trade: TradeLogEntry;
   daysHeld: number;
   stockReturn: number;
   spyReturn: number;
+  excessReturn: number | null;
   spyMultiple: number | null;
   spyRsSlope: number | null;
   status: TimeStopStatus;
@@ -50,6 +51,18 @@ function multiple(value: number | null) {
   }
 
   return `${value.toFixed(2)}x`;
+}
+
+function statusLabel(status: TimeStopStatus) {
+  const labels: Record<TimeStopStatus, string> = {
+    healthy: "Healthy",
+    watch: "Watch",
+    lagging: "Lagging",
+    notLeader: "Not leader",
+    deadMoney: "Dead money",
+    missing: "Missing"
+  };
+  return labels[status];
 }
 
 function returnClass(value: number | null) {
@@ -148,7 +161,7 @@ function statusClass(status: TimeStopStatus) {
 }
 
 function statusSeverity(status: TimeStopStatus) {
-  return { deadMoney: 4, notLeader: 3, watch: 2, missing: 1, healthy: 0 }[status];
+  return { deadMoney: 5, notLeader: 4, lagging: 3, watch: 2, missing: 1, healthy: 0 }[status];
 }
 
 function monitorPosition(
@@ -163,6 +176,7 @@ function monitorPosition(
   const daysHeld = candlesFromDate(spyCandles, trade.entryDate).length;
   const currentStockReturn = stockReturn(trade, Number(latestStock?.close) || 0);
   const spyReturn = benchmarkReturn(spyEntry, latestSpy);
+  const excessReturn = currentStockReturn === null ? null : currentStockReturn - spyReturn;
   const spyMultiple = relativeMultiple(currentStockReturn, spyReturn);
   const spyRsSlope = rsLineSlope(stockCandles, spyCandles, trade.entryDate);
   const flags: string[] = [];
@@ -171,10 +185,16 @@ function monitorPosition(
     flags.push("Missing current price or entry price");
   }
 
-  if (daysHeld > timeStopDays && spyMultiple !== null && spyMultiple < 1) {
-    flags.push("Dead money");
-  } else if (daysHeld > timeStopDays && spyMultiple !== null && spyMultiple < 2) {
-    flags.push("Not meeting leader standard");
+  if (daysHeld > timeStopDays && currentStockReturn !== null) {
+    if (spyMultiple !== null && spyMultiple < 1) {
+      flags.push("Dead money");
+    } else if (spyMultiple !== null && spyMultiple < 2) {
+      flags.push("Not meeting leader standard");
+    } else if (spyMultiple === null && excessReturn !== null && excessReturn < 0) {
+      flags.push("Lagging SPY");
+    } else if (currentStockReturn < 0) {
+      flags.push("Negative after trigger");
+    }
   }
 
   if (daysHeld > timeStopDays && currentStockReturn !== null && currentStockReturn > 0 && spyRsSlope !== null && Math.abs(spyRsSlope) < 0.25) {
@@ -187,6 +207,8 @@ function monitorPosition(
       ? "deadMoney"
       : flags.includes("Not meeting leader standard")
         ? "notLeader"
+        : flags.includes("Lagging SPY")
+          ? "lagging"
         : flags.length
           ? "watch"
           : "healthy";
@@ -196,6 +218,7 @@ function monitorPosition(
     daysHeld,
     stockReturn: currentStockReturn || 0,
     spyReturn,
+    excessReturn,
     spyMultiple,
     spyRsSlope,
     status,
@@ -326,6 +349,8 @@ export default function TimeStopMonitor({ trades, activePortfolio, compact = fal
           return position.stockReturn;
         case "spyReturn":
           return position.spyReturn;
+        case "excessReturn":
+          return position.excessReturn ?? -Infinity;
         case "spyMultiple":
           return position.spyMultiple ?? -Infinity;
         case "rsSlope":
@@ -440,6 +465,7 @@ export default function TimeStopMonitor({ trades, activePortfolio, compact = fal
       ) : (
         <p className="benchmark-note">
           Flags open equity positions held longer than {timeStopDays} trading days that are not clearly outperforming SPY.
+          If SPY is negative, the table uses excess return instead of a positive-market multiple.
         </p>
       )}
 
@@ -453,6 +479,7 @@ export default function TimeStopMonitor({ trades, activePortfolio, compact = fal
               <th>{sortableHeader("daysHeld", "Days held")}</th>
               <th>{sortableHeader("stockReturn", "Stock return")}</th>
               <th>{sortableHeader("spyReturn", "SPY return")}</th>
+              <th>{sortableHeader("excessReturn", "Excess vs SPY")}</th>
               <th>{sortableHeader("spyMultiple", "SPY multiple")}</th>
               <th>{sortableHeader("rsSlope", "RS slope")}</th>
               <th>{sortableHeader("flags", "Flags")}</th>
@@ -462,13 +489,14 @@ export default function TimeStopMonitor({ trades, activePortfolio, compact = fal
             {sortedPositions.map((position) => (
               <tr key={position.trade.id}>
                 <td>
-                  <span className={`time-stop-status ${statusClass(position.status)}`}>{position.status.replace(/([A-Z])/g, " $1")}</span>
+                  <span className={`time-stop-status ${statusClass(position.status)}`}>{statusLabel(position.status)}</span>
                 </td>
                 <td>#{position.trade.symbol}</td>
                 <td>{position.trade.entryDate}</td>
                 <td>{position.daysHeld}</td>
                 <td className={returnClass(position.stockReturn)}>{pct(position.stockReturn)}</td>
                 <td className={returnClass(position.spyReturn)}>{pct(position.spyReturn)}</td>
+                <td className={returnClass(position.excessReturn)}>{pct(position.excessReturn)}</td>
                 <td>{multiple(position.spyMultiple)}</td>
                 <td>{pct(position.spyRsSlope)}</td>
                 <td>{position.flags.length ? position.flags.join(", ") : "No time stop issues"}</td>
@@ -476,7 +504,7 @@ export default function TimeStopMonitor({ trades, activePortfolio, compact = fal
             ))}
             {!monitoredPositions.length ? (
               <tr>
-                <td className="trade-empty" colSpan={9}>
+                <td className="trade-empty" colSpan={10}>
                   No open equity positions available for time stop monitoring.
                 </td>
               </tr>
