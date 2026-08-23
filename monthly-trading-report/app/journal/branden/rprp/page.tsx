@@ -69,22 +69,9 @@ export default function BrandenRprpPage() {
   }, []);
 
   const brandenTrades = useMemo(() => trades.filter((trade) => trade.userId === "branden" && !trade.hidden), [trades]);
-  const openPositionCount = useMemo(
-    () =>
-      brandenTrades.filter((trade) => trade.status === "OPEN" && (!activePortfolio || trade.portfolioTag === activePortfolio)).length,
-    [activePortfolio, brandenTrades]
-  );
 
   return (
     <div className="branden-journal-content">
-        <header className="branden-route-header">
-          <div>
-            <p className="eyebrow">Branden journal</p>
-            <h1>RPRP Sizer</h1>
-            <span>{openPositionCount} current {openPositionCount === 1 ? "holding" : "holdings"} analyzed</span>
-          </div>
-        </header>
-
         {error ? <p className="status error">{error}</p> : null}
         {isLoading ? <p className="status">Loading RPRP portfolio data...</p> : null}
         {!isLoading && !error ? <RprpSizer trades={brandenTrades} activePortfolio={activePortfolio} portfolioMeta={portfolioMeta} /> : null}
