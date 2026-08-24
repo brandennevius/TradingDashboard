@@ -126,9 +126,12 @@ export default function BrandenSettingsPage() {
   const {
     canGenerateSnapshot,
     generateDailySnapshot,
+    generateAndSendDailySnapshot,
     generateMtdSnapshot,
+    generateAndSendMtdSnapshot,
     isGeneratingDailySnapshot,
-    isGeneratingMtdSnapshot
+    isGeneratingMtdSnapshot,
+    isMtdEmailConfigured
   } = useBrandenSnapshotActions();
   const backupInputRef = useRef<HTMLInputElement | null>(null);
   const [user, setUser] = useState<TraderUser | null>(null);
@@ -321,16 +324,23 @@ export default function BrandenSettingsPage() {
             <div className="branden-settings-grid">
               <article className="branden-settings-card">
                 <span className="eyebrow">Reports</span>
-                <h4>Snapshot downloads</h4>
-                <p>Generate a Daily or Month-to-Date snapshot for download without sending an email.</p>
+                <h4>Snapshot reports</h4>
+                <p>Generate and email Daily or Month-to-Date snapshots from the selected portfolio. Download-only actions remain available here for validation.</p>
                 <div className="branden-settings-actions">
+                  <button className="trade-primary-button" type="button" disabled={!canGenerateSnapshot || isGeneratingDailySnapshot} onClick={generateAndSendDailySnapshot}>
+                    {isGeneratingDailySnapshot ? "Generating Daily Snapshot..." : "Generate and Send Daily Snapshot"}
+                  </button>
+                  <button className="trade-primary-button" type="button" disabled={!canGenerateSnapshot || isGeneratingMtdSnapshot || !isMtdEmailConfigured} onClick={generateAndSendMtdSnapshot}>
+                    {isGeneratingMtdSnapshot ? "Generating MTD Snapshot..." : "Generate and Send MTD Snapshot"}
+                  </button>
                   <button className="trade-muted-button" type="button" disabled={!canGenerateSnapshot || isGeneratingDailySnapshot} onClick={generateDailySnapshot}>
-                    {isGeneratingDailySnapshot ? "Generating Daily Snapshot..." : "Generate Daily Snapshot"}
+                    Download Daily Snapshot Only
                   </button>
                   <button className="trade-muted-button" type="button" disabled={!canGenerateSnapshot || isGeneratingMtdSnapshot} onClick={generateMtdSnapshot}>
-                    {isGeneratingMtdSnapshot ? "Generating MTD Snapshot..." : "Generate MTD Snapshot"}
+                    Download MTD Snapshot Only
                   </button>
                 </div>
+                {!isMtdEmailConfigured ? <p className="muted">MTD email delivery is disabled until SMTP settings are configured.</p> : null}
               </article>
               <article className="branden-settings-card">
                 <span className="eyebrow">Backup</span>

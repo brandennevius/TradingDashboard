@@ -8,6 +8,9 @@ type BrandenSnapshotActions = {
   isGeneratingMtdSnapshot: boolean;
   generateDailySnapshot: () => Promise<void>;
   generateMtdSnapshot: () => Promise<void>;
+  generateAndSendDailySnapshot: () => Promise<void>;
+  generateAndSendMtdSnapshot: () => Promise<void>;
+  isMtdEmailConfigured: boolean;
 };
 
 const BrandenSnapshotActionsContext = createContext<BrandenSnapshotActions | null>(null);

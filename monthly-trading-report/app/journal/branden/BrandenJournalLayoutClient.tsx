@@ -321,22 +321,6 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   }
 
   const accountActions = [
-    ...(canGenerateSnapshot ? [
-      {
-        key: "generate-send-mtd-snapshot",
-        label: "Generate and Send MTD Snapshot",
-        icon: "E",
-        disabled: isGeneratingMtdSnapshot || !mtdEmailConfigured,
-        onClick: () => generateMtdSnapshot(true)
-      },
-      {
-        key: "generate-send-daily-snapshot",
-        label: isGeneratingSnapshot ? "Generating snapshot..." : "Generate and Send Daily Snapshot",
-        icon: "S",
-        disabled: isGeneratingSnapshot,
-        onClick: () => generateSnapshot(true)
-      }
-    ] : []),
     ...(canEditBrandenJournal ? [
         {
           key: "import-broker-statement",
@@ -371,7 +355,10 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
           isGeneratingDailySnapshot: isGeneratingSnapshot,
           isGeneratingMtdSnapshot,
           generateDailySnapshot: () => generateSnapshot(false),
-          generateMtdSnapshot: () => generateMtdSnapshot(false)
+          generateMtdSnapshot: () => generateMtdSnapshot(false),
+          generateAndSendDailySnapshot: () => generateSnapshot(true),
+          generateAndSendMtdSnapshot: () => generateMtdSnapshot(true),
+          isMtdEmailConfigured: mtdEmailConfigured
         }}
       >
         {children}

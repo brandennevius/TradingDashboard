@@ -2352,6 +2352,25 @@ th {
   gap: 8px;
 }
 
+.branden-settings-actions .trade-primary-button {
+  background: #71925f;
+  border: 1px solid rgba(79, 112, 69, 0.24);
+  border-radius: 8px;
+  color: #fffdf2;
+  cursor: pointer;
+  font-weight: 900;
+  padding: 10px 14px;
+}
+
+.branden-settings-actions .trade-primary-button:hover:not(:disabled) {
+  background: #5f7d50;
+}
+
+.branden-settings-actions .trade-primary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .portfolio-default-pill {
   background: rgba(79, 112, 69, 0.12);
   border: 1px solid rgba(79, 112, 69, 0.18);
