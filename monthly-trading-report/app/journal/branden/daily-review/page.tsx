@@ -358,16 +358,21 @@ export default function DailyReviewPage() {
   }, [brandenTrades, selectedDate]);
 
   const relevantSymbols = useMemo(() => {
-    const executionSymbols = brandenTrades
-          .filter((trade) => {
-            const executions = normalizedExecutions(trade);
-            return sharesBefore(executions, selectedDate) > 0 || executions.some((execution) => execution.date === selectedDate);
-          })
-          .map((trade) => trade.symbol);
-    const exactSnapshotSymbols = provenance.kind === "BROKER_SNAPSHOT"
-      ? provenance.snapshot?.openPositions.map((position) => position.symbol) || []
-      : [];
-    return sortedUnique([...executionSymbols, ...exactSnapshotSymbols]);
+    const dailyExecutionSymbols = brandenTrades
+      .filter((trade) => normalizedExecutions(trade).some((execution) => execution.date === selectedDate))
+      .map((trade) => trade.symbol);
+
+    if (provenance.kind === "BROKER_SNAPSHOT") {
+      const snapshotSymbols = provenance.snapshot?.openPositions.map((position) => position.symbol) || [];
+      return sortedUnique([...snapshotSymbols, ...dailyExecutionSymbols]);
+    }
+
+    return sortedUnique(brandenTrades
+      .filter((trade) => {
+        const executions = normalizedExecutions(trade);
+        return sharesBefore(executions, selectedDate) > 0 || executions.some((execution) => execution.date === selectedDate);
+      })
+      .map((trade) => trade.symbol));
   }, [brandenTrades, provenance, selectedDate]);
 
   useEffect(() => {
@@ -470,8 +475,7 @@ export default function DailyReviewPage() {
     const selectedIndex = candles.findIndex((candle) => candle.time === selectedDate);
     return selectedIndex <= 0 || !candles[selectedIndex]?.close || !candles[selectedIndex - 1]?.close;
   }), [marketSeries, relevantSymbols, selectedDate]);
-  const marketEvidenceComplete = !isLoadingMarket && missingMarketSymbols.length === 0;
-  const dailyPnl = marketEvidenceComplete ? performance.reduce((sum, row) => sum + row.dailyPnl, 0) : null;
+  const dailyPnl = !isLoadingMarket && performance.length ? performance.reduce((sum, row) => sum + row.dailyPnl, 0) : null;
   const startingMarketValue = performance.reduce((sum, row) => sum + Math.abs(row.startShares * row.previousClose), 0);
   const dailyReturn = dailyPnl !== null && startingMarketValue ? (dailyPnl / startingMarketValue) * 100 : null;
   const closedActivities = activities.filter((activity) => activity.kind === "closed");
@@ -626,7 +630,7 @@ export default function DailyReviewPage() {
 
             {!isLoadingMarket && missingMarketSymbols.length ? (
               <p className="status error">
-                Exact-session historical closes are unavailable for {missingMarketSymbols.join(", ")}. Daily P&amp;L and return remain unavailable rather than using stale prices.
+                Exact-session historical closes are unavailable for {missingMarketSymbols.join(", ")}. These instruments are excluded from tracked daily P&amp;L and return rather than using stale prices.
               </p>
             ) : null}
 
