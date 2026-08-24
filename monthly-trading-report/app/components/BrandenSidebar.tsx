@@ -48,7 +48,6 @@ const brandenSidebarGroups = [
       { href: "/journal/branden/benchmark", label: "Benchmark", icon: "X" },
       { href: "/journal/branden/rprp", label: "RPRP Sizer", icon: "R" },
       { href: "/journal/branden/setup-builder", label: "Setup Builder", icon: "S" },
-      { href: "/journal/branden/ai-knowledge", label: "AI Knowledge", icon: "K" },
       { href: "/journal/branden/portfolios", label: "Portfolios", icon: "P" }
     ]
   },
