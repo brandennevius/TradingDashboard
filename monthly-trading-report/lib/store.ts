@@ -2752,6 +2752,72 @@ export async function listBrandenDailyReviewTrades() {
   return result.rows.map(rowToDailyReviewTrade);
 }
 
+const exitAnalysisTradeColumns = [
+  "id",
+  "user_id",
+  "symbol",
+  "side",
+  "status",
+  "entry_date",
+  "exit_date",
+  "avg_entry",
+  "exit_price",
+  "stop_price",
+  "shares",
+  "commission",
+  "risk",
+  "pnl",
+  "r_multiple",
+  "setup_tags",
+  "portfolio_tag",
+  "executions",
+  "hidden",
+  "created_at",
+  "updated_at"
+].join(", ");
+
+function rowToExitAnalysisTrade(row: Record<string, unknown>): TradeLogEntry {
+  return rowToTrade({
+    ...row,
+    import_source: "",
+    import_row_key: "",
+    open_time: "",
+    close_time: "",
+    take_profit_price: 0,
+    used_margin: 0,
+    return_percent: 0,
+    days_in_trade: 0,
+    mistake_tags: [],
+    custom_tags: [],
+    manual_grade: "",
+    emotion: "",
+    trade_quality: "",
+    checklist_items: [],
+    notes: "",
+    screenshots: [],
+    chart_links: [],
+    group_id: "",
+    group_role: "none"
+  });
+}
+
+export async function listBrandenExitAnalysisTrades() {
+  const db = getPool();
+
+  if (!db) {
+    return (await readLocalTrades())
+      .filter((trade) => trade.userId === "branden" && !trade.hidden && trade.status !== "OPEN")
+      .sort((a, b) => (b.exitDate || "").localeCompare(a.exitDate || ""));
+  }
+
+  await ensureTradeTable();
+  const result = await db.query(
+    `select ${exitAnalysisTradeColumns} from trade_logs where user_id = $1 and hidden = false and status <> 'OPEN' order by exit_date desc, entry_date desc`,
+    ["branden"]
+  );
+  return result.rows.map(rowToExitAnalysisTrade);
+}
+
 const benchmarkTradeColumns = [
   "id",
   "user_id",

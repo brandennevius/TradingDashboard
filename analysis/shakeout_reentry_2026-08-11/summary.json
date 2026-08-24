@@ -1,0 +1,294 @@
+{
+  "as_of": "2026-08-11",
+  "source_rows": 82,
+  "eligible_closed_equity_longs_since_june": 55,
+  "analyzed": 55,
+  "market_matched": 51,
+  "mature_10_sessions": 49,
+  "mature_canslim": 33,
+  "mature_canslim_loss_or_breakeven": 28,
+  "canslim_with_20_sessions_from_entry": 28,
+  "unmatched_entry_prices": [
+    "HOOD 2026-06-26",
+    "APH 2026-06-16",
+    "ARM 2026-06-10",
+    "NVO 2026-06-08"
+  ],
+  "skipped": [],
+  "fetch_errors": {},
+  "post_exit": {
+    "2atr_worked_count": 17,
+    "5pct_count": 19,
+    "10pct_count": 17,
+    "median_max_gain_from_entry": 0.14282852856637096,
+    "median_max_gain_from_exit_close": 0.16490484577824494,
+    "unique_symbols_reaching_2atr": [
+      "ANET",
+      "APH",
+      "CRDO",
+      "DXCM",
+      "HIMS",
+      "NTAP",
+      "RELY",
+      "S",
+      "SNOW",
+      "TWLO",
+      "W"
+    ],
+    "median_inferred_planned_stop_atr": 1.351933546103811
+  },
+  "actual_canslim_realized_r": {
+    "observations": 28,
+    "mean_r": -0.2008543502887534,
+    "median_r": -0.19369425675675678,
+    "win_rate": 0.39285714285714285,
+    "worst_r": -1.4303977272727273,
+    "best_r": 3.080833333333333
+  },
+  "stop_rules": {
+    "hard_1atr_stopped_before_2atr": {
+      "eligible": 28,
+      "observations": 28,
+      "unresolved": 0,
+      "stopped_before_target": 19,
+      "survived_to_target": 9,
+      "survival_rate": 0.32142857142857145
+    },
+    "hard_1.5atr_stopped_before_2atr": {
+      "eligible": 28,
+      "observations": 27,
+      "unresolved": 1,
+      "stopped_before_target": 15,
+      "survived_to_target": 12,
+      "survival_rate": 0.4444444444444444
+    },
+    "hard_2atr_stopped_before_2atr": {
+      "eligible": 28,
+      "observations": 27,
+      "unresolved": 1,
+      "stopped_before_target": 11,
+      "survived_to_target": 16,
+      "survival_rate": 0.5925925925925926
+    },
+    "hard_2.5atr_stopped_before_2atr": {
+      "eligible": 28,
+      "observations": 26,
+      "unresolved": 2,
+      "stopped_before_target": 8,
+      "survived_to_target": 18,
+      "survival_rate": 0.6923076923076923
+    },
+    "hard_3atr_stopped_before_2atr": {
+      "eligible": 28,
+      "observations": 23,
+      "unresolved": 5,
+      "stopped_before_target": 5,
+      "survived_to_target": 18,
+      "survival_rate": 0.782608695652174
+    },
+    "close_1.5atr_stopped_before_2atr": {
+      "eligible": 28,
+      "observations": 27,
+      "unresolved": 1,
+      "stopped_before_target": 11,
+      "survived_to_target": 16,
+      "survival_rate": 0.5925925925925926
+    },
+    "close_2atr_stopped_before_2atr": {
+      "eligible": 28,
+      "observations": 25,
+      "unresolved": 3,
+      "stopped_before_target": 8,
+      "survived_to_target": 17,
+      "survival_rate": 0.68
+    },
+    "close_2.5atr_stopped_before_2atr": {
+      "eligible": 28,
+      "observations": 24,
+      "unresolved": 4,
+      "stopped_before_target": 6,
+      "survived_to_target": 18,
+      "survival_rate": 0.75
+    },
+    "structure_stopped_before_2atr": {
+      "eligible": 28,
+      "observations": 28,
+      "unresolved": 0,
+      "stopped_before_target": 11,
+      "survived_to_target": 17,
+      "survival_rate": 0.6071428571428571
+    },
+    "two_closes_below_sma20_before_2atr": {
+      "eligible": 28,
+      "observations": 28,
+      "unresolved": 0,
+      "stopped_before_target": 15,
+      "survived_to_target": 13,
+      "survival_rate": 0.4642857142857143
+    }
+  },
+  "stop_20d_returns": {
+    "hard_1atr_20d_r": {
+      "observations": 28,
+      "mean_r": -0.3350123836050253,
+      "median_r": -1.0,
+      "win_rate": 0.25,
+      "worst_r": -1.0,
+      "best_r": 2.946397188049209
+    },
+    "hard_1.5atr_20d_r": {
+      "observations": 28,
+      "mean_r": -0.1267743751789656,
+      "median_r": -1.0,
+      "win_rate": 0.39285714285714285,
+      "worst_r": -1.0,
+      "best_r": 2.067334708714018
+    },
+    "hard_2atr_20d_r": {
+      "observations": 28,
+      "mean_r": 0.10697056773516618,
+      "median_r": 0.016187294096133273,
+      "win_rate": 0.5357142857142857,
+      "worst_r": -1.0,
+      "best_r": 2.4778153275918466
+    },
+    "hard_2.5atr_20d_r": {
+      "observations": 28,
+      "mean_r": 0.1506336672475162,
+      "median_r": 0.228946519256719,
+      "win_rate": 0.6071428571428571,
+      "worst_r": -1.0,
+      "best_r": 1.9822522620734755
+    },
+    "hard_3atr_20d_r": {
+      "observations": 28,
+      "mean_r": 0.16150225503052287,
+      "median_r": 0.2619376806638113,
+      "win_rate": 0.6428571428571429,
+      "worst_r": -1.0,
+      "best_r": 1.6518768850612287
+    },
+    "close_1atr_20d_r": {
+      "observations": 28,
+      "mean_r": 0.015056469185624402,
+      "median_r": -1.0142103491950827,
+      "win_rate": 0.42857142857142855,
+      "worst_r": -1.6281080356544406,
+      "best_r": 3.1010020630710304
+    },
+    "close_1.5atr_20d_r": {
+      "observations": 28,
+      "mean_r": 0.21544311947681832,
+      "median_r": 0.02158305879484436,
+      "win_rate": 0.5357142857142857,
+      "worst_r": -1.393680437822489,
+      "best_r": 3.3037537701224573
+    },
+    "close_2atr_20d_r": {
+      "observations": 28,
+      "mean_r": 0.13406448111557856,
+      "median_r": 0.04689551735204798,
+      "win_rate": 0.5714285714285714,
+      "worst_r": -1.3619000494804558,
+      "best_r": 2.4778153275918466
+    },
+    "close_2.5atr_20d_r": {
+      "observations": 28,
+      "mean_r": 0.2202871679594666,
+      "median_r": 0.3143252167965735,
+      "win_rate": 0.6428571428571429,
+      "worst_r": -1.1161890067963744,
+      "best_r": 1.9822522620734755
+    },
+    "close_3atr_20d_r": {
+      "observations": 28,
+      "mean_r": 0.1455719082432818,
+      "median_r": 0.2619376806638113,
+      "win_rate": 0.6428571428571429,
+      "worst_r": -1.1272095195095526,
+      "best_r": 1.6518768850612287
+    }
+  },
+  "reentry_rules": {
+    "entry_reclaim": {
+      "eligible": 28,
+      "triggered": 17,
+      "mature_triggers": 16,
+      "successful": 8,
+      "failed": 5,
+      "success_rate": 0.6153846153846154,
+      "median_10d_gain": 0.11175797051394643,
+      "median_10d_drawdown": -0.01755249221552707
+    },
+    "entry_reclaim_strength": {
+      "eligible": 28,
+      "triggered": 13,
+      "mature_triggers": 12,
+      "successful": 5,
+      "failed": 4,
+      "success_rate": 0.5555555555555556,
+      "median_10d_gain": 0.10075960908288906,
+      "median_10d_drawdown": -0.038946410672773824
+    },
+    "sma10_reclaim_strength": {
+      "eligible": 28,
+      "triggered": 25,
+      "mature_triggers": 24,
+      "successful": 8,
+      "failed": 14,
+      "success_rate": 0.36363636363636365,
+      "median_10d_gain": 0.10255437185164262,
+      "median_10d_drawdown": -0.09138409101042927
+    },
+    "sma20_reclaim": {
+      "eligible": 28,
+      "triggered": 20,
+      "mature_triggers": 17,
+      "successful": 6,
+      "failed": 8,
+      "success_rate": 0.42857142857142855,
+      "median_10d_gain": 0.09720527215035402,
+      "median_10d_drawdown": -0.05129274395329442
+    },
+    "sma20_reclaim_strength": {
+      "eligible": 28,
+      "triggered": 20,
+      "mature_triggers": 17,
+      "successful": 6,
+      "failed": 8,
+      "success_rate": 0.42857142857142855,
+      "median_10d_gain": 0.09720527215035402,
+      "median_10d_drawdown": -0.05129274395329442
+    },
+    "exit_low_undercut_reclaim": {
+      "eligible": 28,
+      "triggered": 19,
+      "mature_triggers": 19,
+      "successful": 6,
+      "failed": 10,
+      "success_rate": 0.375,
+      "median_10d_gain": 0.08842891880671377,
+      "median_10d_drawdown": -0.07280738564834244
+    },
+    "exit_high_break": {
+      "eligible": 28,
+      "triggered": 22,
+      "mature_triggers": 20,
+      "successful": 7,
+      "failed": 9,
+      "success_rate": 0.4375,
+      "median_10d_gain": 0.1043139460154241,
+      "median_10d_drawdown": -0.060118970680241746
+    },
+    "fresh_5d_high": {
+      "eligible": 28,
+      "triggered": 22,
+      "mature_triggers": 18,
+      "successful": 5,
+      "failed": 9,
+      "success_rate": 0.35714285714285715,
+      "median_10d_gain": 0.12156614097912821,
+      "median_10d_drawdown": -0.06614430631019796
+    }
+  }
+}
