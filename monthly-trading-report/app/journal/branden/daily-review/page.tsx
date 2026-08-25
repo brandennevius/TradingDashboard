@@ -243,6 +243,7 @@ export default function DailyReviewPage() {
   const [weeklyFocusItems, setWeeklyFocusItems] = useState("");
   const [weeklyFocusMessage, setWeeklyFocusMessage] = useState("");
   const [isSavingWeeklyFocus, setIsSavingWeeklyFocus] = useState(false);
+  const [isWeeklyFocusVisible, setIsWeeklyFocusVisible] = useState(false);
   const [isWeeklyFocusExpanded, setIsWeeklyFocusExpanded] = useState(false);
 
   useEffect(() => {
@@ -537,12 +538,20 @@ export default function DailyReviewPage() {
                 <div>
                   <p className="eyebrow">Weekend review</p>
                   <h2>Weekly Process Focus</h2>
-                  <p className="daily-weekly-focus-summary">
+                  {isWeeklyFocusVisible ? <p className="daily-weekly-focus-summary">
                     {weeklyFocus?.summary || "No weekly process focus is currently set."}
-                  </p>
+                  </p> : null}
                 </div>
                 <div className="daily-weekly-focus-actions">
                   <span>{weeklyFocus?.status || "NOT_SET"}</span>
+                  <button
+                    type="button"
+                    className="secondary"
+                    aria-expanded={isWeeklyFocusVisible}
+                    onClick={() => setIsWeeklyFocusVisible((visible) => !visible)}
+                  >
+                    {isWeeklyFocusVisible ? "Hide" : "Show"}
+                  </button>
                   <button
                     type="button"
                     className="secondary"

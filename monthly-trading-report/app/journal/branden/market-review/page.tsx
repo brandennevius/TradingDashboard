@@ -18,6 +18,7 @@ import {
   restoreMarketReviewOcrEditor
 } from "@/lib/market-review-ocr-ui";
 import { marketReviewInlineArtifactUrl } from "@/lib/market-review-preview";
+import type { WeeklyFocus } from "@/lib/weekly-focus";
 
 type ReviewStatus = "QUEUED" | "RUNNING" | "NEEDS_REVIEW" | "FAILED" | "COMPLETED";
 type ReviewRun = {
@@ -63,6 +64,17 @@ function formatTime(value: string | null) {
   return new Intl.DateTimeFormat("en-US", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
 }
 
+function formatFocusWeek(value: string | null | undefined) {
+  if (!value) return "No active week";
+  return `Week of ${new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  }).format(new Date(`${value}T12:00:00Z`))}`;
+}
+
 function errorMessage(data: { error?: string; code?: string }) {
   return `${data.code ? `${data.code}: ` : ""}${data.error || "Market review request failed."}`;
 }
@@ -88,6 +100,9 @@ export default function MarketReviewPage() {
   const [pdfPreviewUrl, setPdfPreviewUrl] = useState("");
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
   const [pdfPreviewError, setPdfPreviewError] = useState("");
+  const [weeklyFocus, setWeeklyFocus] = useState<WeeklyFocus | null>(null);
+  const [weeklyFocusError, setWeeklyFocusError] = useState("");
+  const [isWeeklyFocusVisible, setIsWeeklyFocusVisible] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const previewDialogRef = useRef<HTMLElement | null>(null);
   const previewCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -112,6 +127,33 @@ export default function MarketReviewPage() {
 
   useEffect(() => {
     loadRuns();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadWeeklyFocus() {
+      try {
+        const response = await fetch("/api/settings/weekly-focus", { cache: "no-store" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || "Could not load weekly focus.");
+        if (!cancelled) {
+          setWeeklyFocus(data.focus || null);
+          setWeeklyFocusError("");
+        }
+      } catch (focusError) {
+        if (!cancelled) {
+          setWeeklyFocus(null);
+          setWeeklyFocusError(focusError instanceof Error ? focusError.message : "Could not load weekly focus.");
+        }
+      }
+    }
+
+    loadWeeklyFocus();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const hasActiveRun = runs.some((run) => run.status === "QUEUED" || run.status === "RUNNING");
@@ -324,6 +366,33 @@ export default function MarketReviewPage() {
         </div>
         <span>Dashboard-driven · no routine Codex dependency</span>
       </header>
+
+      <section className="market-review-weekly-focus daily-review-card daily-weekly-focus">
+        <div className="daily-card-heading daily-weekly-focus-heading">
+          <div>
+            <p className="eyebrow">Weekend review</p>
+            <h2>Weekly Process Focus</h2>
+            {isWeeklyFocusVisible ? <p className="daily-weekly-focus-summary">
+              {weeklyFocus?.summary || weeklyFocusError || "No weekly process focus is currently set."}
+            </p> : null}
+          </div>
+          <div className="daily-weekly-focus-actions">
+            <span>{weeklyFocus?.status || (weeklyFocusError ? "UNAVAILABLE" : "NOT_SET")}</span>
+            <button
+              type="button"
+              className="secondary"
+              aria-expanded={isWeeklyFocusVisible}
+              onClick={() => setIsWeeklyFocusVisible((visible) => !visible)}
+            >
+              {isWeeklyFocusVisible ? "Hide" : "Show"}
+            </button>
+          </div>
+        </div>
+        <div className="daily-weekly-focus-meta">
+          <span>{formatFocusWeek(weeklyFocus?.week_start)}</span>
+          <span>Used by Daily Snapshot and Market Review automation</span>
+        </div>
+      </section>
 
       <form className="market-review-start-card" onSubmit={startReview}>
         <div>
