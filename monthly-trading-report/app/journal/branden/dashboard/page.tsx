@@ -8,6 +8,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  ComposedChart,
   Line,
   ReferenceLine,
   ResponsiveContainer,
@@ -65,6 +66,10 @@ function percent(value: number) {
   return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
+function signedMoney(value: number) {
+  return `${value >= 0 ? "+" : ""}${money(value)}`;
+}
+
 function average(values: number[]) {
   return values.length ? values.reduce((total, value) => total + value, 0) / values.length : 0;
 }
@@ -78,6 +83,41 @@ function inDateRange(value: string, startDate: string, endDate: string) {
   if (startDate && value < startDate) return false;
   if (endDate && value > endDate) return false;
   return true;
+}
+
+function dateFromYmd(value: string) {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, (month || 1) - 1, day || 1);
+}
+
+function ymdFromDate(value: Date) {
+  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
+}
+
+function addDays(value: Date, days: number) {
+  const next = new Date(value);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function weekStartForDate(value: string) {
+  const date = dateFromYmd(value);
+  const day = date.getDay();
+  const mondayOffset = day === 0 ? -6 : 1 - day;
+  return ymdFromDate(addDays(date, mondayOffset));
+}
+
+function weekEndForStart(weekStart: string) {
+  return ymdFromDate(addDays(dateFromYmd(weekStart), 4));
+}
+
+function compactDateLabel(value: string) {
+  const date = dateFromYmd(value);
+  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function weeklyLabel(weekStart: string) {
+  return `${compactDateLabel(weekStart)}-${compactDateLabel(weekEndForStart(weekStart)).replace(/^[A-Za-z]+ /, "")}`;
 }
 
 function rangedExitExecutions(trade: TradeLogEntry, startDate: string, endDate: string) {
@@ -119,6 +159,10 @@ function normalizedTradeStatus(trade: TradeLogEntry): TradeLogEntry["status"] {
 function countsAsSettledTrade(trade: TradeLogEntry) {
   const hasPartialExits = trade.customTags.some((tag) => tag.trim().toLowerCase() === "partial exits");
   return trade.status !== "OPEN" || (hasPartialExits && Number(trade.pnl || 0) !== 0);
+}
+
+function countsAsClosedLifecycleTrade(trade: TradeLogEntry) {
+  return trade.status !== "OPEN" && Boolean(trade.exitDate);
 }
 
 function tradeForRange(trade: TradeLogEntry, startDate: string, endDate: string) {
@@ -234,6 +278,13 @@ export default function BrandenDashboardPage() {
     [activePortfolio, endDate, startDate, visibleTrades]
   );
   const closedTrades = useMemo(() => filteredTrades.filter(countsAsSettledTrade), [filteredTrades]);
+  const closedLifecycleTrades = useMemo(
+    () =>
+      visibleTrades
+        .filter((trade) => !activePortfolio || trade.portfolioTag === activePortfolio)
+        .filter((trade) => countsAsClosedLifecycleTrade(trade) && inDateRange(trade.exitDate, startDate, endDate)),
+    [activePortfolio, endDate, startDate, visibleTrades]
+  );
 
   const summary = useMemo(() => {
     const wins = closedTrades.filter((trade) => normalizedTradeStatus(trade) === "WIN");
@@ -325,6 +376,56 @@ export default function BrandenDashboardPage() {
     }));
   }, [closedTrades, setupTemplates]);
 
+  const weeklyFrequencyData = useMemo(() => {
+    const grouped = closedLifecycleTrades.reduce<
+      Record<string, { weekStart: string; weekEnd: string; tradeCount: number; netPnl: number; totalR: number }>
+    >((groups, trade) => {
+      const weekStart = weekStartForDate(trade.exitDate);
+      groups[weekStart] = groups[weekStart] || {
+        weekStart,
+        weekEnd: weekEndForStart(weekStart),
+        tradeCount: 0,
+        netPnl: 0,
+        totalR: 0
+      };
+      groups[weekStart].tradeCount += 1;
+      groups[weekStart].netPnl += Number(trade.pnl || 0);
+      groups[weekStart].totalR += Number(trade.rMultiple || 0);
+      return groups;
+    }, {});
+
+    return Object.values(grouped)
+      .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
+      .map((week) => ({
+        ...week,
+        label: weeklyLabel(week.weekStart),
+        avgR: week.tradeCount ? week.totalR / week.tradeCount : 0
+      }));
+  }, [closedLifecycleTrades]);
+
+  const weeklyFrequencySummary = useMemo(() => {
+    const latest = weeklyFrequencyData[weeklyFrequencyData.length - 1] || null;
+    const previous = weeklyFrequencyData[weeklyFrequencyData.length - 2] || null;
+    const tradeDelta = latest && previous ? latest.tradeCount - previous.tradeCount : 0;
+    const rDelta = latest && previous ? latest.totalR - previous.totalR : 0;
+    let status = "Need more weekly samples";
+    if (latest && previous) {
+      if (tradeDelta > 0 && rDelta < 0) status = "Frequency up while edge fell";
+      else if (tradeDelta > 0 && rDelta >= 0) status = "Frequency supported by edge";
+      else if (tradeDelta <= 0 && rDelta > 0) status = "Selectivity improved";
+      else status = "Frequency contained";
+    }
+
+    return {
+      latest,
+      previous,
+      status,
+      averageTradesPerWeek: weeklyFrequencyData.length ? average(weeklyFrequencyData.map((week) => week.tradeCount)) : 0,
+      bestWeekR: weeklyFrequencyData.length ? Math.max(...weeklyFrequencyData.map((week) => week.totalR)) : 0,
+      worstWeekR: weeklyFrequencyData.length ? Math.min(...weeklyFrequencyData.map((week) => week.totalR)) : 0
+    };
+  }, [weeklyFrequencyData]);
+
   if (tradeId) {
     return <LegacyTradeDetailHost />;
   }
@@ -365,6 +466,88 @@ export default function BrandenDashboardPage() {
         {!isLoading ? (
           <>
             <div className="trade-chart-rows">
+              <article className="trade-chart-panel top-chart trade-frequency-panel">
+                <div className="trade-chart-heading trade-frequency-heading">
+                  <div>
+                    <p className="eyebrow">Behavior check</p>
+                    <h3>Trade frequency vs edge</h3>
+                    <small>Closed lifecycle trades per week. Adds and trims are not counted as extra trades.</small>
+                  </div>
+                  <span>F</span>
+                </div>
+                <div className="trade-frequency-kpis">
+                  <article>
+                    <span>Current read</span>
+                    <strong>{weeklyFrequencySummary.status}</strong>
+                  </article>
+                  <article>
+                    <span>Avg trades / week</span>
+                    <strong>{weeklyFrequencySummary.averageTradesPerWeek.toFixed(1)}</strong>
+                  </article>
+                  <article>
+                    <span>Latest week</span>
+                    <strong>{weeklyFrequencySummary.latest ? `${weeklyFrequencySummary.latest.tradeCount} trades` : "—"}</strong>
+                    <small className={(weeklyFrequencySummary.latest?.totalR || 0) >= 0 ? "trade-positive" : "trade-negative"}>
+                      {weeklyFrequencySummary.latest ? `${weeklyFrequencySummary.latest.totalR.toFixed(2)}R · ${signedMoney(weeklyFrequencySummary.latest.netPnl)}` : "No closed trades"}
+                    </small>
+                  </article>
+                  <article>
+                    <span>Best / worst week</span>
+                    <strong>
+                      {weeklyFrequencySummary.bestWeekR.toFixed(2)}R / {weeklyFrequencySummary.worstWeekR.toFixed(2)}R
+                    </strong>
+                  </article>
+                </div>
+                <ResponsiveContainer width="100%" height={340}>
+                  <ComposedChart data={weeklyFrequencyData} margin={{ top: 22, right: 18, bottom: 8, left: 0 }}>
+                    <defs>
+                      <linearGradient id="dashboardTradeFrequencyBars" x1="0" x2="0" y1="0" y2="1">
+                        <stop offset="0%" stopColor="#8c6a4a" stopOpacity={0.9} />
+                        <stop offset="100%" stopColor="#8c6a4a" stopOpacity={0.34} />
+                      </linearGradient>
+                    </defs>
+                    <CartesianGrid strokeDasharray="3 5" stroke="rgba(47, 53, 45, 0.14)" vertical={false} />
+                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#6f7469", fontSize: 11, fontWeight: 800 }} minTickGap={18} />
+                    <YAxis
+                      yAxisId="trades"
+                      allowDecimals={false}
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: "#6f7469", fontSize: 11 }}
+                      width={44}
+                    />
+                    <YAxis
+                      yAxisId="edge"
+                      orientation="right"
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fill: "#6f7469", fontSize: 11 }}
+                      tickFormatter={(value) => `${Number(value).toFixed(1)}R`}
+                      width={54}
+                    />
+                    <ReferenceLine yAxisId="edge" y={0} stroke="rgba(111, 116, 105, 0.34)" strokeDasharray="4 4" />
+                    <Tooltip
+                      contentStyle={chartTooltipStyle}
+                      formatter={(value, name) => {
+                        if (name === "tradeCount") return [`${Number(value)} closed trades`, "Frequency"];
+                        if (name === "totalR") return [`${Number(value).toFixed(2)}R`, "Net R"];
+                        if (name === "avgR") return [`${Number(value).toFixed(2)}R`, "Avg R / trade"];
+                        return [String(value), String(name)];
+                      }}
+                      labelFormatter={(label) => `Week: ${label}`}
+                    />
+                    <Bar yAxisId="trades" dataKey="tradeCount" name="Frequency" fill="url(#dashboardTradeFrequencyBars)" radius={[8, 8, 0, 0]} barSize={34} />
+                    <Line yAxisId="edge" type="monotone" dataKey="totalR" name="Net R" stroke="#4f7045" strokeWidth={3} dot={{ r: 4, fill: "#4f7045", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                    <Line yAxisId="edge" type="monotone" dataKey="avgR" name="Avg R / trade" stroke="#b05a5a" strokeWidth={2} strokeDasharray="6 5" dot={false} />
+                  </ComposedChart>
+                </ResponsiveContainer>
+                <div className="trade-frequency-legend">
+                  <span><i className="frequency-dot frequency-bar" /> Weekly closed trades</span>
+                  <span><i className="frequency-dot frequency-net-r" /> Weekly net R</span>
+                  <span><i className="frequency-dot frequency-avg-r" /> Avg R per trade</span>
+                </div>
+              </article>
+
               <div className="trade-chart-row trade-chart-row-two">
                 <article className="trade-chart-panel top-chart">
                   <div className="trade-chart-heading"><h3>Settled P&amp;L</h3><span>i</span></div>
