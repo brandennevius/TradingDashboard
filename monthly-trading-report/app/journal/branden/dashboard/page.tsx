@@ -278,6 +278,13 @@ export default function BrandenDashboardPage() {
     [activePortfolio, endDate, startDate, visibleTrades]
   );
   const closedTrades = useMemo(() => filteredTrades.filter(countsAsSettledTrade), [filteredTrades]);
+  const openedTrades = useMemo(
+    () =>
+      visibleTrades
+        .filter((trade) => !activePortfolio || trade.portfolioTag === activePortfolio)
+        .filter((trade) => inDateRange(trade.entryDate, startDate, endDate)),
+    [activePortfolio, endDate, startDate, visibleTrades]
+  );
   const closedLifecycleTrades = useMemo(
     () =>
       visibleTrades
@@ -377,36 +384,44 @@ export default function BrandenDashboardPage() {
   }, [closedTrades, setupTemplates]);
 
   const weeklyFrequencyData = useMemo(() => {
-    const grouped = closedLifecycleTrades.reduce<
-      Record<string, { weekStart: string; weekEnd: string; tradeCount: number; netPnl: number; totalR: number }>
-    >((groups, trade) => {
-      const weekStart = weekStartForDate(trade.exitDate);
-      groups[weekStart] = groups[weekStart] || {
+    const grouped: Record<string, { weekStart: string; weekEnd: string; openedCount: number; closedCount: number; netPnl: number; totalR: number }> = {};
+    const ensureWeek = (weekStart: string) => {
+      grouped[weekStart] = grouped[weekStart] || {
         weekStart,
         weekEnd: weekEndForStart(weekStart),
-        tradeCount: 0,
+        openedCount: 0,
+        closedCount: 0,
         netPnl: 0,
         totalR: 0
       };
-      groups[weekStart].tradeCount += 1;
-      groups[weekStart].netPnl += Number(trade.pnl || 0);
-      groups[weekStart].totalR += Number(trade.rMultiple || 0);
-      return groups;
-    }, {});
+      return grouped[weekStart];
+    };
+
+    openedTrades.forEach((trade) => {
+      const week = ensureWeek(weekStartForDate(trade.entryDate));
+      week.openedCount += 1;
+    });
+
+    closedLifecycleTrades.forEach((trade) => {
+      const week = ensureWeek(weekStartForDate(trade.exitDate));
+      week.closedCount += 1;
+      week.netPnl += Number(trade.pnl || 0);
+      week.totalR += Number(trade.rMultiple || 0);
+    });
 
     return Object.values(grouped)
       .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
       .map((week) => ({
         ...week,
         label: weeklyLabel(week.weekStart),
-        avgR: week.tradeCount ? week.totalR / week.tradeCount : 0
+        avgR: week.closedCount ? week.totalR / week.closedCount : 0
       }));
-  }, [closedLifecycleTrades]);
+  }, [closedLifecycleTrades, openedTrades]);
 
   const weeklyFrequencySummary = useMemo(() => {
     const latest = weeklyFrequencyData[weeklyFrequencyData.length - 1] || null;
     const previous = weeklyFrequencyData[weeklyFrequencyData.length - 2] || null;
-    const tradeDelta = latest && previous ? latest.tradeCount - previous.tradeCount : 0;
+    const tradeDelta = latest && previous ? latest.openedCount - previous.openedCount : 0;
     const rDelta = latest && previous ? latest.totalR - previous.totalR : 0;
     let status = "Need more weekly samples";
     if (latest && previous) {
@@ -420,7 +435,7 @@ export default function BrandenDashboardPage() {
       latest,
       previous,
       status,
-      averageTradesPerWeek: weeklyFrequencyData.length ? average(weeklyFrequencyData.map((week) => week.tradeCount)) : 0,
+      averageTradesPerWeek: weeklyFrequencyData.length ? average(weeklyFrequencyData.map((week) => week.openedCount)) : 0,
       bestWeekR: weeklyFrequencyData.length ? Math.max(...weeklyFrequencyData.map((week) => week.totalR)) : 0,
       worstWeekR: weeklyFrequencyData.length ? Math.min(...weeklyFrequencyData.map((week) => week.totalR)) : 0
     };
@@ -471,7 +486,7 @@ export default function BrandenDashboardPage() {
                   <div>
                     <p className="eyebrow">Behavior check</p>
                     <h3>Trade frequency vs edge</h3>
-                    <small>Closed lifecycle trades per week. Adds and trims are not counted as extra trades.</small>
+                    <small>Frequency counts trades opened that week. Edge uses trades closed that week.</small>
                   </div>
                   <span>F</span>
                 </div>
@@ -486,9 +501,9 @@ export default function BrandenDashboardPage() {
                   </article>
                   <article>
                     <span>Latest week</span>
-                    <strong>{weeklyFrequencySummary.latest ? `${weeklyFrequencySummary.latest.tradeCount} trades` : "—"}</strong>
+                    <strong>{weeklyFrequencySummary.latest ? `${weeklyFrequencySummary.latest.openedCount} opened` : "—"}</strong>
                     <small className={(weeklyFrequencySummary.latest?.totalR || 0) >= 0 ? "trade-positive" : "trade-negative"}>
-                      {weeklyFrequencySummary.latest ? `${weeklyFrequencySummary.latest.totalR.toFixed(2)}R · ${signedMoney(weeklyFrequencySummary.latest.netPnl)}` : "No closed trades"}
+                      {weeklyFrequencySummary.latest ? `${weeklyFrequencySummary.latest.closedCount} closed · ${weeklyFrequencySummary.latest.totalR.toFixed(2)}R · ${signedMoney(weeklyFrequencySummary.latest.netPnl)}` : "No trades"}
                     </small>
                   </article>
                   <article>
@@ -529,22 +544,22 @@ export default function BrandenDashboardPage() {
                     <Tooltip
                       contentStyle={chartTooltipStyle}
                       formatter={(value, name) => {
-                        if (name === "tradeCount") return [`${Number(value)} closed trades`, "Frequency"];
+                        if (name === "openedCount") return [`${Number(value)} opened trades`, "Frequency"];
                         if (name === "totalR") return [`${Number(value).toFixed(2)}R`, "Net R"];
                         if (name === "avgR") return [`${Number(value).toFixed(2)}R`, "Avg R / trade"];
                         return [String(value), String(name)];
                       }}
                       labelFormatter={(label) => `Week: ${label}`}
                     />
-                    <Bar yAxisId="trades" dataKey="tradeCount" name="Frequency" fill="url(#dashboardTradeFrequencyBars)" radius={[8, 8, 0, 0]} barSize={34} />
+                    <Bar yAxisId="trades" dataKey="openedCount" name="Frequency" fill="url(#dashboardTradeFrequencyBars)" radius={[8, 8, 0, 0]} barSize={34} />
                     <Line yAxisId="edge" type="monotone" dataKey="totalR" name="Net R" stroke="#4f7045" strokeWidth={3} dot={{ r: 4, fill: "#4f7045", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
                     <Line yAxisId="edge" type="monotone" dataKey="avgR" name="Avg R / trade" stroke="#b05a5a" strokeWidth={2} strokeDasharray="6 5" dot={false} />
                   </ComposedChart>
                 </ResponsiveContainer>
                 <div className="trade-frequency-legend">
-                  <span><i className="frequency-dot frequency-bar" /> Weekly closed trades</span>
-                  <span><i className="frequency-dot frequency-net-r" /> Weekly net R</span>
-                  <span><i className="frequency-dot frequency-avg-r" /> Avg R per trade</span>
+                  <span><i className="frequency-dot frequency-bar" /> Trades opened that week</span>
+                  <span><i className="frequency-dot frequency-net-r" /> Net R from trades closed that week</span>
+                  <span><i className="frequency-dot frequency-avg-r" /> Avg R per closed trade</span>
                 </div>
               </article>
 
