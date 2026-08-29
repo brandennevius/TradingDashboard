@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { GET as marketDataRoute } from "../app/api/market-data/[symbol]/route";
 import { getExactMarketSessionPrice, getMarketCandlesWithProvider, marketProviderSymbols } from "../lib/market-data";
 
 test("slash-form FX pairs map to provider-specific symbols", () => {
@@ -46,6 +47,38 @@ test("FMP is the primary bounded daily provider and keeps the key out of the URL
   assert.match(requests[0].url, /[?&]to=\d{4}-\d{2}-\d{2}(?:&|$)/);
   assert.doesNotMatch(requests[0].url, /apikey/i);
   assert.equal(requests[0].headers.get("apikey"), "test-key");
+});
+
+test("market-data API route reuses the shared FMP-backed market data loader", async (context) => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.FMP_API_KEY;
+  const requestedUrls: string[] = [];
+  context.after(() => {
+    globalThis.fetch = originalFetch;
+    if (originalKey === undefined) delete process.env.FMP_API_KEY;
+    else process.env.FMP_API_KEY = originalKey;
+  });
+  process.env.FMP_API_KEY = "test-key";
+  globalThis.fetch = async (input, init) => {
+    requestedUrls.push(String(input));
+    assert.equal(new Headers(init?.headers).get("apikey"), "test-key");
+    return Response.json([
+      { date: "2026-08-28", open: 86.2, high: 88.5, low: 85.9, close: 87.93, volume: 1234567 },
+      { date: "2026-08-27", open: 88.1, high: 88.8, low: 86.5, close: 87.54, volume: 1111111 }
+    ]);
+  };
+
+  const response = await marketDataRoute(
+    new Request("https://example.test/api/market-data/GM?timeframe=1d"),
+    { params: Promise.resolve({ symbol: "GM" }) }
+  );
+  const payload = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(payload.symbol, "GM");
+  assert.equal(payload.provider, "fmp");
+  assert.deepEqual(payload.candles.map((candle: { time: string }) => candle.time), ["2026-08-27", "2026-08-28"]);
+  assert.match(requestedUrls[0], /financialmodelingprep\.com\/stable\/historical-price-eod\/full/);
 });
 
 test("FMP exact-session lookup uses the requested session and normalizes FX symbols", async (context) => {
