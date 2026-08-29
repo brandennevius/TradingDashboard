@@ -1066,7 +1066,7 @@ export default function BrandenTradeLogPage() {
                   </label>
                   <button className="trade-muted-button" type="button" onClick={exportCsv}>Export CSV</button>
                   <button className="trade-muted-button" type="button" onClick={exportReviewDocx} disabled={isExportingReview || !filteredTrades.length}>
-                    {isExportingReview ? "Exporting review..." : "Export review .docx"}
+                    {isExportingReview ? "Generating AI review..." : "AI Review .docx"}
                   </button>
                 </div>
                 <div className="trade-table-wrap">
