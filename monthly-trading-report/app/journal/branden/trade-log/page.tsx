@@ -318,6 +318,7 @@ function initialTradeLogState() {
     startDate: monthStartDate(),
     endDate: localDate(),
     portfolio: "",
+    symbolSearch: "",
     sort: null as TradeSort | null
   };
 
@@ -335,6 +336,7 @@ function initialTradeLogState() {
   defaults.startDate = params.get("start") || defaults.startDate;
   defaults.endDate = params.get("end") || defaults.endDate;
   defaults.portfolio = params.get("portfolio") || "";
+  defaults.symbolSearch = params.get("q") || "";
   const sortKey = params.get("sort") || "";
   const sortDir = params.get("dir") === "asc" || params.get("dir") === "desc" ? params.get("dir") as SortDirection : null;
   if (isTradeColumnKey(sortKey) && sortDir) {
@@ -446,6 +448,7 @@ export default function BrandenTradeLogPage() {
   const [filters, setFilters] = useState<Record<TradeFilterKey, string[] | null>>(initialStateRef.current.filters);
   const [startDate, setStartDate] = useState(initialStateRef.current.startDate);
   const [endDate, setEndDate] = useState(initialStateRef.current.endDate);
+  const [symbolSearch, setSymbolSearch] = useState(initialStateRef.current.symbolSearch);
   const [sort, setSort] = useState<TradeSort | null>(initialStateRef.current.sort);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -510,6 +513,7 @@ export default function BrandenTradeLogPage() {
     if (startDate !== monthStartDate()) params.set("start", startDate);
     if (endDate !== localDate()) params.set("end", endDate);
     if (activePortfolio) params.set("portfolio", activePortfolio);
+    if (symbolSearch.trim()) params.set("q", symbolSearch.trim());
     if (sort) {
       params.set("sort", sort.key);
       params.set("dir", sort.direction);
@@ -523,7 +527,7 @@ export default function BrandenTradeLogPage() {
     if (`${window.location.pathname}${window.location.search}` !== nextUrl) {
       window.history.replaceState(null, "", nextUrl);
     }
-  }, [activePortfolio, endDate, filters, sort, startDate]);
+  }, [activePortfolio, endDate, filters, sort, startDate, symbolSearch]);
 
   const canEditBrandenJournal = user?.id === "branden" && !user.readOnly;
   const activeColumnScope = activePortfolio || "__all__";
@@ -554,10 +558,12 @@ export default function BrandenTradeLogPage() {
   );
   const filteredTrades = useMemo(
     () => {
+      const tickerSearch = symbolSearch.trim().replace(/^#/, "").toUpperCase();
       const visible = rangeTrades
         .filter((trade) => filters.status === null || filters.status.includes(normalizedTradeStatus(trade)))
         .filter((trade) => filters.side === null || filters.side.includes(trade.side))
         .filter((trade) => filters.symbol === null || filters.symbol.includes(trade.symbol))
+        .filter((trade) => !tickerSearch || trade.symbol.toUpperCase().includes(tickerSearch))
         .filter((trade) => filters.setup === null || filters.setup.includes(primarySetup(trade)))
         .filter((trade) => filters.grade === null || filters.grade.includes(checklistScore(trade, setupTemplates).grade))
         .filter(
@@ -573,7 +579,7 @@ export default function BrandenTradeLogPage() {
         return comparison || a.symbol.localeCompare(b.symbol) || a.id.localeCompare(b.id);
       });
     },
-    [filters, rangeTrades, setupTemplates, sort]
+    [filters, rangeTrades, setupTemplates, sort, symbolSearch]
   );
   const summary = useMemo(() => {
     const settled = filteredTrades.filter(countsAsSettledTrade);
@@ -1048,6 +1054,16 @@ export default function BrandenTradeLogPage() {
               <div className="trade-main-panel">
                 <div className="trade-bulk-actions">
                   <strong>{filteredTrades.length} visible rows</strong>
+                  <label className="trade-symbol-search">
+                    <span>Search ticker</span>
+                    <input
+                      type="search"
+                      value={symbolSearch}
+                      onChange={(event) => setSymbolSearch(event.target.value)}
+                      placeholder="Type ticker..."
+                      aria-label="Search trades by ticker"
+                    />
+                  </label>
                   <button className="trade-muted-button" type="button" onClick={exportCsv}>Export CSV</button>
                   <button className="trade-muted-button" type="button" onClick={exportReviewDocx} disabled={isExportingReview || !filteredTrades.length}>
                     {isExportingReview ? "Exporting review..." : "Export review .docx"}

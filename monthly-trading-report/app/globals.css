@@ -4448,6 +4448,30 @@ th {
   font-weight: 850;
 }
 
+.trade-symbol-search {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.trade-symbol-search input {
+  background: rgba(255, 255, 250, 0.95);
+  border: 1px solid #b9d6a8;
+  border-radius: 6px;
+  color: #2f352d;
+  font: inherit;
+  min-height: 38px;
+  min-width: 190px;
+  padding: 8px 10px;
+}
+
+.trade-symbol-search input:focus {
+  border-color: #6f9560;
+  box-shadow: 0 0 0 3px rgba(111, 149, 96, 0.14);
+  outline: none;
+}
+
 .trade-summary-strip {
   background: rgba(255, 250, 240, 0.72);
   border: 1px solid #d7f0d0;
