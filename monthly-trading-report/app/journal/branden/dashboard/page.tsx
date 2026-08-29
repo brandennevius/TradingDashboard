@@ -8,8 +8,8 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  ComposedChart,
   Line,
+  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -72,6 +72,10 @@ function signedMoney(value: number) {
 
 function average(values: number[]) {
   return values.length ? values.reduce((total, value) => total + value, 0) / values.length : 0;
+}
+
+function sum(values: number[]) {
+  return values.reduce((total, value) => total + value, 0);
 }
 
 function tradePnlDate(trade: TradeLogEntry) {
@@ -384,7 +388,19 @@ export default function BrandenDashboardPage() {
   }, [closedTrades, setupTemplates]);
 
   const weeklyFrequencyData = useMemo(() => {
-    const grouped: Record<string, { weekStart: string; weekEnd: string; openedCount: number; closedCount: number; netPnl: number; totalR: number }> = {};
+    const grouped: Record<
+      string,
+      {
+        weekStart: string;
+        weekEnd: string;
+        openedCount: number;
+        closedCount: number;
+        netPnl: number;
+        totalR: number;
+        mistakeCount: number;
+        needsReviewCount: number;
+      }
+    > = {};
     const ensureWeek = (weekStart: string) => {
       grouped[weekStart] = grouped[weekStart] || {
         weekStart,
@@ -392,7 +408,9 @@ export default function BrandenDashboardPage() {
         openedCount: 0,
         closedCount: 0,
         netPnl: 0,
-        totalR: 0
+        totalR: 0,
+        mistakeCount: 0,
+        needsReviewCount: 0
       };
       return grouped[weekStart];
     };
@@ -407,6 +425,8 @@ export default function BrandenDashboardPage() {
       week.closedCount += 1;
       week.netPnl += Number(trade.pnl || 0);
       week.totalR += Number(trade.rMultiple || 0);
+      week.mistakeCount += trade.mistakeTags?.length || 0;
+      if (tradeNeedsReview(trade, setupTemplates)) week.needsReviewCount += 1;
     });
 
     return Object.values(grouped)
@@ -414,28 +434,76 @@ export default function BrandenDashboardPage() {
       .map((week) => ({
         ...week,
         label: weeklyLabel(week.weekStart),
-        avgR: week.closedCount ? week.totalR / week.closedCount : 0
+        avgR: week.closedCount ? week.totalR / week.closedCount : 0,
+        reviewCompletion: week.closedCount ? ((week.closedCount - week.needsReviewCount) / week.closedCount) * 100 : 100
       }));
-  }, [closedLifecycleTrades, openedTrades]);
+  }, [closedLifecycleTrades, openedTrades, setupTemplates]);
 
   const weeklyFrequencySummary = useMemo(() => {
     const latest = weeklyFrequencyData[weeklyFrequencyData.length - 1] || null;
     const previous = weeklyFrequencyData[weeklyFrequencyData.length - 2] || null;
-    const tradeDelta = latest && previous ? latest.openedCount - previous.openedCount : 0;
-    const rDelta = latest && previous ? latest.totalR - previous.totalR : 0;
-    let status = "Need more weekly samples";
-    if (latest && previous) {
-      if (tradeDelta > 0 && rDelta < 0) status = "Frequency up while edge fell";
-      else if (tradeDelta > 0 && rDelta >= 0) status = "Frequency supported by edge";
-      else if (tradeDelta <= 0 && rDelta > 0) status = "Selectivity improved";
-      else status = "Frequency contained";
+    const priorTwo = weeklyFrequencyData.slice(-3, -1);
+    const activeWeeks = weeklyFrequencyData.filter((week) => week.openedCount > 0 || week.closedCount > 0).length;
+    const closedSample = sum(weeklyFrequencyData.map((week) => week.closedCount));
+    const totalR = sum(weeklyFrequencyData.map((week) => week.totalR));
+    let cumulativeR = 0;
+    let peakR = 0;
+    let maxDrawdownR = 0;
+    let currentDrawdownR = 0;
+    weeklyFrequencyData.forEach((week) => {
+      cumulativeR += week.totalR;
+      peakR = Math.max(peakR, cumulativeR);
+      currentDrawdownR = cumulativeR - peakR;
+      maxDrawdownR = Math.min(maxDrawdownR, currentDrawdownR);
+    });
+    const averageOpened = weeklyFrequencyData.length ? average(weeklyFrequencyData.map((week) => week.openedCount)) : 0;
+    const latestOpened = latest?.openedCount || 0;
+    const latestAvgR = latest?.avgR || 0;
+    const latestReviewCompletion = latest?.reviewCompletion ?? 100;
+    const latestMistakes = latest?.mistakeCount || 0;
+    const priorAvgR = priorTwo.length ? average(priorTwo.map((week) => week.avgR)) : 0;
+    const openedRisingTwoWeeks =
+      weeklyFrequencyData.length >= 3 &&
+      weeklyFrequencyData[weeklyFrequencyData.length - 3].openedCount < weeklyFrequencyData[weeklyFrequencyData.length - 2].openedCount &&
+      weeklyFrequencyData[weeklyFrequencyData.length - 2].openedCount < weeklyFrequencyData[weeklyFrequencyData.length - 1].openedCount;
+    const avgRFallingTwoWeeks =
+      weeklyFrequencyData.length >= 3 &&
+      weeklyFrequencyData[weeklyFrequencyData.length - 3].avgR > weeklyFrequencyData[weeklyFrequencyData.length - 2].avgR &&
+      weeklyFrequencyData[weeklyFrequencyData.length - 2].avgR > weeklyFrequencyData[weeklyFrequencyData.length - 1].avgR;
+    const tradeCountElevated = averageOpened > 0 && latestOpened >= Math.max(averageOpened * 1.25, averageOpened + 2);
+    const drawdownWorsening = weeklyFrequencyData.length >= 2 && currentDrawdownR < 0 && latest && previous && latest.totalR < previous.totalR;
+    const noMistakeSpike = !previous || latestMistakes <= Math.max(previous.mistakeCount + 1, previous.mistakeCount * 1.5);
+    const reviewCompletionGood = latestReviewCompletion >= 80;
+
+    let status = "NORMAL";
+    let reason = "Trade frequency is stable and average R is near or above breakeven.";
+    if (closedSample < 12 || activeWeeks < 3) {
+      status = "INSUFFICIENT SAMPLE";
+      reason = `${closedSample} closed trades across ${activeWeeks} active weeks. Need at least 12 closed trades and 3 active weeks.`;
+    } else if (drawdownWorsening && latestAvgR < 0 && tradeCountElevated) {
+      status = "PAUSE / REVIEW";
+      reason = `Net R drawdown is worsening, latest average R is ${latestAvgR.toFixed(2)}R, and opened trades are elevated versus the weekly average.`;
+    } else if (openedRisingTwoWeeks && (latestAvgR < 0 || avgRFallingTwoWeeks)) {
+      status = "REDUCE FREQUENCY";
+      reason = latestAvgR < 0
+        ? `Opened trades rose for 2 weeks while latest average R is negative at ${latestAvgR.toFixed(2)}R.`
+        : "Opened trades rose for 2 weeks while average R per trade fell for 2 weeks.";
+    } else if (latestAvgR > 0 && totalR > 0 && reviewCompletionGood && noMistakeSpike) {
+      status = "CAN INCREASE CAREFULLY";
+      reason = `Average R is positive, selected-range net R is ${totalR.toFixed(2)}R, reviews are ${latestReviewCompletion.toFixed(0)}% complete, and mistakes are not spiking.`;
     }
 
     return {
       latest,
       previous,
       status,
-      averageTradesPerWeek: weeklyFrequencyData.length ? average(weeklyFrequencyData.map((week) => week.openedCount)) : 0,
+      reason,
+      activeWeeks,
+      closedSample,
+      totalR,
+      currentDrawdownR,
+      maxDrawdownR,
+      averageTradesPerWeek: averageOpened,
       bestWeekR: weeklyFrequencyData.length ? Math.max(...weeklyFrequencyData.map((week) => week.totalR)) : 0,
       worstWeekR: weeklyFrequencyData.length ? Math.min(...weeklyFrequencyData.map((week) => week.totalR)) : 0
     };
@@ -492,12 +560,14 @@ export default function BrandenDashboardPage() {
                 </div>
                 <div className="trade-frequency-kpis">
                   <article>
-                    <span>Current read</span>
+                    <span>Frequency status</span>
                     <strong>{weeklyFrequencySummary.status}</strong>
+                    <small>{weeklyFrequencySummary.reason}</small>
                   </article>
                   <article>
-                    <span>Avg trades / week</span>
-                    <strong>{weeklyFrequencySummary.averageTradesPerWeek.toFixed(1)}</strong>
+                    <span>Sample</span>
+                    <strong>{weeklyFrequencySummary.closedSample} closed</strong>
+                    <small>{weeklyFrequencySummary.activeWeeks} active weeks</small>
                   </article>
                   <article>
                     <span>Latest week</span>
@@ -507,59 +577,103 @@ export default function BrandenDashboardPage() {
                     </small>
                   </article>
                   <article>
-                    <span>Best / worst week</span>
+                    <span>Drawdown</span>
                     <strong>
-                      {weeklyFrequencySummary.bestWeekR.toFixed(2)}R / {weeklyFrequencySummary.worstWeekR.toFixed(2)}R
+                      {weeklyFrequencySummary.currentDrawdownR.toFixed(2)}R
                     </strong>
+                    <small>Max {weeklyFrequencySummary.maxDrawdownR.toFixed(2)}R</small>
                   </article>
                 </div>
-                <ResponsiveContainer width="100%" height={340}>
-                  <ComposedChart data={weeklyFrequencyData} margin={{ top: 22, right: 18, bottom: 8, left: 0 }}>
-                    <defs>
-                      <linearGradient id="dashboardTradeFrequencyBars" x1="0" x2="0" y1="0" y2="1">
-                        <stop offset="0%" stopColor="#8c6a4a" stopOpacity={0.9} />
-                        <stop offset="100%" stopColor="#8c6a4a" stopOpacity={0.34} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 5" stroke="rgba(47, 53, 45, 0.14)" vertical={false} />
-                    <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#6f7469", fontSize: 11, fontWeight: 800 }} minTickGap={18} />
-                    <YAxis
-                      yAxisId="trades"
-                      allowDecimals={false}
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: "#6f7469", fontSize: 11 }}
-                      width={44}
-                    />
-                    <YAxis
-                      yAxisId="edge"
-                      orientation="right"
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fill: "#6f7469", fontSize: 11 }}
-                      tickFormatter={(value) => `${Number(value).toFixed(1)}R`}
-                      width={54}
-                    />
-                    <ReferenceLine yAxisId="edge" y={0} stroke="rgba(111, 116, 105, 0.34)" strokeDasharray="4 4" />
-                    <Tooltip
-                      contentStyle={chartTooltipStyle}
-                      formatter={(value, name) => {
-                        if (name === "openedCount") return [`${Number(value)} opened trades`, "Frequency"];
-                        if (name === "totalR") return [`${Number(value).toFixed(2)}R`, "Net R"];
-                        if (name === "avgR") return [`${Number(value).toFixed(2)}R`, "Avg R / trade"];
-                        return [String(value), String(name)];
-                      }}
-                      labelFormatter={(label) => `Week: ${label}`}
-                    />
-                    <Bar yAxisId="trades" dataKey="openedCount" name="Frequency" fill="url(#dashboardTradeFrequencyBars)" radius={[8, 8, 0, 0]} barSize={34} />
-                    <Line yAxisId="edge" type="monotone" dataKey="totalR" name="Net R" stroke="#4f7045" strokeWidth={3} dot={{ r: 4, fill: "#4f7045", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                    <Line yAxisId="edge" type="monotone" dataKey="avgR" name="Avg R / trade" stroke="#b05a5a" strokeWidth={2} strokeDasharray="6 5" dot={false} />
-                  </ComposedChart>
-                </ResponsiveContainer>
+
+                <div className="trade-frequency-chart-grid">
+                  <section>
+                    <div className="trade-frequency-chart-title">
+                      <strong>Frequency vs quality</strong>
+                      <span>Opened trades vs average R</span>
+                    </div>
+                    <ResponsiveContainer width="100%" height={260}>
+                      <LineChart data={weeklyFrequencyData} margin={{ top: 18, right: 18, bottom: 8, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 5" stroke="rgba(47, 53, 45, 0.14)" vertical={false} />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#6f7469", fontSize: 11, fontWeight: 800 }} minTickGap={18} />
+                        <YAxis
+                          yAxisId="trades"
+                          allowDecimals={false}
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fill: "#6f7469", fontSize: 11 }}
+                          width={44}
+                        />
+                        <YAxis
+                          yAxisId="edge"
+                          orientation="right"
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fill: "#6f7469", fontSize: 11 }}
+                          tickFormatter={(value) => `${Number(value).toFixed(1)}R`}
+                          width={54}
+                        />
+                        <ReferenceLine yAxisId="edge" y={0} stroke="rgba(111, 116, 105, 0.34)" strokeDasharray="4 4" />
+                        <Tooltip
+                          contentStyle={chartTooltipStyle}
+                          formatter={(value, name) => {
+                            if (name === "openedCount") return [`${Number(value)} opened trades`, "Trades opened"];
+                            if (name === "avgR") return [`${Number(value).toFixed(2)}R`, "Avg R / closed trade"];
+                            return [String(value), String(name)];
+                          }}
+                          labelFormatter={(label) => `Week: ${label}`}
+                        />
+                        <Line yAxisId="trades" type="monotone" dataKey="openedCount" name="Trades opened" stroke="#8c6a4a" strokeWidth={3} dot={{ r: 4, fill: "#8c6a4a", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                        <Line yAxisId="edge" type="monotone" dataKey="avgR" name="Avg R / closed trade" stroke="#4f7045" strokeWidth={3} dot={{ r: 4, fill: "#4f7045", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </section>
+
+                  <section>
+                    <div className="trade-frequency-chart-title">
+                      <strong>Frequency vs outcome</strong>
+                      <span>Opened trades vs weekly net R</span>
+                    </div>
+                    <ResponsiveContainer width="100%" height={260}>
+                      <LineChart data={weeklyFrequencyData} margin={{ top: 18, right: 18, bottom: 8, left: 0 }}>
+                        <CartesianGrid strokeDasharray="3 5" stroke="rgba(47, 53, 45, 0.14)" vertical={false} />
+                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#6f7469", fontSize: 11, fontWeight: 800 }} minTickGap={18} />
+                        <YAxis
+                          yAxisId="trades"
+                          allowDecimals={false}
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fill: "#6f7469", fontSize: 11 }}
+                          width={44}
+                        />
+                        <YAxis
+                          yAxisId="edge"
+                          orientation="right"
+                          axisLine={false}
+                          tickLine={false}
+                          tick={{ fill: "#6f7469", fontSize: 11 }}
+                          tickFormatter={(value) => `${Number(value).toFixed(1)}R`}
+                          width={54}
+                        />
+                        <ReferenceLine yAxisId="edge" y={0} stroke="rgba(111, 116, 105, 0.34)" strokeDasharray="4 4" />
+                        <Tooltip
+                          contentStyle={chartTooltipStyle}
+                          formatter={(value, name) => {
+                            if (name === "openedCount") return [`${Number(value)} opened trades`, "Trades opened"];
+                            if (name === "totalR") return [`${Number(value).toFixed(2)}R`, "Net R from closed trades"];
+                            return [String(value), String(name)];
+                          }}
+                          labelFormatter={(label) => `Week: ${label}`}
+                        />
+                        <Line yAxisId="trades" type="monotone" dataKey="openedCount" name="Trades opened" stroke="#8c6a4a" strokeWidth={3} dot={{ r: 4, fill: "#8c6a4a", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                        <Line yAxisId="edge" type="monotone" dataKey="totalR" name="Net R from closed trades" stroke="#4f7045" strokeWidth={3} dot={{ r: 4, fill: "#4f7045", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </section>
+                </div>
+
                 <div className="trade-frequency-legend">
-                  <span><i className="frequency-dot frequency-bar" /> Trades opened that week</span>
-                  <span><i className="frequency-dot frequency-net-r" /> Net R from trades closed that week</span>
-                  <span><i className="frequency-dot frequency-avg-r" /> Avg R per closed trade</span>
+                  <span><i className="frequency-dot frequency-bar" /> Left axis: trades opened</span>
+                  <span><i className="frequency-dot frequency-net-r" /> Right axis: R from closed trades</span>
                 </div>
               </article>
 
