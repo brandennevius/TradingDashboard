@@ -101,8 +101,13 @@ export default function MarketReviewPage() {
   const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
   const [pdfPreviewError, setPdfPreviewError] = useState("");
   const [weeklyFocus, setWeeklyFocus] = useState<WeeklyFocus | null>(null);
+  const [weeklyFocusSummary, setWeeklyFocusSummary] = useState("");
+  const [weeklyFocusItems, setWeeklyFocusItems] = useState("");
+  const [weeklyFocusMessage, setWeeklyFocusMessage] = useState("");
+  const [isSavingWeeklyFocus, setIsSavingWeeklyFocus] = useState(false);
   const [weeklyFocusError, setWeeklyFocusError] = useState("");
   const [isWeeklyFocusVisible, setIsWeeklyFocusVisible] = useState(false);
+  const [isWeeklyFocusExpanded, setIsWeeklyFocusExpanded] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const previewDialogRef = useRef<HTMLElement | null>(null);
   const previewCloseRef = useRef<HTMLButtonElement | null>(null);
@@ -138,7 +143,10 @@ export default function MarketReviewPage() {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || "Could not load weekly focus.");
         if (!cancelled) {
-          setWeeklyFocus(data.focus || null);
+          const focus = data.focus as WeeklyFocus | null;
+          setWeeklyFocus(focus);
+          setWeeklyFocusSummary(focus?.summary || "");
+          setWeeklyFocusItems(focus?.focus_items.join("\n") || "");
           setWeeklyFocusError("");
         }
       } catch (focusError) {
@@ -178,6 +186,32 @@ export default function MarketReviewPage() {
     (selectedRun.status === "NEEDS_REVIEW" && !hasSavedV2Corrections)
     || selectedRun.status === "FAILED"
   ));
+
+  async function saveWeeklyFocus(clear = false) {
+    setIsSavingWeeklyFocus(true);
+    setWeeklyFocusMessage("");
+    try {
+      const response = await fetch("/api/settings/weekly-focus", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          summary: clear ? "" : weeklyFocusSummary,
+          focusItems: clear ? [] : weeklyFocusItems.split("\n").map((item) => item.trim()).filter(Boolean)
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.focus) throw new Error(data.error || "Could not save the weekly focus.");
+      const focus = data.focus as WeeklyFocus;
+      setWeeklyFocus(focus);
+      setWeeklyFocusSummary(focus.summary || "");
+      setWeeklyFocusItems(focus.focus_items.join("\n"));
+      setWeeklyFocusMessage(clear ? "Weekly focus cleared." : "Weekly focus saved.");
+    } catch (saveError) {
+      setWeeklyFocusMessage(saveError instanceof Error ? saveError.message : "Could not save the weekly focus.");
+    } finally {
+      setIsSavingWeeklyFocus(false);
+    }
+  }
 
   useEffect(() => {
     if (selectedRun?.status === "FAILED" && hasSavedV2MarketReviewCorrections(selectedRun.ocr)) {
@@ -386,12 +420,53 @@ export default function MarketReviewPage() {
             >
               {isWeeklyFocusVisible ? "Hide" : "Show"}
             </button>
+            <button
+              type="button"
+              className="secondary"
+              aria-expanded={isWeeklyFocusExpanded}
+              aria-controls="weekly-focus-editor"
+              onClick={() => setIsWeeklyFocusExpanded((expanded) => !expanded)}
+            >
+              {isWeeklyFocusExpanded ? "Close" : "Edit"}
+            </button>
           </div>
         </div>
         <div className="daily-weekly-focus-meta">
           <span>{formatFocusWeek(weeklyFocus?.week_start)}</span>
           <span>Used by Daily Snapshot and Market Review automation</span>
         </div>
+        {isWeeklyFocusExpanded ? (
+          <div id="weekly-focus-editor" className="daily-weekly-focus-editor">
+            <p>This is copied exactly into each daily snapshot and market review until you replace or clear it.</p>
+            <label>
+              Summary
+              <textarea
+                rows={2}
+                value={weeklyFocusSummary}
+                onChange={(event) => setWeeklyFocusSummary(event.target.value)}
+                placeholder="Enter the weekly process focus in your own words."
+              />
+            </label>
+            <label>
+              Ordered focus items (one per line)
+              <textarea
+                rows={5}
+                value={weeklyFocusItems}
+                onChange={(event) => setWeeklyFocusItems(event.target.value)}
+                placeholder="Structure first and size second"
+              />
+            </label>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button type="button" onClick={() => saveWeeklyFocus(false)} disabled={isSavingWeeklyFocus}>
+                {isSavingWeeklyFocus ? "Saving..." : "Save weekly focus"}
+              </button>
+              <button type="button" className="secondary" onClick={() => saveWeeklyFocus(true)} disabled={isSavingWeeklyFocus}>
+                Clear focus
+              </button>
+            </div>
+            {weeklyFocusMessage ? <p className="status">{weeklyFocusMessage}</p> : null}
+          </div>
+        ) : null}
       </section>
 
       <form className="market-review-start-card" onSubmit={startReview}>
