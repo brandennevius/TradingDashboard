@@ -693,7 +693,15 @@ function buildPositionTrades(
 
   function shouldTreatUnmatchedSharesAsOpening(rowIndex: number, row: RawTransactionRow) {
     const side = openingSide(row.direction);
-    return currentOpenSideKeys.has(cycleKey(row.symbol, side)) || hasFutureOppositeTransaction(rowIndex, row);
+    if (currentOpenSideKeys.has(cycleKey(row.symbol, side))) {
+      return true;
+    }
+
+    if (isSettledTransaction(row.settledPnlRaw)) {
+      return false;
+    }
+
+    return hasFutureOppositeTransaction(rowIndex, row);
   }
 
   function recordUnmatchedClosingRow(row: RawTransactionRow, shares: number) {

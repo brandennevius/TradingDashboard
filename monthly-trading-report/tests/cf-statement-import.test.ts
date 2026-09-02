@@ -292,3 +292,15 @@ test("current futures shorts from open positions do not merge into old long cycl
     [0.5, 0.1, 0.2]
   );
 });
+
+test("settled unmatched closing rows do not become fake open reverse positions", () => {
+  const parsed = parseCfStatementText([
+    "01 Jan 2026 00:00 - 01 Sep 2026 17:14",
+    "1156051:223168 14/01/2026 16:05:28.734 Sell 11.00 UPS 107.19 7381829 81.62 0.08",
+    "1156051:236428 15/01/2026 11:03:56.279 Buy 19.00 UPS 108.05 7420840 — 0.13"
+  ].join("\n"), "branden", "CF_Statement");
+
+  const upsTrades = parsed.trades.filter((trade) => trade.symbol === "UPS");
+  assert.equal(upsTrades.filter((trade) => trade.status === "OPEN").length, 0);
+  assert(upsTrades.some((trade) => trade.customTags.includes("Needs review") && trade.status !== "OPEN"));
+});
