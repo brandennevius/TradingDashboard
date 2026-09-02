@@ -69,6 +69,7 @@ type ParsedCfStatement = {
   currentEquity: number;
   statementEquity: number;
   floatingPnl: number;
+  equityStatementStartDate: string;
   equityStatementDate: string;
 };
 
@@ -95,6 +96,8 @@ type TradeCycle = {
   usedMargin: number;
   displayEntryPrice: number;
 };
+
+const SHARE_EPSILON = 0.000001;
 
 function normalizeMinus(value: string) {
   return value.replace(/[‑−–]/g, "-").replace(/,/g, "").trim();
@@ -147,20 +150,25 @@ function namedStatementDate(day: string, month: string, year: string) {
   return `${year}-${monthNumber}-${day.padStart(2, "0")}`;
 }
 
-function parseStatementDate(lines: string[]) {
+function parseStatementPeriod(lines: string[]) {
   for (const line of lines) {
     const period = line.match(
-      /\b\d{1,2}\s+([A-Z]{3})\s+\d{4}\s+\d{1,2}:\d{2}\s*[—–-]\s*(\d{1,2})\s+([A-Z]{3})\s+(\d{4})\s+\d{1,2}:\d{2}\b/i
+      /\b(\d{1,2})\s+([A-Z]{3})\s+(\d{4})\s+\d{1,2}:\d{2}\s*[—–-]\s*(\d{1,2})\s+([A-Z]{3})\s+(\d{4})\s+\d{1,2}:\d{2}\b/i
     );
-    if (period) return namedStatementDate(period[2], period[3], period[4]);
+    if (period) {
+      return {
+        startDate: namedStatementDate(period[1], period[2], period[3]),
+        endDate: namedStatementDate(period[4], period[5], period[6])
+      };
+    }
   }
 
   for (const line of lines) {
     const created = line.match(/^Created\s+(\d{2}\/\d{2}\/\d{4})\b/i);
-    if (created) return isoDate(created[1]);
+    if (created) return { startDate: "", endDate: isoDate(created[1]) };
   }
 
-  return "";
+  return { startDate: "", endDate: "" };
 }
 
 function parseSummaryMetrics(lines: string[]) {
@@ -216,6 +224,8 @@ function splitLines(text: string) {
 
 const openPositionPattern =
   /^(\d{2}\/\d{2}\/\d{4}) (\d{2}:\d{2}) (Buy|Sell) ([\d,]+\.\d+) ([A-Z0-9/._-]+) ([\d,\-.‑−–—]+) ([\d,\-.‑−–—]+) ([\d,\-.‑−–—]+) ([\d,\-.‑−–—]+) ([\d,\-.‑−–—]+) ([\d,\-.‑−–—]+) ([\d,\-.‑−–—]+) ([\d,\-.‑−–—]+) ([\d,\-.‑−–—]+)$/i;
+const openPositionPrefixPattern =
+  /^(\d{2}\/\d{2}\/\d{4}) (\d{2}:\d{2}) (Buy|Sell) ([\d,]+(?:\.\d+)?) ([A-Z0-9/._-]+) (.+)$/i;
 const workingOrderPattern =
   /^(\d{2}\/\d{2}\/\d{4}) (\d{2}:\d{2}) (\d+) (Buy|Sell) ([\d,]+\.\d+) ([A-Z0-9/._-]+) ([A-Z]+) ([\d,\-.‑−–—]+) ([\d,\-.‑−–—]+) [A-Z-]+(?: [\d,\-.‑−–—]+){0,3}$/i;
 
@@ -224,6 +234,11 @@ const transactionPattern =
 
 function toTimestamp(dateValue: string, timeValue: string) {
   return new Date(`${dateValue}T${timeValue.replace(/\.\d+$/, "")}Z`).getTime();
+}
+
+function roundShareQuantity(value: number) {
+  if (Math.abs(value) <= SHARE_EPSILON) return 0;
+  return Number(value.toFixed(6));
 }
 
 function isSettledTransaction(value: string) {
@@ -252,6 +267,10 @@ function pushOpenLot(lotsBySymbol: Record<string, OpenLot[]>, symbol: string, lo
 
 function openingSide(direction: "Buy" | "Sell"): TradeSide {
   return direction === "Buy" ? "LONG" : "SHORT";
+}
+
+function closingSide(direction: "Buy" | "Sell"): TradeSide {
+  return direction === "Sell" ? "LONG" : "SHORT";
 }
 
 function pushLotForSide(longLotsBySymbol: Record<string, OpenLot[]>, shortLotsBySymbol: Record<string, OpenLot[]>, lot: OpenLot) {
@@ -306,14 +325,20 @@ function seedCarryoverLots(
   const symbols = new Set([...transactionNetBySymbol.keys(), ...openNetBySymbol.keys()]);
 
   for (const symbol of symbols) {
-    const baselineNet = (openNetBySymbol.get(symbol) || 0) - (transactionNetBySymbol.get(symbol) || 0);
+    const currentOpenNet = openNetBySymbol.get(symbol) || 0;
 
-    if (Math.abs(baselineNet) <= 0.000001) {
+    if (Math.abs(currentOpenNet) <= SHARE_EPSILON) {
+      continue;
+    }
+
+    const baselineNet = currentOpenNet - (transactionNetBySymbol.get(symbol) || 0);
+
+    if (Math.abs(baselineNet) <= SHARE_EPSILON) {
       continue;
     }
 
     const side: TradeSide = baselineNet > 0 ? "LONG" : "SHORT";
-    const shares = Math.abs(baselineNet);
+    const shares = roundShareQuantity(Math.abs(baselineNet));
     const firstRow = firstTransactionBySymbol.get(symbol);
     const openEntry = weightedOpenEntryBySymbol.get(symbol);
     const displayEntryPrice =
@@ -413,17 +438,62 @@ function parseTransactions(lines: string[]) {
   return rows;
 }
 
+function splitPossiblyGluedCfNumberToken(value: string): string[] {
+  const normalized = value.replace(/[‑−–]/g, "-").trim();
+  if (!normalized || !/^-?\d/.test(normalized)) return [];
+
+  const gluedMatch = normalized.match(/^(-?\d[\d,]*\.\d{2})(\d[\d,]*\.\d{2})$/);
+  if (gluedMatch) {
+    return [gluedMatch[1], ...splitPossiblyGluedCfNumberToken(gluedMatch[2])];
+  }
+
+  return [normalized];
+}
+
+function tokenizeOpenPositionNumbers(value: string) {
+  return value
+    .split(/\s+/)
+    .flatMap(splitPossiblyGluedCfNumberToken)
+    .filter((token) => Number.isFinite(parseNumber(token)));
+}
+
 function parseOpenPositions(lines: string[]) {
   const positions: ParsedOpenPositionRow[] = [];
 
   for (const line of lines) {
     const openMatch = line.match(openPositionPattern);
 
-    if (!openMatch) {
+    if (openMatch) {
+      const [, dateValue, timeValue, direction, sizeValue, symbol, entryPriceValue, currentPriceValue, usedMarginValue, _notionalVolume, stopLossValue, takeProfitValue, floatingPnlValue, commissionValue] = openMatch;
+
+      positions.push({
+        entryDate: isoDate(dateValue),
+        timeValue,
+        side: openPositionSide(direction),
+        shares: parseNumber(sizeValue),
+        symbol,
+        entryPrice: parseNumber(entryPriceValue),
+        currentPrice: parseNumber(currentPriceValue),
+        usedMargin: parseNumber(usedMarginValue),
+        stopPrice: parseNumber(stopLossValue),
+        takeProfitPrice: parseNumber(takeProfitValue),
+        floatingPnl: parseNumber(floatingPnlValue),
+        commission: Math.abs(parseNumber(commissionValue))
+      });
       continue;
     }
 
-    const [, dateValue, timeValue, direction, sizeValue, symbol, entryPriceValue, currentPriceValue, usedMarginValue, _notionalVolume, stopLossValue, takeProfitValue, floatingPnlValue, commissionValue] = openMatch;
+    const prefixMatch = line.match(openPositionPrefixPattern);
+    if (!prefixMatch) {
+      continue;
+    }
+
+    const [, dateValue, timeValue, direction, sizeValue, symbol, numericRemainder] = prefixMatch;
+    const values = tokenizeOpenPositionNumbers(numericRemainder);
+
+    if (values.length < 8) {
+      continue;
+    }
 
     positions.push({
       entryDate: isoDate(dateValue),
@@ -431,13 +501,13 @@ function parseOpenPositions(lines: string[]) {
       side: openPositionSide(direction),
       shares: parseNumber(sizeValue),
       symbol,
-      entryPrice: parseNumber(entryPriceValue),
-      currentPrice: parseNumber(currentPriceValue),
-      usedMargin: parseNumber(usedMarginValue),
-      stopPrice: parseNumber(stopLossValue),
-      takeProfitPrice: parseNumber(takeProfitValue),
-      floatingPnl: parseNumber(floatingPnlValue),
-      commission: Math.abs(parseNumber(commissionValue))
+      entryPrice: parseNumber(values[0]),
+      currentPrice: parseNumber(values[1]),
+      usedMargin: parseNumber(values[2]),
+      stopPrice: parseNumber(values[4]),
+      takeProfitPrice: parseNumber(values[5]),
+      floatingPnl: parseNumber(values[6]),
+      commission: Math.abs(parseNumber(values[7]))
     });
   }
 
@@ -568,6 +638,8 @@ function buildPositionTrades(
 
   seedCarryoverLots(rows, openPositions, longLotsBySymbol, shortLotsBySymbol, cyclesById, cycles);
 
+  const currentOpenSideKeys = new Set(openPositions.map((position) => `${position.symbol}|${position.side}`));
+
   function cycleKey(symbol: string, side: TradeSide) {
     return `${symbol}|${side}`;
   }
@@ -615,11 +687,64 @@ function buildPositionTrades(
     return startCycle(symbol, side, row.tradeDate, row.timeValue, row.transactionId, row.price);
   }
 
-  for (const row of rows) {
+  function hasFutureOppositeTransaction(rowIndex: number, row: RawTransactionRow) {
+    return rows.slice(rowIndex + 1).some((future) => future.symbol === row.symbol && future.direction !== row.direction);
+  }
+
+  function shouldTreatUnmatchedSharesAsOpening(rowIndex: number, row: RawTransactionRow) {
+    const side = openingSide(row.direction);
+    return currentOpenSideKeys.has(cycleKey(row.symbol, side)) || hasFutureOppositeTransaction(rowIndex, row);
+  }
+
+  function recordUnmatchedClosingRow(row: RawTransactionRow, shares: number) {
+    const side = closingSide(row.direction);
+    const matchedSize = roundShareQuantity(shares);
+    const pnlShare = row.shares ? row.settledPnl * (matchedSize / row.shares) : row.settledPnl;
+    const closeCommissionShare = row.shares ? row.commission * (matchedSize / row.shares) : row.commission;
+    const id = `cf-unmatched-exit:${row.symbol}:${side}:${row.tradeDate}:${row.transactionId}`;
+    cycles.push({
+      id,
+      symbol: row.symbol,
+      side,
+      entryDate: row.tradeDate,
+      openTime: row.timeValue,
+      firstTransactionId: row.transactionId,
+      totalEntryShares: matchedSize,
+      totalEntryValue: row.price * matchedSize,
+      totalEntryCommission: 0,
+      remainingShares: 0,
+      realizedPnl: pnlShare,
+      exitValue: row.price * matchedSize,
+      exitedShares: matchedSize,
+      latestExitDate: row.tradeDate,
+      latestExitTime: row.timeValue,
+      closeCommission: closeCommissionShare,
+      executions: [{
+        id: `unmatched-exit-${row.transactionId}`,
+        type: "EXIT",
+        date: row.tradeDate,
+        time: row.timeValue,
+        side,
+        shares: matchedSize,
+        price: row.price,
+        pnl: pnlShare,
+        commission: closeCommissionShare,
+        source: "CF statement",
+        sourceKey: `cf-transaction:${row.transactionId}`
+      }],
+      stopPrice: 0,
+      takeProfitPrice: 0,
+      usedMargin: 0,
+      displayEntryPrice: row.price
+    });
+  }
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex];
     const matchedLots = row.direction === "Sell" ? longLotsBySymbol[row.symbol] || [] : shortLotsBySymbol[row.symbol] || [];
     const shouldCloseExistingLot = matchedLots.some((lot) => lot.sharesRemaining > 0.000001);
 
-    if (!isSettledTransaction(row.settledPnlRaw) && !shouldCloseExistingLot) {
+    if (!isSettledTransaction(row.settledPnlRaw) && !shouldCloseExistingLot && shouldTreatUnmatchedSharesAsOpening(rowIndex, row)) {
       const side = openingSide(row.direction);
       const cycle = getOrStartCycle(row.symbol, side, row);
       const lot: OpenLot = {
@@ -627,8 +752,8 @@ function buildPositionTrades(
         transactionId: row.transactionId,
         cycleId: cycle.id,
         symbol: row.symbol,
-        originalShares: row.shares,
-        sharesRemaining: row.shares,
+        originalShares: roundShareQuantity(row.shares),
+        sharesRemaining: roundShareQuantity(row.shares),
         entryDate: row.tradeDate,
         openTime: row.timeValue,
         entryPrice: row.price,
@@ -647,7 +772,7 @@ function buildPositionTrades(
             date: row.tradeDate,
             time: row.timeValue,
             side,
-            shares: row.shares,
+            shares: roundShareQuantity(row.shares),
             price: row.price,
             pnl: 0,
             commission: row.commission,
@@ -660,13 +785,18 @@ function buildPositionTrades(
         usedMargin: 0
       };
 
-      cycle.totalEntryShares += row.shares;
+      cycle.totalEntryShares = roundShareQuantity(cycle.totalEntryShares + row.shares);
       cycle.totalEntryValue += row.price * row.shares;
       cycle.totalEntryCommission += row.commission;
-      cycle.remainingShares += row.shares;
+      cycle.remainingShares = roundShareQuantity(cycle.remainingShares + row.shares);
       cycle.displayEntryPrice = cycle.totalEntryShares ? cycle.totalEntryValue / cycle.totalEntryShares : row.price;
       cycle.executions.push(lot.executions[0]);
       pushLotForSide(longLotsBySymbol, shortLotsBySymbol, lot);
+      continue;
+    }
+
+    if (!shouldCloseExistingLot && !shouldTreatUnmatchedSharesAsOpening(rowIndex, row)) {
+      recordUnmatchedClosingRow(row, row.shares);
       continue;
     }
 
@@ -675,13 +805,13 @@ function buildPositionTrades(
 
     while (remainingShares > 0 && matchedLots.length) {
       const lot = matchedLots[0];
-      const matchedSize = Math.min(remainingShares, lot.sharesRemaining);
-      sharesByCycleId.set(lot.cycleId, (sharesByCycleId.get(lot.cycleId) || 0) + matchedSize);
+      const matchedSize = roundShareQuantity(Math.min(remainingShares, lot.sharesRemaining));
+      sharesByCycleId.set(lot.cycleId, roundShareQuantity((sharesByCycleId.get(lot.cycleId) || 0) + matchedSize));
 
-      lot.sharesRemaining -= matchedSize;
-      remainingShares -= matchedSize;
+      lot.sharesRemaining = roundShareQuantity(lot.sharesRemaining - matchedSize);
+      remainingShares = roundShareQuantity(remainingShares - matchedSize);
 
-      if (lot.sharesRemaining <= 0.000001) {
+      if (lot.sharesRemaining <= SHARE_EPSILON) {
         matchedLots.shift();
       }
     }
@@ -704,8 +834,8 @@ function buildPositionTrades(
         : row.commission;
       cycle.realizedPnl += pnlShare;
       cycle.exitValue += row.price * matchedSize;
-      cycle.exitedShares += matchedSize;
-      cycle.remainingShares = Math.max(0, cycle.remainingShares - matchedSize);
+      cycle.exitedShares = roundShareQuantity(cycle.exitedShares + matchedSize);
+      cycle.remainingShares = roundShareQuantity(Math.max(0, cycle.remainingShares - matchedSize));
       cycle.latestExitDate = row.tradeDate;
       cycle.latestExitTime = row.timeValue;
       cycle.closeCommission += closeCommissionShare;
@@ -715,7 +845,7 @@ function buildPositionTrades(
         date: row.tradeDate,
         time: row.timeValue,
         side: cycle.side,
-        shares: matchedSize,
+        shares: roundShareQuantity(matchedSize),
         price: row.price,
         pnl: pnlShare,
         commission: closeCommissionShare,
@@ -723,12 +853,17 @@ function buildPositionTrades(
         sourceKey: `cf-transaction:${row.transactionId}`
       });
 
-      if (cycle.remainingShares <= 0.000001 && activeCycleByKey.get(cycleKey(cycle.symbol, cycle.side)) === cycle.id) {
+      if (cycle.remainingShares <= SHARE_EPSILON && activeCycleByKey.get(cycleKey(cycle.symbol, cycle.side)) === cycle.id) {
         activeCycleByKey.delete(cycleKey(cycle.symbol, cycle.side));
       }
     }
 
-    if (remainingShares > 0.000001) {
+    if (remainingShares > SHARE_EPSILON && !shouldTreatUnmatchedSharesAsOpening(rowIndex, row)) {
+      recordUnmatchedClosingRow(row, remainingShares);
+      continue;
+    }
+
+    if (remainingShares > SHARE_EPSILON) {
       const side = openingSide(row.direction);
       const cycle = getOrStartCycle(row.symbol, side, row);
       const openCommissionShare = row.shares ? row.commission * (remainingShares / row.shares) : row.commission;
@@ -737,8 +872,8 @@ function buildPositionTrades(
         transactionId: row.transactionId,
         cycleId: cycle.id,
         symbol: row.symbol,
-        originalShares: remainingShares,
-        sharesRemaining: remainingShares,
+        originalShares: roundShareQuantity(remainingShares),
+        sharesRemaining: roundShareQuantity(remainingShares),
         entryDate: row.tradeDate,
         openTime: row.timeValue,
         entryPrice: row.price,
@@ -757,7 +892,7 @@ function buildPositionTrades(
             date: row.tradeDate,
             time: row.timeValue,
             side,
-            shares: remainingShares,
+            shares: roundShareQuantity(remainingShares),
             price: row.price,
             pnl: 0,
             commission: openCommissionShare,
@@ -770,10 +905,10 @@ function buildPositionTrades(
         usedMargin: 0
       };
 
-      cycle.totalEntryShares += remainingShares;
+      cycle.totalEntryShares = roundShareQuantity(cycle.totalEntryShares + remainingShares);
       cycle.totalEntryValue += row.price * remainingShares;
       cycle.totalEntryCommission += openCommissionShare;
-      cycle.remainingShares += remainingShares;
+      cycle.remainingShares = roundShareQuantity(cycle.remainingShares + remainingShares);
       cycle.displayEntryPrice = cycle.totalEntryShares ? cycle.totalEntryValue / cycle.totalEntryShares : row.price;
       cycle.executions.push(lot.executions[0]);
       pushLotForSide(longLotsBySymbol, shortLotsBySymbol, lot);
@@ -838,7 +973,7 @@ function buildPositionTrades(
   }
 
   return cycles.map((cycle) => {
-    const isOpen = cycle.remainingShares > 0.000001;
+    const isOpen = cycle.remainingShares > SHARE_EPSILON;
     const tags = ["CF Statement", isOpen ? "Open Position" : "Closed Transaction"];
 
     const exitExecutions = cycle.executions.filter((execution) => execution.type === "EXIT");
@@ -869,7 +1004,7 @@ function buildPositionTrades(
       exitPrice,
       stopPrice: cycle.stopPrice,
       takeProfitPrice: cycle.takeProfitPrice,
-      shares: isOpen ? cycle.remainingShares : cycle.totalEntryShares,
+      shares: roundShareQuantity(isOpen ? cycle.remainingShares : cycle.totalEntryShares),
       commission,
       usedMargin: cycle.usedMargin,
       risk: 0,
@@ -901,7 +1036,7 @@ export function parseCfStatementText(text: string, userId: string, portfolioTag:
   const openPositions = parseOpenPositions(lines);
   const workingOrders = parseWorkingOrders(lines);
   const summary = parseSummaryMetrics(lines);
-  const equityStatementDate = parseStatementDate(lines);
+  const statementPeriod = parseStatementPeriod(lines);
 
   return {
     trades: buildPositionTrades(transactionRows, openPositions, workingOrders, userId, portfolioTag),
@@ -912,6 +1047,7 @@ export function parseCfStatementText(text: string, userId: string, portfolioTag:
     currentEquity: summary.balance || summary.equity,
     statementEquity: summary.equity,
     floatingPnl: summary.floatingPnl,
-    equityStatementDate
+    equityStatementStartDate: statementPeriod.startDate,
+    equityStatementDate: statementPeriod.endDate
   };
 }

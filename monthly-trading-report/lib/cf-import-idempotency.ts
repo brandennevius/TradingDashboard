@@ -42,11 +42,38 @@ function brokerTransactionKey(execution: TradeExecution) {
   return transactionId ? `${transactionId}|${direction}` : "";
 }
 
-export function mergeCfExecutionHistory(existing: TradeExecution[], currentStatement: TradeExecution[]) {
+function dateDaysBetween(startDate: string, endDate: string) {
+  const start = new Date(`${startDate}T00:00:00Z`).getTime();
+  const end = new Date(`${endDate}T00:00:00Z`).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return 0;
+  return Math.max(0, Math.round((end - start) / 86400000));
+}
+
+export function mergeCfExecutionHistory(
+  existing: TradeExecution[],
+  currentStatement: TradeExecution[],
+  options: {
+    statementStartDate?: string;
+    statementEndDate?: string;
+    currentStatementSymbols?: string[];
+    currentOpenSymbols?: string[];
+  } = {}
+) {
   const currentKeys = new Set(currentStatement.map(brokerTransactionKey).filter(Boolean));
+  const currentSymbols = new Set((options.currentStatementSymbols || []).map((symbol) => symbol.trim().toUpperCase()).filter(Boolean));
+  const isBroadStatementReplay = Boolean(
+    options.statementStartDate
+      && options.statementEndDate
+      && dateDaysBetween(options.statementStartDate, options.statementEndDate) >= 7
+  );
+
   return [
     ...existing.filter((execution) => {
       const key = brokerTransactionKey(execution);
+      const symbol = String(execution.source || "").trim().toUpperCase();
+      if (isBroadStatementReplay && currentSymbols.has(symbol)) {
+        return false;
+      }
       return !key || !currentKeys.has(key);
     }),
     ...currentStatement

@@ -118,7 +118,15 @@ export async function POST(request: Request) {
     const existingKeys = new Set(existingCfTrades.map((trade) => trade.importRowKey));
     const existingExecutionHistory = existingCfTrades.flatMap(executionHistoryFromTrade);
     const statementExecutionHistory = statementTrades.flatMap(executionHistoryFromTrade);
-    const executionHistory = mergeCfExecutionHistory(existingExecutionHistory, statementExecutionHistory);
+    const executionHistory = mergeCfExecutionHistory(existingExecutionHistory, statementExecutionHistory, {
+      statementStartDate: parsedStatement.equityStatementStartDate,
+      statementEndDate: parsedStatement.equityStatementDate,
+      currentStatementSymbols: [
+        ...parsedStatement.transactions.map((transaction) => transaction.symbol),
+        ...parsedStatement.openPositions.map((position) => position.symbol)
+      ],
+      currentOpenSymbols: parsedStatement.openPositions.map((position) => position.symbol)
+    });
     const rebuiltTrades = buildCfTradesFromExecutionHistory(
       executionHistory,
       parsedStatement.openPositions,

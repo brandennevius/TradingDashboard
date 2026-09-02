@@ -427,6 +427,12 @@ function numberValue(value: number | string) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function shareQuantity(value: number | string) {
+  const parsed = numberValue(value);
+  if (!parsed) return "";
+  return Number(parsed.toFixed(6)).toLocaleString("en-US", { maximumFractionDigits: 6 });
+}
+
 function calculateDerivedMetrics(input: FormState): FormState {
   const accountSize = numberValue(input.accountSize);
   const netPnl = numberValue(input.netPnl);
@@ -5292,7 +5298,7 @@ export default function Home() {
                             <td>{execution.type === "ENTRY" ? "Entry" : "Exit"}</td>
                             <td>{execution.date || "-"}</td>
                             <td>{numberValue(execution.price) ? numberValue(execution.price).toFixed(2) : "-"}</td>
-                            <td>{numberValue(execution.shares) || "-"}</td>
+                            <td>{shareQuantity(execution.shares) || "-"}</td>
                             <td className={numberValue(execution.pnl) >= 0 ? "trade-positive" : "trade-negative"}>{money(execution.pnl)}</td>
                             <td>{execution.importSource === "cf-statement-pdf" ? "CF statement" : execution.importSource || "Manual"}</td>
                           </tr>

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCfTradesFromExecutionHistory, parseCfStatementText, type ParsedOpenPositionRow } from "../lib/cf-statement";
 import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders, runAtomicCfImport, type CfWorkingOrderMetadata } from "../lib/cf-import-idempotency";
-import type { TradeLogEntry, TradeLogInput } from "../lib/types";
+import type { TradeExecution, TradeLogEntry, TradeLogInput } from "../lib/types";
 
 function importedTrade(): TradeLogEntry {
   return {
@@ -96,6 +96,66 @@ test("the current statement replaces matching transaction IDs instead of accumul
   assert.equal(threeTimes.reduce((sum, execution) => sum + execution.pnl, 0), -122.4);
 });
 
+test("broad CF statement replay replaces stale prior broker history for symbols closed by statement end", () => {
+  const staleJanuaryEntry: TradeExecution = {
+    id: "jan-entry", type: "ENTRY", date: "2026-01-26", time: "13:01:00", side: "LONG",
+    shares: 17, price: 28656.39, pnl: 0, commission: 0, source: ".US100", sourceKey: "cf-transaction:jan-entry"
+  };
+  const currentExitOnly: TradeExecution = {
+    id: "sep-exit", type: "EXIT", date: "2026-09-01", time: "14:42:52", side: "LONG",
+    shares: 0.2, price: 28983.05, pnl: 0, commission: 0, source: ".US100", sourceKey: "cf-transaction:sep-exit"
+  };
+
+  const merged = mergeCfExecutionHistory([staleJanuaryEntry], [currentExitOnly], {
+    statementStartDate: "2026-07-01",
+    statementEndDate: "2026-09-01",
+    currentStatementSymbols: [".US100"],
+    currentOpenSymbols: []
+  });
+
+  assert.deepEqual(merged, [currentExitOnly]);
+});
+
+test("broad CF statement replay replaces stale prior broker history even when symbol remains open", () => {
+  const staleJanuaryEntry: TradeExecution = {
+    id: "jan-entry", type: "ENTRY", date: "2026-01-26", time: "13:01:00", side: "LONG",
+    shares: 17, price: 28656.39, pnl: 0, commission: 0, source: ".US100", sourceKey: "cf-transaction:jan-entry"
+  };
+  const currentShortEntry: TradeExecution = {
+    id: "sep-short", type: "ENTRY", date: "2026-09-01", time: "14:42:52", side: "SHORT",
+    shares: 0.2, price: 28983.05, pnl: 0, commission: 0, source: ".US100", sourceKey: "cf-transaction:sep-short"
+  };
+
+  const merged = mergeCfExecutionHistory([staleJanuaryEntry], [currentShortEntry], {
+    statementStartDate: "2026-07-01",
+    statementEndDate: "2026-09-01",
+    currentStatementSymbols: [".US100"],
+    currentOpenSymbols: [".US100"]
+  });
+
+  assert.deepEqual(merged, [currentShortEntry]);
+});
+
+test("narrow CF statement import keeps prior broker history for same-symbol carryover matching", () => {
+  const priorEntry: TradeExecution = {
+    id: "prior-entry", type: "ENTRY", date: "2026-08-29", time: "18:05:00", side: "LONG",
+    shares: 0.8, price: 29000, pnl: 0, commission: 0, source: ".US100", sourceKey: "cf-transaction:prior-entry"
+  };
+  const currentExit: TradeExecution = {
+    id: "current-exit", type: "EXIT", date: "2026-09-01", time: "14:42:52", side: "LONG",
+    shares: 0.8, price: 28983.05, pnl: -13.56, commission: 0, source: ".US100", sourceKey: "cf-transaction:current-exit"
+  };
+
+  const merged = mergeCfExecutionHistory([priorEntry], [currentExit], {
+    statementStartDate: "2026-09-01",
+    statementEndDate: "2026-09-01",
+    currentStatementSymbols: [".US100"],
+    currentOpenSymbols: []
+  });
+
+  assert.deepEqual(merged, [priorEntry, currentExit]);
+});
+
 test("working orders replace by current statement state without duplicates or stale removed orders", () => {
   const duplicated = replaceActiveWorkingOrders([...llyOrders(), { ...llyOrders()[0] }]);
   assert.equal(duplicated.length, 3);
@@ -161,4 +221,74 @@ test("statement coverage does not guess from transaction or working-order dates"
   ].join("\n"), "branden", "CF_Statement");
 
   assert.equal(parsed.equityStatementDate, "");
+});
+
+test("open-position parser handles glued CF statement numeric columns", () => {
+  const parsed = parseCfStatementText(
+    "01/09/2026 13:25 Sell 0.80 .US100 29,046.00 29,086.60 2,326.87 ‑23,269.2829,218.40 28,771.49 ‑32.48 0.00 —",
+    "branden",
+    "CF_Statement"
+  );
+
+  assert.equal(parsed.openPositions.length, 1);
+  assert.deepEqual(parsed.openPositions[0], {
+    entryDate: "2026-09-01",
+    timeValue: "13:25",
+    side: "SHORT",
+    shares: 0.8,
+    symbol: ".US100",
+    entryPrice: 29046,
+    currentPrice: 29086.6,
+    usedMargin: 2326.87,
+    stopPrice: 29218.4,
+    takeProfitPrice: 28771.49,
+    floatingPnl: -32.48,
+    commission: 0
+  });
+});
+
+test("current futures shorts from open positions do not merge into old long cycles", () => {
+  const parsed = parseCfStatementText([
+    "01 Jul 2026 00:00 - 01 Sep 2026 17:14",
+    "01/09/2026 13:25 Sell 0.80 .US100 29,046.00 29,086.60 2,326.87 ‑23,269.2829,218.40 28,771.49 ‑32.48 0.00 —",
+    "1659201:708018 21/08/2026 14:30:44.808 Buy 1.30 .US100 29278.35 1001 — 0.00",
+    "1659151:485827 21/08/2026 14:49:02.370 Buy 0.10 .US100 29297.65 1002 — 0.00",
+    "1659151:485885 21/08/2026 14:54:09.703 Buy 0.10 .US100 29312.15 1003 — 0.00",
+    "1659201:708224 21/08/2026 14:57:31.698 Buy 0.10 .US100 29316.15 1004 — 0.00",
+    "1659151:486004 21/08/2026 15:08:02.102 Buy 0.10 .US100 29322.45 1005 — 0.00",
+    "1659201:708360 21/08/2026 15:11:44.499 Sell 1.70 .US100 29307.75 1006 36.48 0.00",
+    "1834251:35568 26/08/2026 14:44:52.599 Buy 1.70 .US100 29227.75 2001 — 0.00",
+    "1834251:35574 26/08/2026 14:45:05.498 Buy 1.30 .US100 29229.05 2002 — 0.00",
+    "1834251:35587 26/08/2026 14:45:31.496 Buy 0.30 .US100 29241.75 2003 — 0.00",
+    "1834251:35604 26/08/2026 14:47:03.908 Buy 0.10 .US100 29253.05 2004 — 0.00",
+    "1834251:35801 26/08/2026 15:01:51.633 Buy 0.10 .US100 29269.05 2005 — 0.00",
+    "1834251:37029 26/08/2026 15:49:08.528 Buy 0.10 .US100 29266.25 2006 — 0.00",
+    "1834251:37050 26/08/2026 15:53:47.303 Sell 3.60 .US100 29230.55 2007 -6.32 0.00",
+    "1834201:19764 26/08/2026 15:56:10.592 Buy 2.00 .US100 29237.15 2008 — 0.00",
+    "1834251:37068 26/08/2026 15:57:27.209 Sell 2.00 .US100 29238.45 2009 2.60 0.00",
+    "1834251:37099 26/08/2026 16:00:26.204 Buy 3.00 .US100 29222.80 2010 — 0.00",
+    "1834251:37103 26/08/2026 16:00:32.065 Sell 3.00 .US100 29226.90 2011 12.30 0.00",
+    "1834251:85285 01/09/2026 13:25:46.769 Sell 0.50 .US100 29074.85 3001 — 0.00",
+    "1834201:49171 01/09/2026 14:33:59.034 Sell 0.10 .US100 29027.65 3002 — 0.00",
+    "1834251:85932 01/09/2026 14:42:52.360 Sell 0.20 .US100 28983.05 3003 — 0.00"
+  ].join("\n"), "branden", "CF_Statement");
+
+  const us100Trades = parsed.trades.filter((trade) => trade.symbol === ".US100");
+  const augustTwentyFirst = us100Trades.find((trade) => trade.entryDate === "2026-08-21");
+  const septemberFirstShort = us100Trades.find((trade) => trade.entryDate === "2026-09-01" && trade.side === "SHORT");
+
+  assert(augustTwentyFirst);
+  assert.equal(augustTwentyFirst.exitDate, "2026-08-21");
+  assert.equal(augustTwentyFirst.shares, 1.7);
+  assert(!us100Trades.some((trade) => trade.entryDate < "2026-08-21"));
+  assert(septemberFirstShort);
+  assert.equal(septemberFirstShort.status, "OPEN");
+  assert.equal(septemberFirstShort.shares, 0.8);
+  assert(Math.abs(septemberFirstShort.avgEntry - 29046) < 0.000001);
+  assert.equal(septemberFirstShort.stopPrice, 29218.4);
+  assert.equal(septemberFirstShort.takeProfitPrice, 28771.49);
+  assert.deepEqual(
+    septemberFirstShort.executions?.map((execution) => execution.shares),
+    [0.5, 0.1, 0.2]
+  );
 });
