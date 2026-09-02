@@ -2,7 +2,7 @@
 
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useBrandenSnapshotActions } from "../BrandenSnapshotActionsContext";
-import type { TraderUser } from "@/lib/types";
+import type { TradeLogEntry, TraderUser } from "@/lib/types";
 
 type BrandenTradeColumnKey =
   | "status"
@@ -122,6 +122,14 @@ function columnLabel(key: BrandenTradeColumnKey) {
   return labels[key] || key;
 }
 
+function money(value: number) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0
+  }).format(Number.isFinite(value) ? value : 0);
+}
+
 export default function BrandenSettingsPage() {
   const {
     canGenerateSnapshot,
@@ -139,6 +147,8 @@ export default function BrandenSettingsPage() {
   const [defaultPortfolio, setDefaultPortfolio] = useState("");
   const [activePortfolio, setActivePortfolio] = useState("");
   const [newPortfolio, setNewPortfolio] = useState("");
+  const [trades, setTrades] = useState<TradeLogEntry[]>([]);
+  const [selectedHiddenTradeIds, setSelectedHiddenTradeIds] = useState<string[]>([]);
   const [preferences, setPreferences] = useState<Record<string, BrandenColumnPreference[]>>({});
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -150,6 +160,18 @@ export default function BrandenSettingsPage() {
     () => normalizeColumns(preferences[columnScope] || preferences.__all__ || defaultBrandenColumns),
     [columnScope, preferences]
   );
+  const hiddenTrades = useMemo(
+    () =>
+      trades
+        .filter((trade) => trade.userId === "branden" && trade.hidden)
+        .sort((a, b) => (b.entryDate || "").localeCompare(a.entryDate || "") || a.symbol.localeCompare(b.symbol)),
+    [trades]
+  );
+  const selectedHiddenTrades = useMemo(
+    () => hiddenTrades.filter((trade) => selectedHiddenTradeIds.includes(trade.id)),
+    [hiddenTrades, selectedHiddenTradeIds]
+  );
+  const allHiddenSelected = hiddenTrades.length > 0 && hiddenTrades.every((trade) => selectedHiddenTradeIds.includes(trade.id));
 
   useEffect(() => {
     let cancelled = false;
@@ -158,20 +180,22 @@ export default function BrandenSettingsPage() {
       setIsLoading(true);
       setError("");
 
-      const [sessionResponse, portfolioResponse, columnResponse] = await Promise.all([
+      const [sessionResponse, portfolioResponse, columnResponse, tradeResponse] = await Promise.all([
         fetch("/api/session", { cache: "no-store" }),
         fetch("/api/settings/branden-portfolios", { cache: "no-store" }),
-        fetch("/api/settings/branden-columns", { cache: "no-store" })
+        fetch("/api/settings/branden-columns", { cache: "no-store" }),
+        fetch("/api/trades", { cache: "no-store" })
       ]);
 
       const sessionData = await sessionResponse.json().catch(() => ({}));
       const portfolioData = (await portfolioResponse.json().catch(() => ({}))) as PortfolioSettingsResponse & { error?: string };
       const columnData = await columnResponse.json().catch(() => ({}));
+      const tradeData = await tradeResponse.json().catch(() => ({}));
 
       if (cancelled) return;
 
-      if (!sessionResponse.ok || !portfolioResponse.ok || !columnResponse.ok) {
-        setError(sessionData.error || portfolioData.error || columnData.error || "Could not load settings.");
+      if (!sessionResponse.ok || !portfolioResponse.ok || !columnResponse.ok || !tradeResponse.ok) {
+        setError(sessionData.error || portfolioData.error || columnData.error || tradeData.error || "Could not load settings.");
         setIsLoading(false);
         return;
       }
@@ -180,6 +204,7 @@ export default function BrandenSettingsPage() {
       setPortfolios(Array.isArray(portfolioData.portfolios) ? portfolioData.portfolios : []);
       setDefaultPortfolio(String(portfolioData.defaultPortfolio || ""));
       setActivePortfolio(String(portfolioData.defaultPortfolio || ""));
+      setTrades(Array.isArray(tradeData.trades) ? tradeData.trades : []);
       setPreferences(columnData.preferences && typeof columnData.preferences === "object" ? columnData.preferences : {});
       setIsLoading(false);
     }
@@ -216,6 +241,56 @@ export default function BrandenSettingsPage() {
   function toggleColumn(key: BrandenTradeColumnKey) {
     const nextColumns = activeColumns.map((column) => (column.key === key ? { ...column, visible: !column.visible } : column));
     void saveColumns({ ...preferences, [columnScope]: nextColumns });
+  }
+
+  function toggleHiddenTradeSelection(tradeId: string) {
+    setSelectedHiddenTradeIds((current) =>
+      current.includes(tradeId) ? current.filter((selectedId) => selectedId !== tradeId) : [...current, tradeId]
+    );
+  }
+
+  function toggleAllHiddenTrades() {
+    setSelectedHiddenTradeIds(allHiddenSelected ? [] : hiddenTrades.map((trade) => trade.id));
+  }
+
+  async function unhideSelectedTrades() {
+    if (!canEdit) {
+      setStatus("Read-only access. Hidden trades cannot be restored.");
+      return;
+    }
+
+    if (!selectedHiddenTrades.length) {
+      setStatus("Select hidden trades to restore.");
+      return;
+    }
+
+    setStatus(`Restoring ${selectedHiddenTrades.length} hidden ${selectedHiddenTrades.length === 1 ? "trade" : "trades"}...`);
+    setError("");
+
+    try {
+      const updatedTrades: TradeLogEntry[] = [];
+      for (const trade of selectedHiddenTrades) {
+        const customTags = trade.customTags.filter((tag) => tag !== "Manually hidden");
+        const response = await fetch(`/api/trades/${encodeURIComponent(trade.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hidden: false, customTags })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || `Could not restore ${trade.symbol}.`);
+        }
+        if (data.trade) updatedTrades.push(data.trade);
+      }
+
+      setTrades((current) =>
+        current.map((trade) => updatedTrades.find((updated) => updated.id === trade.id) || trade)
+      );
+      setSelectedHiddenTradeIds([]);
+      setStatus(`${updatedTrades.length} hidden ${updatedTrades.length === 1 ? "trade" : "trades"} restored.`);
+    } catch (unhideError) {
+      setError(unhideError instanceof Error ? unhideError.message : "Could not restore hidden trades.");
+    }
   }
 
   async function savePortfolios(nextPortfolios: string[], nextDefaultPortfolio = defaultPortfolio) {
@@ -385,6 +460,73 @@ export default function BrandenSettingsPage() {
                 </div>
               ))}
             </div>
+
+            <section className="hidden-trades-panel">
+              <div className="hidden-trades-head">
+                <div>
+                  <p className="eyebrow">Hidden trades</p>
+                  <h4>Excluded from reports</h4>
+                  <p>{hiddenTrades.length} hidden {hiddenTrades.length === 1 ? "trade" : "trades"}</p>
+                </div>
+                <div className="hidden-trades-actions">
+                  <button className="trade-muted-button" type="button" onClick={unhideSelectedTrades} disabled={!canEdit || !selectedHiddenTrades.length}>
+                    Restore selected
+                  </button>
+                </div>
+              </div>
+              <div className="hidden-trades-table-wrap">
+                <table className="hidden-trades-table">
+                  <thead>
+                    <tr>
+                      <th>
+                        <input
+                          type="checkbox"
+                          checked={allHiddenSelected}
+                          disabled={!hiddenTrades.length}
+                          aria-label={allHiddenSelected ? "Clear hidden trade selection" : "Select all hidden trades"}
+                          onChange={toggleAllHiddenTrades}
+                        />
+                      </th>
+                      <th>Symbol</th>
+                      <th>Status</th>
+                      <th>Side</th>
+                      <th>Open Date</th>
+                      <th>Close Date</th>
+                      <th>Net Return</th>
+                      <th>Portfolio</th>
+                      <th>Tags</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {hiddenTrades.map((trade) => (
+                      <tr key={trade.id}>
+                        <td>
+                          <input
+                            type="checkbox"
+                            checked={selectedHiddenTradeIds.includes(trade.id)}
+                            aria-label={`Select hidden ${trade.symbol} trade from ${trade.entryDate}`}
+                            onChange={() => toggleHiddenTradeSelection(trade.id)}
+                          />
+                        </td>
+                        <td>#{trade.symbol}</td>
+                        <td>{trade.status}</td>
+                        <td>{trade.side}</td>
+                        <td>{trade.entryDate || "-"}</td>
+                        <td>{trade.exitDate || "-"}</td>
+                        <td>{money(trade.pnl)}</td>
+                        <td>{trade.portfolioTag || "-"}</td>
+                        <td>{trade.customTags.length ? trade.customTags.join(", ") : "-"}</td>
+                      </tr>
+                    ))}
+                    {!hiddenTrades.length ? (
+                      <tr>
+                        <td colSpan={9}>No hidden trades.</td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </section>
           </section>
         ) : null}
       </div>

@@ -461,6 +461,7 @@ export default function BrandenTradeLogPage() {
     detail: ""
   });
   const [columnPreferences, setColumnPreferences] = useState<Record<string, ColumnPreference[]>>({});
+  const [selectedTradeIds, setSelectedTradeIds] = useState<string[]>([]);
   const [draggedColumn, setDraggedColumn] = useState<TradeColumnKey | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<TradeColumnKey | null>(null);
 
@@ -581,6 +582,16 @@ export default function BrandenTradeLogPage() {
     },
     [filters, rangeTrades, setupTemplates, sort, symbolSearch]
   );
+  const selectedVisibleTrades = useMemo(
+    () => filteredTrades.filter((trade) => selectedTradeIds.includes(trade.id)),
+    [filteredTrades, selectedTradeIds]
+  );
+  const allVisibleSelected = filteredTrades.length > 0 && filteredTrades.every((trade) => selectedTradeIds.includes(trade.id));
+
+  useEffect(() => {
+    setSelectedTradeIds((current) => current.filter((tradeId) => filteredTrades.some((trade) => trade.id === tradeId)));
+  }, [filteredTrades]);
+
   const summary = useMemo(() => {
     const settled = filteredTrades.filter(countsAsSettledTrade);
     const wins = settled.filter((trade) => normalizedTradeStatus(trade) === "WIN");
@@ -859,7 +870,71 @@ export default function BrandenTradeLogPage() {
     link.href = url;
     link.download = `branden-trade-log-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
-    URL.revokeObjectURL(url);
+	  URL.revokeObjectURL(url);
+  }
+
+  function toggleTradeSelection(tradeId: string) {
+    setSelectedTradeIds((current) =>
+      current.includes(tradeId) ? current.filter((selectedId) => selectedId !== tradeId) : [...current, tradeId]
+    );
+  }
+
+  function toggleAllVisibleTrades() {
+    setSelectedTradeIds((current) => {
+      if (allVisibleSelected) {
+        const visibleIds = new Set(filteredTrades.map((trade) => trade.id));
+        return current.filter((tradeId) => !visibleIds.has(tradeId));
+      }
+
+      return Array.from(new Set([...current, ...filteredTrades.map((trade) => trade.id)]));
+    });
+  }
+
+  async function hideSelectedTrades() {
+    if (!canEditBrandenJournal) {
+      setStatus("Read-only access. Trades cannot be hidden.");
+      return;
+    }
+
+    if (!selectedVisibleTrades.length) {
+      setStatus("Select one or more visible trades to hide.");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Hide ${selectedVisibleTrades.length} selected ${selectedVisibleTrades.length === 1 ? "trade" : "trades"}?\n\nHidden trades are excluded from the trade log, dashboard stats, calendar, daily review, and open-position calculations. You can restore them from Settings.`
+    );
+    if (!confirmed) return;
+
+    setStatus(`Hiding ${selectedVisibleTrades.length} selected ${selectedVisibleTrades.length === 1 ? "trade" : "trades"}...`);
+    setError("");
+
+    try {
+      const updatedTrades: TradeLogEntry[] = [];
+      for (const trade of selectedVisibleTrades) {
+        const customTags = trade.customTags.includes("Manually hidden")
+          ? trade.customTags
+          : [...trade.customTags, "Manually hidden"];
+        const response = await fetch(`/api/trades/${encodeURIComponent(trade.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hidden: true, customTags })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || `Could not hide ${trade.symbol}.`);
+        }
+        if (data.trade) updatedTrades.push(data.trade);
+      }
+
+      setTrades((current) =>
+        current.map((trade) => updatedTrades.find((updated) => updated.id === trade.id) || trade)
+      );
+      setSelectedTradeIds([]);
+      setStatus(`${updatedTrades.length} selected ${updatedTrades.length === 1 ? "trade" : "trades"} hidden. Restore from Settings if needed.`);
+    } catch (hideError) {
+      setError(hideError instanceof Error ? hideError.message : "Could not hide selected trades.");
+    }
   }
 
   function updateReviewProgress(percent: number, title: string, detail: string) {
@@ -1052,28 +1127,42 @@ export default function BrandenTradeLogPage() {
 
             <div className="trade-workspace trade-list-workspace">
               <div className="trade-main-panel">
-                <div className="trade-bulk-actions">
-                  <strong>{filteredTrades.length} visible rows</strong>
-                  <label className="trade-symbol-search">
-                    <span>Search ticker</span>
-                    <input
+	                <div className="trade-bulk-actions">
+	                  <strong>{filteredTrades.length} visible rows</strong>
+	                  {selectedVisibleTrades.length ? <span>{selectedVisibleTrades.length} selected</span> : null}
+	                  <label className="trade-symbol-search">
+	                    <span>Search ticker</span>
+	                    <input
                       type="search"
                       value={symbolSearch}
                       onChange={(event) => setSymbolSearch(event.target.value)}
                       placeholder="Type ticker..."
                       aria-label="Search trades by ticker"
                     />
-                  </label>
-                  <button className="trade-muted-button" type="button" onClick={exportCsv}>Export CSV</button>
-                  <button className="trade-muted-button" type="button" onClick={exportReviewDocx} disabled={isExportingReview || !filteredTrades.length}>
-                    {isExportingReview ? "Generating AI review..." : "AI Review .docx"}
-                  </button>
+	                  </label>
+	                  <button className="trade-muted-button" type="button" onClick={exportCsv}>Export CSV</button>
+	                  <button className="trade-muted-button" type="button" onClick={hideSelectedTrades} disabled={!canEditBrandenJournal || !selectedVisibleTrades.length}>
+	                    Hide selected
+	                  </button>
+	                  <button className="trade-muted-button" type="button" onClick={exportReviewDocx} disabled={isExportingReview || !filteredTrades.length}>
+	                    {isExportingReview ? "Generating AI review..." : "AI Review .docx"}
+	                  </button>
                 </div>
                 <div className="trade-table-wrap">
                   <table className="trade-table">
-                    <thead>
-                      <tr>
-                        {visibleColumns.map((column) => (
+	                    <thead>
+	                      <tr>
+	                        <th className="trade-select-cell">
+	                          <input
+	                            type="checkbox"
+	                            checked={allVisibleSelected}
+	                            disabled={!filteredTrades.length}
+	                            aria-label={allVisibleSelected ? "Clear selected trades" : "Select all visible trades"}
+	                            onChange={toggleAllVisibleTrades}
+	                            onClick={(event) => event.stopPropagation()}
+	                          />
+	                        </th>
+	                        {visibleColumns.map((column) => (
                           <th
                             className={[
                               canEditBrandenJournal ? "trade-column-draggable" : "",
@@ -1117,17 +1206,25 @@ export default function BrandenTradeLogPage() {
                         const grade = checklistScore(trade, setupTemplates).grade;
                         const review = tradeNeedsReview(trade, setupTemplates) ? "Needs Review" : "Complete";
                         return (
-                          <tr key={trade.id} onClick={() => { window.location.href = tradeDetailHref(trade.id); }}>
-                            {visibleColumns.map((column) => (
-                              <td key={column.key}>{renderTradeCell(column.key, trade, grade, review)}</td>
-                            ))}
+	                          <tr key={trade.id} onClick={() => { window.location.href = tradeDetailHref(trade.id); }}>
+	                            <td className="trade-select-cell" onClick={(event) => event.stopPropagation()}>
+	                              <input
+	                                type="checkbox"
+	                                checked={selectedTradeIds.includes(trade.id)}
+	                                aria-label={`Select ${trade.symbol} trade from ${trade.entryDate}`}
+	                                onChange={() => toggleTradeSelection(trade.id)}
+	                              />
+	                            </td>
+	                            {visibleColumns.map((column) => (
+	                              <td key={column.key}>{renderTradeCell(column.key, trade, grade, review)}</td>
+	                            ))}
                           </tr>
                         );
                       })}
                       {!filteredTrades.length ? (
-                        <tr>
-                          <td colSpan={Math.max(visibleColumns.length, 1)} className="trade-empty">No trades match the current filters.</td>
-                        </tr>
+	                        <tr>
+	                          <td colSpan={Math.max(visibleColumns.length + 1, 1)} className="trade-empty">No trades match the current filters.</td>
+	                        </tr>
                       ) : null}
                     </tbody>
                   </table>
