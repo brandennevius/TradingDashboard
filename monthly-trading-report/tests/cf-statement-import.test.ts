@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCfTradesFromExecutionHistory, parseCfStatementText, type ParsedOpenPositionRow } from "../lib/cf-statement";
+import { applyManualFieldsToCfStatementTrade } from "../lib/cf-import-reconciliation";
 import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders, runAtomicCfImport, type CfWorkingOrderMetadata } from "../lib/cf-import-idempotency";
 import type { TradeExecution, TradeLogEntry, TradeLogInput } from "../lib/types";
 
@@ -25,6 +26,64 @@ function llyOrders(): CfWorkingOrderMetadata[] {
     { orderId: "lly-profit-limit", orderDate: "2026-07-17", timeValue: "10:00:02", direction: "Sell", shares: 1, symbol: "LLY", orderType: "LIMIT", orderPrice: 1287.94 }
   ];
 }
+
+function froCfStatementTrade(): TradeLogInput {
+  return {
+    userId: "branden", importSource: "cf-statement-pdf", importRowKey: "cf-open-position:FRO|LONG|2026-09-01",
+    symbol: "FRO", side: "LONG", status: "OPEN", entryDate: "2026-09-01", exitDate: "", openTime: "11:31",
+    closeTime: "", avgEntry: 44.8885, exitPrice: 0, stopPrice: 43.73, takeProfitPrice: 50.28, shares: 100,
+    commission: 0.71, usedMargin: 4542, risk: 0, pnl: 0, rMultiple: 0, returnPercent: 0, daysInTrade: 2,
+    setupTags: [], mistakeTags: [], customTags: ["CF Statement", "Open Position"], manualGrade: "", portfolioTag: "CF_Statement",
+    emotion: "", tradeQuality: "", checklistItems: [], notes: "", reviewSections: undefined, screenshots: [], chartLinks: [],
+    executions: [
+      { id: "fro-entry", type: "ENTRY", date: "2026-09-01", time: "11:31:37.015", side: "LONG", shares: 54, price: 44.37, pnl: 0, commission: 0.1, source: "FRO", sourceKey: "fro-entry" }
+    ]
+  };
+}
+
+function froManualReviewedTrade(): TradeLogEntry {
+  return {
+    id: "manual-fro", userId: "branden", importSource: "", importRowKey: "", symbol: "FRO", side: "LONG", status: "OPEN",
+    entryDate: "2026-09-01", exitDate: "", openTime: "", closeTime: "", avgEntry: 44.89, exitPrice: 0, stopPrice: 43.73,
+    takeProfitPrice: 50.28, shares: 100, commission: 0, usedMargin: 0, risk: 5, pnl: 0, rMultiple: 0, returnPercent: 0,
+    daysInTrade: 2, setupTags: ["CANSLIM"], mistakeTags: [], customTags: ["Swing candidate"], manualGrade: "A",
+    portfolioTag: "CF_Statement", emotion: "", tradeQuality: "", checklistItems: [], notes: "Reviewed FRO setup.",
+    reviewSections: { setup: "Breakout setup", entry: "", exit: "", didRight: "", didWrong: "", general: "" },
+    screenshots: [], chartLinks: [], executions: [], hidden: false, groupId: "", groupRole: "none",
+    createdAt: "2026-09-01T16:00:00.000Z", updatedAt: "2026-09-01T16:00:00.000Z"
+  };
+}
+
+test("CF open positions adopt the unique matching reviewed manual trade instead of creating a duplicate", () => {
+  const rebuilt = froCfStatementTrade();
+  const reviewedManual = froManualReviewedTrade();
+
+  const reconciled = applyManualFieldsToCfStatementTrade(rebuilt, [reviewedManual]);
+
+  assert.equal(reconciled.id, reviewedManual.id);
+  assert.equal(reconciled.risk, 5);
+  assert.deepEqual(reconciled.setupTags, ["CANSLIM"]);
+  assert.equal(reconciled.manualGrade, "A");
+  assert.equal(reconciled.notes, "Reviewed FRO setup.");
+  assert.deepEqual(reconciled.reviewSections, reviewedManual.reviewSections);
+  assert.deepEqual(reconciled.customTags, ["CF Statement", "Open Position", "Swing candidate"]);
+  assert.equal(reconciled.importRowKey, rebuilt.importRowKey);
+  assert.equal(reconciled.avgEntry, 44.8885);
+  assert.equal(reconciled.shares, 100);
+});
+
+test("CF open-position adoption is skipped when multiple manual matches exist", () => {
+  const rebuilt = froCfStatementTrade();
+  const first = froManualReviewedTrade();
+  const second = { ...froManualReviewedTrade(), id: "manual-fro-two", openTime: "" };
+
+  const reconciled = applyManualFieldsToCfStatementTrade(rebuilt, [first, second]);
+
+  assert.equal(reconciled.id, undefined);
+  assert.equal(reconciled.risk, rebuilt.risk);
+  assert.deepEqual(reconciled.setupTags, []);
+  assert.equal(reconciled.manualGrade, "");
+});
 
 test("replaying the same July 17 import leaves broker trades and manual fields unchanged", () => {
   const original = importedTrade();

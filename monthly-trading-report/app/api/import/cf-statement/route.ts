@@ -3,60 +3,19 @@ import crypto from "node:crypto";
 import { getSessionUser } from "@/lib/auth";
 import { buildCfTradesFromExecutionHistory, parseCfStatementText } from "@/lib/cf-statement";
 import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders } from "@/lib/cf-import-idempotency";
+import { applyManualFieldsToCfStatementTrade } from "@/lib/cf-import-reconciliation";
 import {
   listCfStatementTrades,
+  listTrades,
   replaceCfStatementImport,
 } from "@/lib/store";
 import type { TradeExecution, TradeLogEntry, TradeLogInput } from "@/lib/types";
-
-const CF_SYSTEM_TAGS = new Set([
-  "CF Statement",
-  "Open Position",
-  "Closed Transaction",
-  "Partial exits",
-  "Needs review",
-  "Combined trade",
-  "Auto recalculated"
-]);
-
-function tradeManualKey(trade: Pick<TradeLogEntry | TradeLogInput, "symbol" | "side" | "entryDate" | "openTime">) {
-  return [trade.symbol, trade.side, trade.entryDate, trade.openTime || ""].join("|");
-}
 
 function executionHistoryFromTrade(trade: TradeLogEntry | TradeLogInput): TradeExecution[] {
   return (trade.executions || []).map((execution) => ({
     ...execution,
     source: trade.symbol
   }));
-}
-
-function applyManualFields(rebuiltTrade: TradeLogInput, existingTrades: TradeLogEntry[]) {
-  const exact = existingTrades.find((trade) => trade.importRowKey === rebuiltTrade.importRowKey);
-  const fallback = existingTrades.find((trade) => tradeManualKey(trade) === tradeManualKey(rebuiltTrade));
-  const existing = exact || fallback;
-
-  if (!existing) {
-    return rebuiltTrade;
-  }
-
-  const manualTags = existing.customTags.filter((tag) => !CF_SYSTEM_TAGS.has(tag));
-
-  return {
-    ...rebuiltTrade,
-    risk: existing.risk || rebuiltTrade.risk,
-    setupTags: existing.setupTags.length ? existing.setupTags : rebuiltTrade.setupTags,
-    mistakeTags: existing.mistakeTags.length ? existing.mistakeTags : rebuiltTrade.mistakeTags,
-    customTags: Array.from(new Set([...rebuiltTrade.customTags, ...manualTags])),
-    manualGrade: existing.manualGrade || rebuiltTrade.manualGrade,
-    emotion: existing.emotion || rebuiltTrade.emotion,
-    tradeQuality: existing.tradeQuality || rebuiltTrade.tradeQuality,
-    checklistItems: existing.checklistItems.length ? existing.checklistItems : rebuiltTrade.checklistItems,
-    notes: existing.notes || rebuiltTrade.notes,
-    reviewSections: existing.reviewSections || rebuiltTrade.reviewSections,
-    screenshots: existing.screenshots.length ? existing.screenshots : rebuiltTrade.screenshots,
-    chartLinks: existing.chartLinks.length ? existing.chartLinks : rebuiltTrade.chartLinks,
-    hidden: exact ? existing.hidden : rebuiltTrade.hidden
-  };
 }
 
 export async function POST(request: Request) {
@@ -114,7 +73,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const existingCfTrades = await listCfStatementTrades(user.id, portfolioTag);
+    const [existingCfTrades, allExistingTrades] = await Promise.all([
+      listCfStatementTrades(user.id, portfolioTag),
+      listTrades()
+    ]);
+    const existingPortfolioTrades = allExistingTrades.filter(
+      (trade) => trade.userId === user.id && trade.portfolioTag === portfolioTag
+    );
     const existingKeys = new Set(existingCfTrades.map((trade) => trade.importRowKey));
     const existingExecutionHistory = existingCfTrades.flatMap(executionHistoryFromTrade);
     const statementExecutionHistory = statementTrades.flatMap(executionHistoryFromTrade);
@@ -133,7 +98,7 @@ export async function POST(request: Request) {
       parsedStatement.workingOrders,
       user.id,
       portfolioTag
-    ).map((trade) => applyManualFields(trade, existingCfTrades));
+    ).map((trade) => applyManualFieldsToCfStatementTrade(trade, existingPortfolioTrades));
 
     const tradesChanged = !cfImportTradesEquivalent(existingCfTrades, rebuiltTrades);
     const activeWorkingOrders = replaceActiveWorkingOrders(parsedStatement.workingOrders);

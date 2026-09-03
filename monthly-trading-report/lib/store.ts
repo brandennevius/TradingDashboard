@@ -8,6 +8,7 @@ import {
   type BrokerPortfolioSnapshot,
   type BrokerPortfolioSnapshotInput
 } from "./broker-portfolio-snapshot";
+import type { CfStatementReplacementTrade } from "./cf-import-reconciliation";
 import { runAtomicCfImport, type CfWorkingOrderMetadata } from "./cf-import-idempotency";
 import { normalizeTradeReviewSections } from "./trade-review";
 import { createUserDefinedWeeklyFocus, normalizeWeeklyFocus, type WeeklyFocus } from "./weekly-focus";
@@ -2902,10 +2903,10 @@ export async function listCfStatementTrades(userId: string, portfolioTag: string
   return result.rows.map(rowToTrade);
 }
 
-function materializeCfStatementTrades(trades: TradeLogInput[], portfolioTag: string, now: string) {
+function materializeCfStatementTrades(trades: CfStatementReplacementTrade[], portfolioTag: string, now: string) {
   return trades.map((trade): TradeLogEntry => ({
       ...trade,
-      id: stableTradeId(trade),
+      id: trade.id || stableTradeId(trade),
       importSource: "cf-statement-pdf",
       importRowKey: trade.importRowKey || "",
       chartLinks: trade.chartLinks || [],
@@ -2927,7 +2928,7 @@ function materializeCfStatementTrades(trades: TradeLogInput[], portfolioTag: str
     }));
 }
 
-async function replaceCfStatementTradesWithClient(client: PoolClient, userId: string, portfolioTag: string, trades: TradeLogInput[]) {
+async function replaceCfStatementTradesWithClient(client: PoolClient, userId: string, portfolioTag: string, trades: CfStatementReplacementTrade[]) {
     await client.query(
       "delete from trade_logs where user_id = $1 and portfolio_tag = $2 and import_source = 'cf-statement-pdf'",
       [userId, portfolioTag]
@@ -2935,7 +2936,7 @@ async function replaceCfStatementTradesWithClient(client: PoolClient, userId: st
 
     for (const trade of trades) {
       const values = [
-        stableTradeId(trade),
+        trade.id || stableTradeId(trade),
         trade.userId,
         "cf-statement-pdf",
         trade.importRowKey || "",
@@ -2994,7 +2995,7 @@ async function replaceCfStatementTradesWithClient(client: PoolClient, userId: st
     }
 }
 
-export async function replaceCfStatementTrades(userId: string, portfolioTag: string, trades: TradeLogInput[]) {
+export async function replaceCfStatementTrades(userId: string, portfolioTag: string, trades: CfStatementReplacementTrade[]) {
   const now = new Date().toISOString();
   const db = getPool();
 
@@ -3027,7 +3028,7 @@ export async function replaceCfStatementTrades(userId: string, portfolioTag: str
 export async function replaceCfStatementImport(
   userId: string,
   portfolioTag: string,
-  trades: TradeLogInput[],
+  trades: CfStatementReplacementTrade[],
   meta: {
     currentEquity?: number;
     statementEquity?: number;
