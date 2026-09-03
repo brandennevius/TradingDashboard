@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { buildCfTradesFromExecutionHistory, parseCfStatementText, type ParsedOpenPositionRow } from "../lib/cf-statement";
-import { applyManualFieldsToCfStatementTrade } from "../lib/cf-import-reconciliation";
+import { applyManualFieldsToCfStatementTrade, reconcileCfStatementLifecycles } from "../lib/cf-import-reconciliation";
 import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders, runAtomicCfImport, type CfWorkingOrderMetadata } from "../lib/cf-import-idempotency";
 import type { TradeExecution, TradeLogEntry, TradeLogInput } from "../lib/types";
 
@@ -83,6 +83,89 @@ test("CF open-position adoption is skipped when multiple manual matches exist", 
   assert.equal(reconciled.risk, rebuilt.risk);
   assert.deepEqual(reconciled.setupTags, []);
   assert.equal(reconciled.manualGrade, "");
+});
+
+test("lifecycle identity does not depend on review completion", () => {
+  const unreviewed = {
+    ...froManualReviewedTrade(),
+    id: "manual-fro-unreviewed",
+    risk: 0,
+    setupTags: [],
+    manualGrade: "",
+    notes: "",
+    reviewSections: undefined
+  };
+
+  const result = reconcileCfStatementLifecycles([froCfStatementTrade()], [unreviewed]);
+
+  assert.equal(result.ambiguities.length, 0);
+  assert.equal(result.trades[0].id, unreviewed.id);
+  assert.deepEqual(result.adoptedNonCfTradeIds, [unreviewed.id]);
+  assert.equal(result.decisions[0].action, "OPEN_CONTINUATION");
+});
+
+test("a reviewed duplicate is consolidated even when an exact CF row already exists", () => {
+  const rebuilt = froCfStatementTrade();
+  const exactCf = {
+    ...froManualReviewedTrade(),
+    id: "existing-cf-fro",
+    importSource: "cf-statement-pdf",
+    importRowKey: rebuilt.importRowKey,
+    setupTags: [],
+    manualGrade: "",
+    notes: "",
+    executions: rebuilt.executions || []
+  };
+  const reviewed = froManualReviewedTrade();
+
+  const result = reconcileCfStatementLifecycles([rebuilt], [exactCf, reviewed]);
+
+  assert.equal(result.trades[0].id, reviewed.id);
+  assert.equal(result.trades[0].manualGrade, "A");
+  assert.equal(result.trades[0].notes, "Reviewed FRO setup.");
+  assert.deepEqual(result.adoptedNonCfTradeIds, [reviewed.id]);
+  assert.equal(result.decisions[0].action, "OPEN_CONTINUATION");
+});
+
+test("a carryover date change keeps the only open same-symbol lifecycle", () => {
+  const manual = { ...froManualReviewedTrade(), entryDate: "2026-08-29" };
+  const result = reconcileCfStatementLifecycles([froCfStatementTrade()], [manual]);
+
+  assert.equal(result.trades[0].id, manual.id);
+  assert.equal(result.decisions[0].action, "OPEN_CONTINUATION");
+});
+
+test("close and reopen cycles are not merged by ticker alone", () => {
+  const closed = {
+    ...froCfStatementTrade(),
+    status: "WIN" as const,
+    importRowKey: "cf-cycle:FRO:LONG:2026-08-01:first",
+    entryDate: "2026-08-01",
+    exitDate: "2026-08-10",
+    executions: [
+      { id: "old-entry", type: "ENTRY" as const, date: "2026-08-01", time: "10:00:00", side: "LONG" as const, shares: 10, price: 40, pnl: 0, commission: 0, source: "FRO", sourceKey: "cf-transaction:old-entry" },
+      { id: "old-exit", type: "EXIT" as const, date: "2026-08-10", time: "10:00:00", side: "LONG" as const, shares: 10, price: 42, pnl: 20, commission: 0, source: "FRO", sourceKey: "cf-transaction:old-exit" }
+    ]
+  };
+  const reopened = froCfStatementTrade();
+  const staleManual = { ...froManualReviewedTrade(), entryDate: "2026-08-01" };
+
+  const result = reconcileCfStatementLifecycles([closed, reopened], [staleManual]);
+
+  assert.equal(result.trades[0].id, undefined);
+  assert.equal(result.trades[1].id, undefined);
+  assert.deepEqual(result.decisions.map((decision) => decision.action), ["NEW_LIFECYCLE", "NEW_LIFECYCLE"]);
+});
+
+test("ambiguous open rows block automatic lifecycle adoption", () => {
+  const first = froManualReviewedTrade();
+  const second = { ...froManualReviewedTrade(), id: "manual-fro-two" };
+  const result = reconcileCfStatementLifecycles([froCfStatementTrade()], [first, second]);
+
+  assert.equal(result.ambiguities.length, 1);
+  assert.equal(result.ambiguities[0].action, "AMBIGUOUS");
+  assert.deepEqual(result.ambiguities[0].candidateTradeIds, ["manual-fro", "manual-fro-two"]);
+  assert.deepEqual(result.adoptedNonCfTradeIds, []);
 });
 
 test("replaying the same July 17 import leaves broker trades and manual fields unchanged", () => {

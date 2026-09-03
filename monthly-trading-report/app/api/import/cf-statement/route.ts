@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { getSessionUser } from "@/lib/auth";
 import { buildCfTradesFromExecutionHistory, parseCfStatementText } from "@/lib/cf-statement";
 import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders } from "@/lib/cf-import-idempotency";
-import { applyManualFieldsToCfStatementTrade } from "@/lib/cf-import-reconciliation";
+import { reconcileCfStatementLifecycles } from "@/lib/cf-import-reconciliation";
 import {
   listCfStatementTrades,
   listTrades,
@@ -32,6 +32,7 @@ export async function POST(request: Request) {
   const formData = await request.formData();
   const file = formData.get("file");
   const portfolioTag = String(formData.get("portfolioTag") || "").trim();
+  const dryRun = String(formData.get("dryRun") || "").trim().toLowerCase() === "true";
 
   if (!portfolioTag) {
     return NextResponse.json({ error: "A portfolio is required for CF import." }, { status: 400 });
@@ -92,13 +93,35 @@ export async function POST(request: Request) {
       ],
       currentOpenSymbols: parsedStatement.openPositions.map((position) => position.symbol)
     });
-    const rebuiltTrades = buildCfTradesFromExecutionHistory(
+    const brokerBuiltTrades = buildCfTradesFromExecutionHistory(
       executionHistory,
       parsedStatement.openPositions,
       parsedStatement.workingOrders,
       user.id,
       portfolioTag
-    ).map((trade) => applyManualFieldsToCfStatementTrade(trade, existingPortfolioTrades));
+    );
+    const reconciliation = reconcileCfStatementLifecycles(brokerBuiltTrades, existingPortfolioTrades);
+    const rebuiltTrades = reconciliation.trades;
+
+    if (reconciliation.ambiguities.length) {
+      return NextResponse.json({
+        error: "The statement contains lifecycle matches that require review. No trades were changed.",
+        code: "CF_LIFECYCLE_RECONCILIATION_AMBIGUOUS",
+        dryRun,
+        reconciliation: reconciliation.decisions
+      }, { status: 409 });
+    }
+
+    if (dryRun) {
+      return NextResponse.json({
+        dryRun: true,
+        portfolioTag,
+        coverageDate: parsedStatement.equityStatementDate,
+        statementTradeCount: rebuiltTrades.length,
+        adoptedTradeIds: reconciliation.adoptedNonCfTradeIds,
+        reconciliation: reconciliation.decisions
+      });
+    }
 
     const tradesChanged = !cfImportTradesEquivalent(existingCfTrades, rebuiltTrades);
     const activeWorkingOrders = replaceActiveWorkingOrders(parsedStatement.workingOrders);
@@ -121,7 +144,7 @@ export async function POST(request: Request) {
       floatingPnl: parsedStatement.floatingPnl,
       openPositions: parsedStatement.openPositions,
       workingOrders: activeWorkingOrders
-    }, tradesChanged);
+    }, tradesChanged, reconciliation.adoptedNonCfTradeIds);
     const created = rebuiltTrades.filter((trade) => !existingKeys.has(trade.importRowKey)).length;
     const updated = tradesChanged ? rebuiltTrades.length - created : 0;
     const openTrades = rebuiltTrades.filter((trade) => trade.status === "OPEN").length;

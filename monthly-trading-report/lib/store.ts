@@ -2928,7 +2928,19 @@ function materializeCfStatementTrades(trades: CfStatementReplacementTrade[], por
     }));
 }
 
-async function replaceCfStatementTradesWithClient(client: PoolClient, userId: string, portfolioTag: string, trades: CfStatementReplacementTrade[]) {
+async function replaceCfStatementTradesWithClient(
+  client: PoolClient,
+  userId: string,
+  portfolioTag: string,
+  trades: CfStatementReplacementTrade[],
+  adoptedNonCfTradeIds: string[] = []
+) {
+    if (adoptedNonCfTradeIds.length) {
+      await client.query(
+        "delete from trade_logs where user_id = $1 and portfolio_tag = $2 and import_source <> 'cf-statement-pdf' and id = any($3::text[])",
+        [userId, portfolioTag, adoptedNonCfTradeIds]
+      );
+    }
     await client.query(
       "delete from trade_logs where user_id = $1 and portfolio_tag = $2 and import_source = 'cf-statement-pdf'",
       [userId, portfolioTag]
@@ -3038,7 +3050,8 @@ export async function replaceCfStatementImport(
     workingOrders?: CfWorkingOrderMetadata[];
   },
   brokerSnapshot: BrokerPortfolioSnapshotInput,
-  replaceTrades: boolean
+  replaceTrades: boolean,
+  adoptedNonCfTradeIds: string[] = []
 ) {
   const now = new Date().toISOString();
   const db = getPool();
@@ -3056,7 +3069,9 @@ export async function replaceCfStatementImport(
     try {
       if (replaceTrades) {
         const retained = previousTrades.filter(
-          (trade) => !(trade.userId === userId && trade.portfolioTag === portfolioTag && trade.importSource === "cf-statement-pdf")
+          (trade) =>
+            !(trade.userId === userId && trade.portfolioTag === portfolioTag && trade.importSource === "cf-statement-pdf") &&
+            !adoptedNonCfTradeIds.includes(trade.id)
         );
         await writeLocalTrades([...retained, ...materializeCfStatementTrades(trades, portfolioTag, now)].sort(tradeLogOrder));
       }
@@ -3084,7 +3099,9 @@ export async function replaceCfStatementImport(
         const settingsResult = await client.query("select value from app_settings where key = $1 for update", ["branden_portfolio_names"]);
         const currentSettings = normalizeBrandenPortfolioSettings(settingsResult.rows[0]?.value);
         const nextSettings = portfolioSettingsWithImportMeta(currentSettings, portfolioTag.trim(), meta, now);
-        if (replaceTrades) await replaceCfStatementTradesWithClient(client, userId, portfolioTag, trades);
+        if (replaceTrades) {
+          await replaceCfStatementTradesWithClient(client, userId, portfolioTag, trades, adoptedNonCfTradeIds);
+        }
         await upsertBrokerPortfolioSnapshotWithClient(client, brokerSnapshot, now);
         await client.query(
           `insert into app_settings (key, value) values ($1, $2::jsonb)
