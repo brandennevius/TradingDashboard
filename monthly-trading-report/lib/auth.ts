@@ -36,6 +36,25 @@ function configuredUsers(): Array<TraderUser & { password: string }> {
     });
   }
 
+  // Mentor access is explicitly enabled by a server-side secret. Keep it
+  // separate from TRADER_USERS so provisioning cannot replace trader logins.
+  const mentorPassword = process.env.CODEX_JOURNAL_PASSWORD;
+  if (mentorPassword) {
+    const existingIndex = users.findIndex((user) => user.id === "codex");
+    const mentor = {
+      id: "codex",
+      name: "Codex",
+      password: mentorPassword,
+      readOnly: true,
+      journalOwnerId: "branden"
+    };
+    if (existingIndex >= 0) {
+      users[existingIndex] = mentor;
+    } else {
+      users.push(mentor);
+    }
+  }
+
   return users;
 }
 

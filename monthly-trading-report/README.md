@@ -40,6 +40,17 @@ DATABASE_URL="postgres://..."
 
 If `DATABASE_URL` is empty, local submissions are stored in `data/monthly-reports.json`.
 
+### Read-only mentor login
+
+Set the server-only `CODEX_JOURNAL_PASSWORD` environment variable to enable the
+`codex` login for Branden's journal. Add it as a sensitive Production variable in
+Vercel and redeploy. Keep the value out of source control and client-side variables.
+The account uses the existing read-only permissions; trader credentials in
+`TRADER_USERS` remain unchanged. If that list already contains `codex`, the mentor
+configuration takes precedence and makes that identity read-only. Removing the
+variable disables the dedicated login; also remove any separately configured
+`codex` entry from `TRADER_USERS` when revoking all access for that identity.
+
 ## Deployment
 
 This is ready for Vercel:
