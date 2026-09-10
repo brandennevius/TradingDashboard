@@ -6833,6 +6833,58 @@ th {
   padding-top: 12px;
 }
 
+.trade-excursion-strip {
+  align-items: center;
+  border-top: 1px solid rgba(185, 214, 168, 0.68);
+  display: grid;
+  gap: 14px;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(3, minmax(130px, 0.55fr)) minmax(260px, 1.8fr);
+  padding-top: 14px;
+}
+
+.trade-excursion-strip > div {
+  display: grid;
+  gap: 4px;
+}
+
+.trade-excursion-strip span {
+  color: #788172;
+  font-size: 0.68rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.trade-excursion-strip strong {
+  font-size: 1.05rem;
+}
+
+.trade-excursion-strip p {
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 900px) {
+  .trade-excursion-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .trade-excursion-strip p {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .trade-excursion-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .trade-excursion-strip p {
+    grid-column: auto;
+  }
+}
+
 .trade-detail-hero p,
 .trade-detail-section p,
 .trade-detail-aside p {

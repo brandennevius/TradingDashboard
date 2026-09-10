@@ -34,6 +34,7 @@ import type {
   WatchlistItem,
   WeeklyWatchlist
 } from "./types";
+import type { TradeExcursionResult } from "./trade-excursion";
 
 let pool: Pool | null = null;
 
@@ -842,6 +843,22 @@ async function ensureTradeTable() {
   await db.query("create index if not exists trade_logs_user_portfolio_idx on trade_logs (user_id, portfolio_tag)");
   await db.query("create index if not exists trade_logs_user_entry_date_idx on trade_logs (user_id, entry_date)");
   await db.query("create index if not exists trade_logs_user_exit_date_idx on trade_logs (user_id, exit_date)");
+}
+
+async function ensureTradeExcursionTable() {
+  const db = getPool();
+  if (!db) return;
+  await db.query(`
+    create table if not exists trade_excursions (
+      trade_id text not null,
+      user_id text not null,
+      input_hash text not null,
+      result jsonb not null,
+      updated_at timestamptz not null default now(),
+      primary key (trade_id, user_id)
+    );
+  `);
+  await db.query("create index if not exists trade_excursions_user_idx on trade_excursions (user_id, updated_at desc)");
 }
 
 async function ensureSettingsTable() {
@@ -2534,6 +2551,37 @@ export async function listTrades() {
   await ensureTradeTable();
   const result = await db.query(`select ${tradeColumns} from trade_logs order by entry_date desc, open_time desc, created_at desc, id desc`);
   return result.rows.map(rowToTrade);
+}
+
+export async function getTradeForUser(id: string, userId: string) {
+  const db = getPool();
+  if (!db) return (await readLocalTrades()).find((trade) => trade.id === id && trade.userId === userId) || null;
+  await ensureTradeTable();
+  const result = await db.query(`select ${tradeColumns} from trade_logs where id = $1 and user_id = $2 limit 1`, [id, userId]);
+  return result.rows[0] ? rowToTrade(result.rows[0]) : null;
+}
+
+export async function getCachedTradeExcursion(tradeId: string, userId: string, inputHash: string) {
+  const db = getPool();
+  if (!db) return null;
+  await ensureTradeExcursionTable();
+  const result = await db.query(
+    "select result from trade_excursions where trade_id = $1 and user_id = $2 and input_hash = $3 limit 1",
+    [tradeId, userId, inputHash]
+  );
+  return result.rows[0]?.result as TradeExcursionResult | undefined || null;
+}
+
+export async function saveCachedTradeExcursion(tradeId: string, userId: string, result: TradeExcursionResult) {
+  const db = getPool();
+  if (!db || result.status === "UNAVAILABLE") return;
+  await ensureTradeExcursionTable();
+  await db.query(
+    `insert into trade_excursions (trade_id, user_id, input_hash, result)
+     values ($1, $2, $3, $4::jsonb)
+     on conflict (trade_id, user_id) do update set input_hash = excluded.input_hash, result = excluded.result, updated_at = now()`,
+    [tradeId, userId, result.inputHash, JSON.stringify(result)]
+  );
 }
 
 export async function listBrandenVisibleTrades() {

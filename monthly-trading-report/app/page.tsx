@@ -37,6 +37,7 @@ import type {
   TraderUser
 } from "@/lib/types";
 import { displayTradeReturnPercent, tradeReturnLabel } from "@/lib/trade-return";
+import type { TradeExcursionResult } from "@/lib/trade-excursion";
 import { emptyTradeReviewSections, hasCompletedTradeReview, resolvedTradeReviewSections } from "@/lib/trade-review";
 import BrandenSidebar from "./components/BrandenSidebar";
 
@@ -1751,6 +1752,8 @@ export default function Home() {
   const [columnPreferences, setColumnPreferences] = useState<Record<string, BrandenColumnPreference[]>>({});
   const [selectedTradeId, setSelectedTradeId] = useState("");
   const [selectedTradeIds, setSelectedTradeIds] = useState<string[]>([]);
+  const [selectedTradeExcursion, setSelectedTradeExcursion] = useState<TradeExcursionResult | null>(null);
+  const [isTradeExcursionLoading, setIsTradeExcursionLoading] = useState(false);
   const [detailNavigationIds, setDetailNavigationIds] = useState<string[]>([]);
   const [selectedHiddenTradeIds, setSelectedHiddenTradeIds] = useState<string[]>([]);
   const [fullscreenScreenshot, setFullscreenScreenshot] = useState<{ src: string; alt: string } | null>(null);
@@ -2204,6 +2207,23 @@ export default function Home() {
       setEditTradeForm(tradeToForm(selectedTrade, setupTemplates));
     }
   }, [selectedTrade, setupTemplates]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSelectedTradeExcursion(null);
+    setIsTradeExcursionLoading(false);
+    if (!selectedTrade?.id) return;
+    setIsTradeExcursionLoading(true);
+    fetch(`/api/trades/${encodeURIComponent(selectedTrade.id)}/excursion`, { cache: "no-store" })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!cancelled && response.ok) setSelectedTradeExcursion(data.excursion || null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsTradeExcursionLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [selectedTrade?.id, selectedTrade?.updatedAt]);
 
   useEffect(() => {
     const existing = marketCycleEntries.find((entry) => entry.date === marketCycleForm.date);
@@ -5270,6 +5290,40 @@ export default function Home() {
               ) : editTradeForm.manualGrade ? (
                 <p className="trade-detail-hero-note">Grade: {editTradeForm.manualGrade}</p>
               ) : null}
+
+              <div className="trade-excursion-strip">
+                <div>
+                  <span>MFE{selectedTrade.status === "OPEN" ? " to date" : ""}</span>
+                  <strong className="trade-positive">
+                    {selectedTradeExcursion?.mfeDollars === null || selectedTradeExcursion?.mfeDollars === undefined
+                      ? "—"
+                      : `${money(selectedTradeExcursion.mfeDollars)}${selectedTradeExcursion.mfeR === null ? "" : ` · ${selectedTradeExcursion.mfeR.toFixed(2)}R`}`}
+                  </strong>
+                </div>
+                <div>
+                  <span>MAE{selectedTrade.status === "OPEN" ? " to date" : ""}</span>
+                  <strong className="trade-negative">
+                    {selectedTradeExcursion?.maeDollars === null || selectedTradeExcursion?.maeDollars === undefined
+                      ? "—"
+                      : `${money(selectedTradeExcursion.maeDollars)}${selectedTradeExcursion.maeR === null ? "" : ` · ${selectedTradeExcursion.maeR.toFixed(2)}R`}`}
+                  </strong>
+                </div>
+                <div>
+                  <span>Profit captured</span>
+                  <strong>
+                    {selectedTrade.status !== "OPEN" && selectedTradeExcursion?.mfeDollars && selectedTrade.pnl > 0
+                      ? `${Math.round(Math.max(0, Math.min(1, selectedTrade.pnl / selectedTradeExcursion.mfeDollars)) * 100)}%`
+                      : "—"}
+                  </strong>
+                </div>
+                <p>
+                  {isTradeExcursionLoading
+                    ? "Calculating from the execution path…"
+                    : selectedTradeExcursion
+                      ? `${selectedTradeExcursion.status === "ESTIMATED_PROXY" ? "Mapped estimate" : selectedTradeExcursion.status === "AVAILABLE" ? "Intraday calculation" : "Unavailable"} · ${selectedTradeExcursion.reason}`
+                      : "Excursion data is unavailable."}
+                </p>
+              </div>
             </article>
 
             <div className="trade-detail-main">

@@ -36,7 +36,19 @@ Change these before sharing the app.
 APP_SECRET="a-long-random-secret"
 TRADER_USERS="branden:password,cam:password"
 DATABASE_URL="postgres://..."
+FMP_API_KEY="..."
 ```
+
+Trade-detail MAE/MFE uses execution-aware intraday bars from FMP. Optional configuration:
+
+```bash
+FMP_TRADE_EXCURSION_INTERVAL="5min"
+FMP_US500_FUTURES_SYMBOL="ESUSD"
+FMP_US100_FUTURES_SYMBOL="NQUSD"
+FMP_US30_FUTURES_SYMBOL="YMUSD"
+```
+
+Listed securities and spot FX use their compatible provider symbols. The `.US500`, `.US100`, and `.US30` broker CFDs use scaled ES, NQ, and YM futures proxies and are explicitly labeled estimates because CFD spread and futures basis can differ. Missing or incompatible bars remain unavailable rather than being recorded as zero.
 
 If `DATABASE_URL` is empty, local submissions are stored in `data/monthly-reports.json`.
 
