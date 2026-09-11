@@ -30,14 +30,14 @@ const context = {
 
 test("exports lifecycle, selected-period, review, screenshot, excursion, and execution evidence", () => {
   const lifecycle = trade();
-  const periodTrade = trade({ pnl: 40, rMultiple: 0.2162, status: "BREAKEVEN" });
+  const periodTrade = trade({ exitDate: "2026-09-04", pnl: 40, rMultiple: 0.2162, status: "BREAKEVEN" });
   const csv = buildTradeLogCsv([{
     trade: lifecycle,
     periodTrade,
     grade: "B",
     reviewStatus: "Complete",
     excursion: {
-      status: "AVAILABLE", reason: "", algorithmVersion: "v1", inputHash: "hash", provider: "FMP",
+      status: "AVAILABLE", reason: "Exact intraday bars available.", algorithmVersion: "v1", inputHash: "hash", provider: "FMP",
       providerSymbol: "FRO", instrumentMode: "EXACT", instrumentLabel: "Listed security", interval: "5min",
       asOf: "2026-09-03", isOpen: false, mfeDollars: 120, maeDollars: -35, mfeR: 0.65, maeR: -0.19,
       mfeTimestamp: "2026-09-02 10:00", maeTimestamp: "2026-09-01 10:00", priceScale: 1, barsEvaluated: 50
@@ -45,12 +45,20 @@ test("exports lifecycle, selected-period, review, screenshot, excursion, and exe
   }], context);
 
   assert.match(csv, /"TRADE","trade-1"/);
-  assert.match(csv, /"89.1","0.4816","2026-09-01","2026-09-07","40","0.2162"/);
+  assert.match(csv, /"89.1","0.4816","0.4816216216216216","2026-09-01","2026-09-07","2026-09-04","40","0.2162"/);
   assert.match(csv, /"Flat base","Bought the trigger","Sold into strength","Sized from the stop","Added late","Follow the plan next time"/);
   assert.match(csv, /https:\/\/monthly-trading-report\.vercel\.app\/api\/trades\/trade-1\/screenshots\/image-1/);
-  assert.match(csv, /"AVAILABLE","120","0.65","-35","-0.19"/);
+  assert.match(csv, /"AVAILABLE","Exact intraday bars available\.","120","0.65","-35","-0.19"/);
   assert.match(csv, /"EXECUTION","trade-1","fill-1"/);
   assert.match(csv, /"ENTRY","2026-09-01","09:31","LONG","55","44.38","0","1.25","CF statement","fill-key-1"/);
+});
+
+test("keeps an open lifecycle separate from its latest selected-period partial exit", () => {
+  const lifecycle = trade({ status: "OPEN", exitDate: "", closeTime: "", pnl: -11.65, rMultiple: 0 });
+  const periodTrade = trade({ status: "OPEN", exitDate: "2026-09-04", pnl: -11.65, rMultiple: -0.062972972972973 });
+  const csv = buildTradeLogCsv([{ trade: lifecycle, periodTrade, grade: "B", reviewStatus: "Complete" }], context);
+
+  assert.match(csv, /"-11.65","0","-0.06297297297297297","2026-09-01","2026-09-07","2026-09-04","-11.65","-0.062972972972973"/);
 });
 
 test("formula-like review text is neutralized for spreadsheet safety", () => {

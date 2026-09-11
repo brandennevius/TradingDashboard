@@ -21,10 +21,11 @@ export const tradeLogCsvHeaders = [
   "row_type", "trade_id", "execution_id", "portfolio", "import_source", "import_row_key",
   "lifecycle_status", "period_status", "side", "symbol", "setup_tags", "entry_date", "entry_time",
   "avg_entry", "trade_shares", "exit_date", "exit_time", "avg_exit", "stop_price", "take_profit_price",
-  "initial_risk", "lifecycle_pnl", "lifecycle_r", "period_start", "period_end", "period_pnl", "period_r",
+  "initial_risk", "lifecycle_pnl", "stored_lifecycle_r", "calculated_lifecycle_r", "period_start", "period_end",
+  "period_last_exit_date", "period_pnl", "period_r",
   "commission", "used_margin", "return_percent", "days_in_trade", "grade", "review_status", "mistake_tags",
   "custom_tags", "review_setup", "review_entry", "review_exit", "review_did_right", "review_did_wrong",
-  "review_general", "legacy_notes", "screenshot_links", "chart_links", "excursion_status", "mfe_dollars",
+  "review_general", "legacy_notes", "screenshot_links", "chart_links", "excursion_status", "excursion_reason", "mfe_dollars",
   "mfe_r", "mae_dollars", "mae_r", "mfe_timestamp", "mae_timestamp", "maximum_profit_captured_percent",
   "execution_type", "execution_date", "execution_time", "execution_side", "execution_shares", "execution_price",
   "execution_pnl", "execution_commission", "execution_source", "execution_source_key"
@@ -56,6 +57,11 @@ function capturedPercent(trade: TradeLogEntry, excursion?: TradeExcursionResult 
   return Math.round((trade.pnl / excursion.mfeDollars) * 10_000) / 100;
 }
 
+function calculatedLifecycleR(trade: TradeLogEntry) {
+  if (!Number.isFinite(trade.pnl) || !Number.isFinite(trade.risk) || trade.risk <= 0) return "";
+  return trade.pnl / trade.risk;
+}
+
 export function buildTradeLogCsv(items: TradeLogCsvItem[], context: TradeLogCsvContext) {
   const rows: Array<Record<(typeof tradeLogCsvHeaders)[number], unknown>> = [];
 
@@ -85,9 +91,11 @@ export function buildTradeLogCsv(items: TradeLogCsvItem[], context: TradeLogCsvC
       take_profit_price: trade.takeProfitPrice,
       initial_risk: trade.risk,
       lifecycle_pnl: trade.pnl,
-      lifecycle_r: trade.rMultiple,
+      stored_lifecycle_r: trade.rMultiple,
+      calculated_lifecycle_r: calculatedLifecycleR(trade),
       period_start: context.startDate,
       period_end: context.endDate,
+      period_last_exit_date: periodTrade.exitDate,
       period_pnl: periodTrade.pnl,
       period_r: periodTrade.rMultiple,
       commission: trade.commission,
@@ -108,6 +116,7 @@ export function buildTradeLogCsv(items: TradeLogCsvItem[], context: TradeLogCsvC
       screenshot_links: trade.screenshots.map((value) => referenceUrl(value, context.baseUrl)),
       chart_links: trade.chartLinks.map((value) => referenceUrl(value, context.baseUrl)),
       excursion_status: excursion?.status || "NOT_REQUESTED",
+      excursion_reason: excursion?.reason || "",
       mfe_dollars: excursion?.mfeDollars ?? "",
       mfe_r: excursion?.mfeR ?? "",
       mae_dollars: excursion?.maeDollars ?? "",
