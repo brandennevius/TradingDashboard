@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import type { SetupChecklistTemplate, TradeLogEntry, TraderUser } from "@/lib/types";
+import type { TradeExcursionResult } from "@/lib/trade-excursion";
+import { buildTradeLogCsv, tradeLogCsvFilename } from "@/lib/trade-log-csv";
 import { hasCompletedTradeReview } from "@/lib/trade-review";
 
 type PortfolioSettingsResponse = {
@@ -252,11 +254,6 @@ function longestStreak(trades: TradeLogEntry[], status: TradeLogEntry["status"])
   return longest;
 }
 
-function csvCell(value: unknown) {
-  const text = String(value ?? "");
-  return `"${text.replace(/"/g, '""')}"`;
-}
-
 function isTradeColumnKey(value: string): value is TradeColumnKey {
   return tradeColumnKeys.includes(value as TradeColumnKey);
 }
@@ -453,6 +450,7 @@ export default function BrandenTradeLogPage() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [isExportingCsv, setIsExportingCsv] = useState(false);
   const [isExportingReview, setIsExportingReview] = useState(false);
   const [reviewExportProgress, setReviewExportProgress] = useState<ReviewExportProgress>({
     open: false,
@@ -848,29 +846,53 @@ export default function BrandenTradeLogPage() {
     return `/journal/branden/dashboard?${params.toString()}`;
   }
 
-  function exportCsv() {
-    const headers = ["status", "side", "symbol", "setup", "open_date", "entry", "close_date", "risk", "net_return", "r", "grade", "review"];
-    const rows = filteredTrades.map((trade) => [
-      normalizedTradeStatus(trade),
-      trade.side,
-      trade.symbol,
-      primarySetup(trade),
-      trade.entryDate,
-      trade.avgEntry,
-      trade.exitDate,
-      trade.risk,
-      trade.pnl,
-      trade.rMultiple,
-      checklistScore(trade, setupTemplates).grade,
-      tradeNeedsReview(trade, setupTemplates) ? "Needs Review" : "Complete"
-    ]);
-    const csv = [headers, ...rows].map((row) => row.map(csvCell).join(",")).join("\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `branden-trade-log-${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-	  URL.revokeObjectURL(url);
+  async function exportCsv() {
+    setIsExportingCsv(true);
+    setError("");
+
+    try {
+      const lifecycleById = new Map(brandenTrades.map((trade) => [trade.id, trade]));
+      const excursionEntries = new Map<string, TradeExcursionResult | null>();
+      const lifecycleTrades = filteredTrades.map((trade) => lifecycleById.get(trade.id) || trade);
+
+      for (let index = 0; index < lifecycleTrades.length; index += 4) {
+        const batch = lifecycleTrades.slice(index, index + 4);
+        await Promise.all(batch.map(async (trade) => {
+          try {
+            const response = await fetch(`/api/trades/${encodeURIComponent(trade.id)}/excursion`, { cache: "no-store" });
+            const data = await response.json().catch(() => ({}));
+            excursionEntries.set(trade.id, response.ok ? data.excursion || null : null);
+          } catch {
+            excursionEntries.set(trade.id, null);
+          }
+        }));
+      }
+
+      const context = { startDate, endDate, portfolio: activePortfolio, baseUrl: window.location.origin };
+      const csv = buildTradeLogCsv(filteredTrades.map((periodTrade) => {
+        const trade = lifecycleById.get(periodTrade.id) || periodTrade;
+        return {
+          trade,
+          periodTrade,
+          grade: checklistScore(trade, setupTemplates).grade,
+          reviewStatus: tradeNeedsReview(trade, setupTemplates) ? "Needs Review" as const : "Complete" as const,
+          excursion: excursionEntries.get(trade.id)
+        };
+      }), context);
+      const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = tradeLogCsvFilename(context);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setStatus(`Exported ${filteredTrades.length} trades with their executions and review fields.`);
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "Could not export the trade log.");
+    } finally {
+      setIsExportingCsv(false);
+    }
   }
 
   function toggleTradeSelection(tradeId: string) {
@@ -1140,7 +1162,9 @@ export default function BrandenTradeLogPage() {
                       aria-label="Search trades by ticker"
                     />
 	                  </label>
-	                  <button className="trade-muted-button" type="button" onClick={exportCsv}>Export CSV</button>
+	                  <button className="trade-muted-button" type="button" onClick={exportCsv} disabled={isExportingCsv || !filteredTrades.length}>
+	                    {isExportingCsv ? "Preparing CSV..." : "Export CSV"}
+	                  </button>
 	                  <button className="trade-muted-button" type="button" onClick={hideSelectedTrades} disabled={!canEditBrandenJournal || !selectedVisibleTrades.length}>
 	                    Hide selected
 	                  </button>
