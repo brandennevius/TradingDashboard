@@ -66,6 +66,15 @@ test("sends a shared setup-example chart once while retaining every trade associ
   assert(labels.includes("Trade ID trade-2"));
 });
 
+test("sends shared strategy text once while retaining references from every trade", () => {
+  const items = [trade(), trade({ id: "trade-2", symbol: "TWO" })];
+  const request = buildReviewRequest(items, templates, evidence(), "2026-09-01", "2026-09-07");
+  const prompt = request.input[0].content.find((part) => part.type === "input_text")?.text || "";
+  assert.equal(prompt.split("Enter near the pivot; avoid chasing extended breakouts.").length - 1, 1);
+  assert.equal(prompt.split('"strategyReferenceIds":["strategy-1"]').length - 1, 2);
+  assert(!prompt.includes('"strategyKnowledge"'));
+});
+
 test("oversized text fails explicitly instead of silently truncating", () => {
   assert.throws(() => buildReviewRequest([trade({ notes: "x".repeat(1_000_001) })], templates, evidence(), "", ""), /no evidence was omitted/);
 });
@@ -176,7 +185,7 @@ test("background Responses flow submits, polls, completes, and rejects terminal 
 });
 
 test("cost ceiling includes long-context and maximum output pricing", () => {
-  assert.equal(maximumTradeReviewCostUsd(200_000), 0.0592);
+  assert(Math.abs(maximumTradeReviewCostUsd(200_000) - 0.0496) < 1e-10);
   assert(maximumTradeReviewCostUsd(534_770) < MAX_TRADE_REVIEW_COST_USD);
   assert(maximumTradeReviewCostUsd(600_000) > MAX_TRADE_REVIEW_COST_USD);
 });
@@ -196,14 +205,41 @@ test("price preflight blocks an over-budget generation request", async () => {
   } finally { globalThis.fetch = oldFetch; if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; }
 });
 
-test("Word report includes reflections, MAE/MFE, charts, source context and measurable work priorities", async () => {
+test("Word report is a concise period review and keeps strategy material private", async () => {
   const data = evidence(); data.images["trade-1"] = [{ label: "Actual trade chart", dataUrl: chart() }, { label: "Comparison example chart", dataUrl: chart() }];
   const document = await buildDocument([trade()], templates, "2026-09-01", "2026-09-07", data, review());
   const buffer = await Packer.toBuffer(document);
   const zip = await JSZip.loadAsync(buffer); const xml = await zip.file("word/document.xml")!.async("string");
-  for (const text of ["What to Work On", "Rule going forward", "Measure of improvement", "Added late", "General review", "MAE and MFE", "No bars available", "Charts and Model Examples", "Breakout rules"]) assert(xml.includes(text), text);
-  assert(!xml.includes("Upcoming Week Focus"));
-  assert.equal((xml.match(/<w:drawing>/g) || []).length, 2);
+  for (const text of ["Period Overview", "What Went Well", "Key Mistakes", "Exposure and Correlation", "Trade Snapshot", "What to Work On", "Rule going forward", "Track:", "Bottom Line"]) assert(xml.includes(text), text);
+  for (const excluded of ["Strategy Context", "Charts and Model Examples", "Breakout rules", "Enter near the pivot", "General review", "MAE and MFE", "No bars available", "Legacy notes"]) assert(!xml.includes(excluded), excluded);
+  assert.equal((xml.match(/<w:drawing>/g) || []).length, 0);
   assert(xml.includes('w:val="Title"'));
-  if (process.env.REVIEW_QA_PATH) await writeFile(process.env.REVIEW_QA_PATH, buffer);
+  if (process.env.REVIEW_QA_PATH) {
+    const qaTrades = Array.from({ length: 20 }, (_, index) => trade({
+      id: `trade-${index + 1}`,
+      symbol: ["DELL", "USB", "AMZN", "LRCX", "NET", "SHOP"][index % 6],
+      entryDate: `2026-09-${String((index % 12) + 1).padStart(2, "0")}`,
+      pnl: index % 3 === 0 ? -125 : 90,
+      rMultiple: index % 3 === 0 ? -0.68 : 0.49,
+      status: index % 3 === 0 ? "LOSS" : "WIN"
+    }));
+    const qaReview = review();
+    qaReview.overallTakeaway = "The period was positive overall, but repeated technology exposure and late additions made several trades behave like one larger position. Risk planning was generally consistent; entry selectivity and exposure limits are the clearest opportunities.";
+    qaReview.keyThemes = ["Planned risk was usually documented before entry.", "Late additions and extended entries reduced the quality of otherwise valid setups.", "Several technology trades created overlapping exposure during the same window."];
+    qaReview.improved = ["Position risk was defined consistently.", "The strongest trades followed the planned trigger and avoided unnecessary adjustments.", "Trade reviews identified specific behaviors instead of relying only on profit and loss."];
+    qaReview.needsWork = ["Do not add after price has moved beyond the planned trigger.", "Treat related technology positions as one exposure bucket before sizing.", "Require clear exit criteria before entry."];
+    qaReview.exposureAnalysis = { summary: "Technology and internet-related equities dominated the sample and produced mixed results. The concentration increased the chance that several positions would respond to the same market move.", groups: [{
+      label: "Technology and internet (inferred)", type: "sector", symbols: ["DELL", "AMZN", "LRCX", "NET", "SHOP"], evidenceTradeIds: qaTrades.filter((item) => item.symbol !== "USB").map((item) => item.id),
+      performance: "Mixed, with several losses offset by smaller wins.", correlation: "These positions likely shared sensitivity to growth and technology sentiment.", takeaway: "Set a combined risk cap for related positions before adding another name.", confidence: "medium"
+    }, {
+      label: "Repeated AMZN positions", type: "repeated_symbol", symbols: ["AMZN"], evidenceTradeIds: qaTrades.filter((item) => item.symbol === "AMZN").map((item) => item.id),
+      performance: "Mixed across the period.", correlation: "Multiple entries in the same symbol are direct concentration.", takeaway: "Review the combined thesis and total symbol risk before re-entry.", confidence: "high"
+    }] };
+    qaReview.workOn.priorities[0].scope = "recurring";
+    qaReview.workOn.priorities[0].evidenceTradeIds = ["trade-1", "trade-4", "trade-7"];
+    qaReview.workOn.priorities[0].evidence = "Late additions appeared in three losing trades, making entry discipline a recurring issue in this period.";
+    qaReview.tradeReviews = Object.fromEntries(qaTrades.map((item, index) => [item.id, { mainLesson: index % 3 === 0 ? "Avoid adding after the planned entry area." : "Keep the defined risk and wait for the intended trigger." }]));
+    const qaDocument = await buildDocument(qaTrades, templates, "2026-09-01", "2026-09-13", data, qaReview);
+    await writeFile(process.env.REVIEW_QA_PATH, await Packer.toBuffer(qaDocument));
+  }
 });

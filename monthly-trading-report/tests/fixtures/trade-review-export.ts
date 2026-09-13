@@ -32,16 +32,16 @@ export function review(): AiReview { return {
   overallTakeaway: "The selected trade shows a late add after the initial entry. The immediate focus is to define the add trigger before entering.",
   keyThemes: ["Risk was defined before entry, but the add was late."], improved: ["Initial risk was documented. No prior period was supplied to establish improvement."],
   needsWork: ["The late add needs a written trigger."], bottomLine: "Keep the risk planning and make the add decision explicit.",
+  exposureAnalysis: { summary: "The sample contains one energy-shipping equity, so it does not establish concentrated or correlated exposure.", groups: [{
+    label: "Energy shipping (inferred)", type: "industry", symbols: ["FRO"], evidenceTradeIds: ["trade-1"],
+    performance: "One winning trade, +0.48R.", correlation: "A single observation cannot show shared movement.",
+    takeaway: "Track this exposure only if additional related names are added.", confidence: "medium"
+  }] },
   workOn: { primaryFocus: "Define the add trigger before entering. This is the clearest execution gap in this sample.", priorities: [{
     scope: "single_observation", issue: "Late add", evidenceTradeIds: ["trade-1"], evidence: "The trader recorded Added late in What I did wrong. This is one observed event, not an established recurring pattern.",
     outcomeImpact: "An extended add can worsen average entry and increase exposure away from the planned trigger. The supplied evidence does not establish a recoverable dollar amount.",
     rule: "Write the add trigger and maximum total risk before the initial entry. Add only when both conditions remain valid.",
     measure: "For the next five trades, record whether an add occurred and whether it met the written trigger. Target full adherence, then review the exceptions.", confidence: "medium"
   }] },
-  tradeReviews: { "trade-1": {
-    mainLesson: "Define adds before entry.", primaryRead: "Initial risk planning was explicit; the late add is the process issue to examine.",
-    reviewNotes: "The trader recorded sizing from the stop as a strength and adding late as a weakness. Preserve the first behavior and give the second a written rule.",
-    chartAnalysis: { visibleText: [], patternRead: "The fixture chart is illustrative; no market claim is drawn from it.", keyLevels: [], relativeStrengthRead: "Not shown.", volumeRead: "Not shown.", setupComparison: "The setup calls for entries near a pivot; the self-reported late add needs comparison with the intended trigger.", confidence: "low" },
-    actionItems: ["Write the trigger for any add before entry."]
-  } }
+  tradeReviews: { "trade-1": { mainLesson: "Define adds before entry." } }
 }; }

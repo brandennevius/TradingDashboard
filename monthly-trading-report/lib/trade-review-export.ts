@@ -3,7 +3,6 @@ import {
   BorderStyle,
   Document,
   HeadingLevel,
-  ImageRun,
   Paragraph,
   Table,
   TableCell,
@@ -14,11 +13,10 @@ import {
 import type { SetupChecklistTemplate, TradeLogEntry, TradeReviewSections } from "./types";
 import { tradeChecklistScore, normalizeTradeReviewSections } from "./trade-review";
 import type { TradeExcursionResult } from "./trade-excursion";
-import { loadImage } from "@napi-rs/canvas";
 
 export const DEFAULT_TRADE_REVIEW_MODEL = "gpt-5.6-luna";
 export const MAX_TRADE_REVIEW_COST_USD = 0.25;
-export const TRADE_REVIEW_MAX_OUTPUT_TOKENS = 16_000;
+export const TRADE_REVIEW_MAX_OUTPUT_TOKENS = 8_000;
 export type ReviewImage = { label: string; dataUrl: string; analysisDetail?: "low" | "high" };
 export type ReviewEvidence = {
   excursions: Record<string, TradeExcursionResult>;
@@ -87,18 +85,17 @@ type ReviewPromptTrade = {
 
 export type TradeReview = {
   mainLesson: string;
-  primaryRead: string;
-  reviewNotes: string;
-  chartAnalysis: {
-    visibleText: string[];
-    patternRead: string;
-    keyLevels: string[];
-    relativeStrengthRead: string;
-    volumeRead: string;
-    setupComparison: string;
-    confidence: "low" | "medium" | "high";
-  };
-  actionItems: string[];
+};
+
+export type ExposureTheme = {
+  label: string;
+  type: "sector" | "industry" | "theme" | "repeated_symbol" | "instrument";
+  symbols: string[];
+  evidenceTradeIds: string[];
+  performance: string;
+  correlation: string;
+  takeaway: string;
+  confidence: "low" | "medium" | "high";
 };
 
 export type AiReview = {
@@ -106,6 +103,10 @@ export type AiReview = {
   keyThemes: string[];
   improved: string[];
   needsWork: string[];
+  exposureAnalysis: {
+    summary: string;
+    groups: ExposureTheme[];
+  };
   workOn: {
     primaryFocus: string;
     priorities: { scope: "recurring" | "single_observation" | "insufficient_evidence"; issue: string; evidenceTradeIds: string[]; evidence: string; outcomeImpact: string; rule: string; measure: string; confidence: "low" | "medium" | "high" }[];
@@ -117,33 +118,9 @@ export type AiReview = {
 const tradeReviewSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["mainLesson", "primaryRead", "reviewNotes", "chartAnalysis", "actionItems"],
+  required: ["mainLesson"],
   properties: {
-    mainLesson: { type: "string" },
-    primaryRead: { type: "string" },
-    reviewNotes: { type: "string" },
-    chartAnalysis: {
-      type: "object",
-      additionalProperties: false,
-      required: ["visibleText", "patternRead", "keyLevels", "relativeStrengthRead", "volumeRead", "setupComparison", "confidence"],
-      properties: {
-        visibleText: { type: "array", items: { type: "string" } },
-        patternRead: { type: "string" },
-        keyLevels: { type: "array", items: { type: "string" } },
-        relativeStrengthRead: { type: "string" },
-        volumeRead: { type: "string" },
-        setupComparison: {
-          type: "string",
-          description: "Compare the trade chart against setup criteria, strategy knowledge, and modelExampleMatches when provided."
-        },
-        confidence: { type: "string", enum: ["low", "medium", "high"] }
-      }
-    },
-    actionItems: {
-      type: "array",
-      minItems: 1,
-      items: { type: "string" }
-    }
+    mainLesson: { type: "string", description: "One concise sentence, specific to this trade, for the supporting trade snapshot." }
   }
 };
 
@@ -157,12 +134,32 @@ function aiReviewJsonSchema(promptTrades: ReviewPromptTrade[]) {
     schema: {
       type: "object",
       additionalProperties: false,
-      required: ["overallTakeaway", "keyThemes", "improved", "needsWork", "workOn", "bottomLine", "tradeReviews"],
+      required: ["overallTakeaway", "keyThemes", "improved", "needsWork", "exposureAnalysis", "workOn", "bottomLine", "tradeReviews"],
       properties: {
         overallTakeaway: { type: "string" },
-        keyThemes: { type: "array", items: { type: "string" } },
-        improved: { type: "array", items: { type: "string" } },
-        needsWork: { type: "array", items: { type: "string" } },
+        keyThemes: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } },
+        improved: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } },
+        needsWork: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } },
+        exposureAnalysis: {
+          type: "object", additionalProperties: false, required: ["summary", "groups"],
+          properties: {
+            summary: { type: "string" },
+            groups: { type: "array", maxItems: 5, items: {
+              type: "object", additionalProperties: false,
+              required: ["label", "type", "symbols", "evidenceTradeIds", "performance", "correlation", "takeaway", "confidence"],
+              properties: {
+                label: { type: "string" },
+                type: { type: "string", enum: ["sector", "industry", "theme", "repeated_symbol", "instrument"] },
+                symbols: { type: "array", minItems: 1, items: { type: "string" } },
+                evidenceTradeIds: { type: "array", minItems: 1, items: { type: "string", enum: requiredTradeKeys } },
+                performance: { type: "string" },
+                correlation: { type: "string" },
+                takeaway: { type: "string" },
+                confidence: { type: "string", enum: ["low", "medium", "high"] }
+              }
+            } }
+          }
+        },
         workOn: {
           type: "object", additionalProperties: false, required: ["primaryFocus", "priorities"],
           properties: {
@@ -340,6 +337,25 @@ function numericContext(trades: TradeLogEntry[], templates: SetupChecklistTempla
   const openCount = trades.filter((trade) => normalizedTradeStatus(trade) === "OPEN").length;
   const missingNotes = trades.filter((trade) => !Object.values(normalizeTradeReviewSections(trade.reviewSections)).some((value) => value.trim())).length;
   const missingScreenshots = trades.filter((trade) => !trade.screenshots.length).length;
+  const groupedPerformance = (groups: Map<string, TradeLogEntry[]>) => [...groups.entries()].map(([label, items]) => {
+    const completed = items.filter(countsAsSettledTrade);
+    return {
+      label,
+      tradeCount: items.length,
+      settledCount: completed.length,
+      symbols: [...new Set(items.map((trade) => trade.symbol))],
+      netPnl: completed.reduce((sum, trade) => sum + Number(trade.pnl || 0), 0),
+      totalR: completed.reduce((sum, trade) => sum + Number(trade.rMultiple || 0), 0)
+    };
+  });
+  const groupBy = (key: (trade: TradeLogEntry) => string) => {
+    const groups = new Map<string, TradeLogEntry[]>();
+    for (const trade of trades) {
+      const label = key(trade);
+      groups.set(label, [...(groups.get(label) || []), trade]);
+    }
+    return groups;
+  };
 
   return {
     tradeCount: trades.length,
@@ -354,6 +370,9 @@ function numericContext(trades: TradeLogEntry[], templates: SetupChecklistTempla
     weakestSetupScore: worst ? { symbol: worst.trade.symbol, grade: worst.score.grade, score: worst.score.pctScore } : null,
     biggestWin: biggestWin ? { symbol: biggestWin.symbol, pnl: biggestWin.pnl, rMultiple: biggestWin.rMultiple } : null,
     biggestLoss: biggestLoss ? { symbol: biggestLoss.symbol, pnl: biggestLoss.pnl, rMultiple: biggestLoss.rMultiple } : null,
+    setupPerformance: groupedPerformance(groupBy(primarySetup)).sort((a, b) => b.tradeCount - a.tradeCount),
+    repeatedSymbols: groupedPerformance(groupBy((trade) => trade.symbol)).filter((group) => group.tradeCount > 1).sort((a, b) => b.tradeCount - a.tradeCount),
+    sidePerformance: groupedPerformance(groupBy((trade) => trade.side)),
     missingNotes,
     missingScreenshots
   };
@@ -367,15 +386,11 @@ export function validateAiReview(value: unknown, trades: TradeLogEntry[], prompt
 
   for (const trade of trades) {
     const review = tradeReviews[trade.id];
-    if (!review || ![review.mainLesson, review.primaryRead, review.reviewNotes].every((value) => typeof value === "string" && value.trim()) || !review.chartAnalysis || !Array.isArray(review.actionItems) || !review.actionItems.length || review.actionItems.some((item) => typeof item !== "string" || !item.trim())) {
+    if (!review || typeof review.mainLesson !== "string" || !review.mainLesson.trim()) {
       throw new Error(`OpenAI review was missing the required trade review for ${trade.symbol}.`);
     }
     normalizedTradeReviews[trade.id] = {
-      mainLesson: String(review.mainLesson || ""),
-      primaryRead: String(review.primaryRead || ""),
-      reviewNotes: String(review.reviewNotes || ""),
-      chartAnalysis: normalizeChartAnalysis(review.chartAnalysis),
-      actionItems: Array.isArray(review.actionItems) ? review.actionItems.map(String) : []
+      mainLesson: String(review.mainLesson || "")
     };
   }
 
@@ -384,6 +399,8 @@ export function validateAiReview(value: unknown, trades: TradeLogEntry[], prompt
     !Array.isArray(parsed.keyThemes) ||
     !Array.isArray(parsed.improved) ||
     !Array.isArray(parsed.needsWork) ||
+    typeof parsed.exposureAnalysis?.summary !== "string" || !parsed.exposureAnalysis.summary.trim() ||
+    !Array.isArray(parsed.exposureAnalysis?.groups) || parsed.exposureAnalysis.groups.length > 5 ||
     typeof parsed.workOn?.primaryFocus !== "string" || !parsed.workOn.primaryFocus.trim() ||
     !Array.isArray(parsed.workOn?.priorities) || !parsed.workOn.priorities.length || parsed.workOn.priorities.length > 3 ||
     typeof parsed.bottomLine !== "string" || !parsed.bottomLine.trim()
@@ -392,6 +409,17 @@ export function validateAiReview(value: unknown, trades: TradeLogEntry[], prompt
   }
 
   const validIds = new Set(promptTrades.map((trade) => trade.reviewKey));
+  const validSymbols = new Set(promptTrades.map((trade) => trade.symbol.toUpperCase()));
+  for (const group of parsed.exposureAnalysis!.groups) {
+    if (!group || typeof group.label !== "string" || !group.label.trim() ||
+      !["sector", "industry", "theme", "repeated_symbol", "instrument"].includes(group.type) ||
+      !Array.isArray(group.symbols) || !group.symbols.length || group.symbols.some((symbol) => !validSymbols.has(String(symbol).toUpperCase())) ||
+      !Array.isArray(group.evidenceTradeIds) || !group.evidenceTradeIds.length || group.evidenceTradeIds.some((id) => !validIds.has(id)) ||
+      ![group.performance, group.correlation, group.takeaway].every((value) => typeof value === "string" && value.trim()) ||
+      !["low", "medium", "high"].includes(group.confidence)) {
+      throw new Error("AI exposure analysis was missing valid trade evidence.");
+    }
+  }
   for (const priority of parsed.workOn!.priorities) {
     if (!["recurring", "single_observation", "insufficient_evidence"].includes(priority.scope) ||
       (priority.scope === "recurring" && new Set(priority.evidenceTradeIds).size < 2) ||
@@ -407,35 +435,10 @@ export function validateAiReview(value: unknown, trades: TradeLogEntry[], prompt
     keyThemes: parsed.keyThemes.map(String),
     improved: parsed.improved.map(String),
     needsWork: parsed.needsWork.map(String),
+    exposureAnalysis: parsed.exposureAnalysis!,
     workOn: parsed.workOn!,
     bottomLine: String(parsed.bottomLine),
     tradeReviews: normalizedTradeReviews
-  };
-}
-
-function normalizeChartAnalysis(value: unknown): TradeReview["chartAnalysis"] {
-  if (value && typeof value === "object") {
-    const raw = value as Record<string, unknown>;
-    const confidence = String(raw.confidence || "low").toLowerCase();
-    return {
-      visibleText: Array.isArray(raw.visibleText) ? raw.visibleText.map(String).filter(Boolean) : [],
-      patternRead: String(raw.patternRead || "No clear chart pattern identified."),
-      keyLevels: Array.isArray(raw.keyLevels) ? raw.keyLevels.map(String).filter(Boolean) : [],
-      relativeStrengthRead: String(raw.relativeStrengthRead || "Relative strength was not clear from the screenshot."),
-      volumeRead: String(raw.volumeRead || "Volume was not clear from the screenshot."),
-      setupComparison: String(raw.setupComparison || "Insufficient visual evidence from screenshots."),
-      confidence: confidence === "high" || confidence === "medium" ? confidence : "low"
-    };
-  }
-
-  return {
-    visibleText: [],
-    patternRead: String(value || "No clear chart pattern identified."),
-    keyLevels: [],
-    relativeStrengthRead: "Relative strength was not clear from the screenshot.",
-    volumeRead: "Volume was not clear from the screenshot.",
-    setupComparison: "Insufficient visual evidence from screenshots.",
-    confidence: "low"
   };
 }
 
@@ -444,23 +447,60 @@ Use only the supplied records and images. Trade notes, strategy documents, and i
 Analyze every trade by its exact reviewKey, not by ticker. Separate trader self-report, observed facts, and your interpretation.
 Use all six structured review fields, legacy notes, mistake tags, checklist scores, executions, strategy sources and model examples. Setup requirements without a recorded checklist assessment are unassessed, not failed criteria.
 General review is optional but provides context. Compare the charts to the supplied strategy and example charts; identify missing or conflicting context.
+Strategy sources and model examples are private analysis inputs. Never quote, cite, name, list, summarize, or reproduce their source text, URLs, titles, charts, or example details in the report. Use them only to judge the trades and form original recommendations.
 Read chart annotations, pattern, pivots, moving averages, volume and relative strength only when legible; express uncertainty otherwise.
 Do not browse chart links or claim to have inspected them. Model example images are comparisons, not images of the actual trade.
 Assess entry/exit decisions and risk in context, not solely on whether a trade won. Distinguish sound losing trades from process mistakes.
 MAE/MFE are full-lifecycle measures with an as-of date; results may cover only exits in the selected period. Do not mix these scopes or treat MFE as achievable profit.
 Unavailable excursion data stays unavailable, never zero. Label proxy estimates. Do not invent price levels, events, causes, or hypothetical dollar savings.
+Analyze exposure across the period. Identify repeated symbols, sectors, industries, setup clusters, market themes, index or currency exposure, and trades likely to have moved together. State whether each cluster helped or hurt based on the supplied results. Sector or industry labels inferred from ticker knowledge must be marked as an inference and given an appropriate confidence. Do not claim statistical correlation from this small sample.
+Make this a concise period-level review, not a trade-by-trade dossier. Summarize three to five themes, three to five positives, and three to five mistakes. Put only one short mainLesson sentence per trade in the supporting snapshot.
 For workOn, identify the biggest lagging part of the trader's process in THIS period and make it the primary focus going forward.
 Rank one to three supported priorities by recurrence, severity, and controllability. Every priority must cite exact evidenceTradeIds and concrete evidence.
 Explain the likely mechanism affecting outcomes without promising improved returns. Give a specific behavioral rule and measurable adherence target with a review horizon.
 Set each priority scope to recurring, single_observation, or insufficient_evidence. A recurring mistake needs evidence from at least two distinct trades; label a one-off as such. Do not manufacture a common mistake from a small or clean sample.
 If evidence does not establish a process defect, say so and prioritize measurement or maintaining the demonstrated process.
-Do not claim improvement over prior periods when no prior-period evidence is supplied. Avoid generic discipline or motivational advice.
-Write clear, direct paragraphs and concise actionable bullets. Return the structured report with a substantive review for every trade.`;
+Use improved for what went well during this period. Do not claim change versus prior periods when no prior-period evidence is supplied. Avoid generic discipline or motivational advice.
+Write clear, direct paragraphs and concise actionable bullets. Keep the entire response focused on decisions the trader can use next period.`;
+
+function deduplicatedReviewContext(promptTrades: ReviewPromptTrade[]) {
+  const strategyReferences: Array<ReviewPromptTrade["strategyKnowledge"][number] & { referenceId: string }> = [];
+  const modelExampleReferences: Array<ReviewPromptTrade["modelExampleMatches"][number] & { referenceId: string }> = [];
+  const strategyIds = new Map<string, string>();
+  const exampleIds = new Map<string, string>();
+
+  const trades = promptTrades.map(({ strategyKnowledge, modelExampleMatches, ...trade }) => {
+    const strategyReferenceIds = strategyKnowledge.map((source) => {
+      const key = JSON.stringify(source);
+      let referenceId = strategyIds.get(key);
+      if (!referenceId) {
+        referenceId = `strategy-${strategyReferences.length + 1}`;
+        strategyIds.set(key, referenceId);
+        strategyReferences.push({ ...source, referenceId });
+      }
+      return referenceId;
+    });
+    const modelExampleReferenceIds = modelExampleMatches.map((example) => {
+      const key = JSON.stringify(example);
+      let referenceId = exampleIds.get(key);
+      if (!referenceId) {
+        referenceId = `example-${modelExampleReferences.length + 1}`;
+        exampleIds.set(key, referenceId);
+        modelExampleReferences.push({ ...example, referenceId });
+      }
+      return referenceId;
+    });
+    return { ...trade, strategyReferenceIds, modelExampleReferenceIds };
+  });
+
+  return { trades, strategyReferences, modelExampleReferences };
+}
 
 export function buildReviewRequest(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], evidence: ReviewEvidence, startDate: string, endDate: string) {
   const promptTrades = buildPromptTrades(trades, templates, evidence);
+  const context = deduplicatedReviewContext(promptTrades);
   const content: Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string; detail: "low" | "high" }> = [
-    { type: "input_text", text: JSON.stringify({ period: { startDate, endDate }, numericContext: numericContext(trades, templates), trades: promptTrades }) }
+    { type: "input_text", text: JSON.stringify({ period: { startDate, endDate }, numericContext: numericContext(trades, templates), ...context }) }
   ];
   if (content[0].type === "input_text" && content[0].text.length > 1_000_000) {
     throw new Error("The full review context is too large. Narrow the trade filters or reduce the active strategy sources; no evidence was omitted.");
@@ -596,7 +636,7 @@ function text(text: string, options: { bold?: boolean; color?: string; size?: nu
   });
 }
 
-function paragraph(children: (TextRun | ImageRun)[], options: { keepNext?: boolean; spacingAfter?: number; heading?: typeof HeadingLevel[keyof typeof HeadingLevel]; alignment?: typeof AlignmentType[keyof typeof AlignmentType] } = {}) {
+function paragraph(children: TextRun[], options: { keepNext?: boolean; spacingAfter?: number; heading?: typeof HeadingLevel[keyof typeof HeadingLevel]; alignment?: typeof AlignmentType[keyof typeof AlignmentType] } = {}) {
   return new Paragraph({
     children,
     heading: options.heading,
@@ -680,69 +720,45 @@ function summaryStatsTable(trades: TradeLogEntry[]) {
 function scorecardTable(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], review: AiReview) {
   return simpleTable(
     [
-      ["Ticker", "Setup", "Grade", "Status", "Result / Risk", "Main Lesson"],
+      ["Date", "Ticker", "Setup", "Grade", "Result", "Review Note"],
       ...trades.map((trade) => {
         const status = normalizedTradeStatus(trade);
         const score = checklistScore(trade, templates);
         const tradeReview = review.tradeReviews[trade.id];
         return [
+          trade.entryDate,
           trade.symbol,
           primarySetup(trade),
           score.grade,
-          status,
-          `${money(trade.pnl)} / ${fmt(trade.rMultiple)}R, risk ${money(trade.risk)}`,
-          tradeReview?.mainLesson || tradeReview?.primaryRead || "Review note unavailable."
+          `${status}: ${money(trade.pnl)} / ${fmt(trade.rMultiple)}R`,
+          tradeReview?.mainLesson || "Review note unavailable."
         ];
       })
     ],
-    [900, 1500, 900, 1000, 1700, 3360]
+    [1150, 850, 1350, 900, 1750, 3360]
   );
 }
 
-function criteriaSummary(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
-  const items = resolvedChecklistItems(trade);
-  const templatesForTrade = templates.filter((template) => trade.setupTags.some((tag) => tag.trim().toLowerCase() === template.setupName.trim().toLowerCase()));
-  const unassessed = templatesForTrade.flatMap((template) => (template.groups?.length ? template.groups.flatMap((group) => group.criteria) : template.criteria)
-    .filter((criterion) => !items.some((item) => item.id === criterion.id || item.criteria === criterion.criteria))
-    .map((criterion) => `Not assessed: ${criterion.criteria} (${criterion.points} possible points)`));
-  if (!items.length && !unassessed.length) return ["No setup criteria were found for this setup."];
-
-  return [...items.map((item) => {
-    const earned = item.inputType === "points" ? Number(item.score || 0) : item.met ? item.points : 0;
-    const prefix = earned > 0 ? "Met" : "Missed";
-    return `${prefix}: ${item.criteria} (${fmt(earned, 1)}/${fmt(item.points, 1)} pts)`;
-  }), ...unassessed];
+function exposureTable(review: AiReview, trades: TradeLogEntry[]) {
+  const tradeById = new Map(trades.map((trade) => [trade.id, trade]));
+  return simpleTable(
+    [
+      ["Exposure", "Symbols", "Period Result", "What It Means"],
+      ...review.exposureAnalysis.groups.map((group) => {
+        const dates = [...new Set(group.evidenceTradeIds.map((id) => tradeById.get(id)?.entryDate).filter(Boolean))];
+        return [
+          group.label,
+          group.symbols.join(", "),
+          group.performance,
+          `${group.correlation} ${group.takeaway}${dates.length ? ` Trades entered: ${dates.join(", ")}.` : ""}`
+        ];
+      })
+    ],
+    [1500, 1500, 2200, 4160]
+  );
 }
 
-function chartAnalysisBullets(chartAnalysis: TradeReview["chartAnalysis"]) {
-  return [
-    `Pattern: ${chartAnalysis.patternRead}`,
-    chartAnalysis.keyLevels.length ? `Key levels: ${chartAnalysis.keyLevels.join(", ")}` : "",
-    chartAnalysis.visibleText.length ? `Visible chart text: ${chartAnalysis.visibleText.join(" | ")}` : "",
-    `Relative strength: ${chartAnalysis.relativeStrengthRead}`,
-    `Volume: ${chartAnalysis.volumeRead}`,
-    `Setup comparison: ${chartAnalysis.setupComparison}`,
-    `Confidence: ${chartAnalysis.confidence}`
-  ].filter(Boolean);
-}
-
-async function imageRunsForTrade(images: ReviewImage[]) {
-  const runs: Paragraph[] = [];
-  for (const image of images) {
-    const data = Buffer.from(image.dataUrl.split(",")[1], "base64");
-    const decoded = await loadImage(data);
-    const scale = Math.min(600 / decoded.width, 620 / decoded.height, 1);
-    const type = image.dataUrl.startsWith("data:image/jpeg;") ? "jpg" as const : "png" as const;
-    runs.push(new Paragraph({ children: [text(image.label, { bold: true })], keepNext: true }));
-    runs.push(new Paragraph({ children: [new ImageRun({ data, type,
-      transformation: { width: Math.round(decoded.width * scale), height: Math.round(decoded.height * scale) },
-      altText: { name: image.label, title: image.label, description: image.label }
-    })] }));
-  }
-  return runs;
-}
-
-export async function buildDocument(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], startDate: string, endDate: string, evidence: ReviewEvidence, review: AiReview) {
+export async function buildDocument(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], startDate: string, endDate: string, _evidence: ReviewEvidence, review: AiReview) {
   const children: (Paragraph | Table)[] = [
     new Paragraph({
       text: "Branden Trade Review",
@@ -753,84 +769,39 @@ export async function buildDocument(trades: TradeLogEntry[], templates: SetupChe
     paragraph([text(`Filtered review - ${startDate || "All dates"} to ${endDate || "today"}`, { color: ACCENT, bold: true, size: 24 })], {
       spacingAfter: 220
     }),
-    heading("Overall Takeaway"),
+    heading("Period Overview"),
     paragraph([text(review.overallTakeaway)], { spacingAfter: 180 }),
     heading("Primary Focus", HeadingLevel.HEADING_2),
     paragraph([text(review.workOn.primaryFocus, { bold: true })]),
     summaryStatsTable(trades),
-    paragraph([text("Results reflect exits in the selected period when available. MAE and MFE describe the full trade lifecycle through the stated as-of date, not just the selected period.")]),
+    paragraph([text("Results reflect the selected trades and exits recorded in this review period.", { italics: true })]),
     heading("Key Themes", HeadingLevel.HEADING_2),
     ...review.keyThemes.map(bullet),
-    heading("Trade Scorecard", HeadingLevel.HEADING_2),
-    scorecardTable(trades, templates, review),
-    heading("What Improved", HeadingLevel.HEADING_2),
+    heading("What Went Well", HeadingLevel.HEADING_2),
     ...review.improved.map(bullet),
-    heading("What Needs Work", HeadingLevel.HEADING_2),
-    ...review.needsWork.map(bullet)
+    heading("Key Mistakes", HeadingLevel.HEADING_2),
+    ...review.needsWork.map(bullet),
+    heading("Exposure and Correlation"),
+    paragraph([text(review.exposureAnalysis.summary)]),
+    ...(review.exposureAnalysis.groups.length ? [exposureTable(review, trades)] : []),
+    paragraph([text("Exposure groupings describe overlapping risk and observed period results; they are not a statistical correlation study.", { italics: true })]),
+    heading("Trade Snapshot"),
+    paragraph([text("This table links the period themes to the individual trades.", { italics: true })]),
+    scorecardTable(trades, templates, review),
+    heading("What to Work On"),
+    paragraph([text(review.workOn.primaryFocus, { bold: true })], { keepNext: true })
   ];
 
-  for (const trade of trades) {
-    const score = checklistScore(trade, templates);
-    const status = normalizedTradeStatus(trade);
-    const tradeReview = review.tradeReviews[trade.id];
-    children.push(heading(`${trade.symbol} - ${primarySetup(trade)}`, HeadingLevel.HEADING_1));
-    children.push(
-      simpleTable(
-        [
-          ["Grade", score.grade, "Status", status],
-          ["Result / Risk", `${money(trade.pnl)} / ${fmt(trade.rMultiple)}R`, "Risk", money(trade.risk)],
-          ["Side", trade.side, "Shares", String(trade.shares || "-")],
-          ["Entry", `${trade.entryDate} @ ${fmt(trade.avgEntry)}`, "Exit", trade.exitDate ? `${trade.exitDate} @ ${fmt(trade.exitPrice)}` : "Still open"],
-          ["Stop", trade.stopPrice ? fmt(trade.stopPrice) : "-", "Target", trade.takeProfitPrice ? fmt(trade.takeProfitPrice) : "-"]
-        ],
-        [1400, 3280, 1400, 3280]
-      )
-    );
-    const excursion = evidence.excursions[trade.id];
-    children.push(heading("MAE and MFE", HeadingLevel.HEADING_2));
-    children.push(paragraph([text(excursion && excursion.status !== "UNAVAILABLE"
-      ? `MAE ${excursion.maeDollars === null ? "unavailable" : money(excursion.maeDollars)} / ${excursion.maeR === null ? "unavailable" : `${fmt(excursion.maeR)}R`}; MFE ${excursion.mfeDollars === null ? "unavailable" : money(excursion.mfeDollars)} / ${excursion.mfeR === null ? "unavailable" : `${fmt(excursion.mfeR)}R`}. ${excursion.status}. ${excursion.instrumentLabel}. ${excursion.provider}, ${excursion.interval}, as of ${excursion.asOf}. ${excursion.reason}`
-      : `Unavailable: ${excursion?.reason || "No market data available."}`)]));
-    children.push(heading("Your Review", HeadingLevel.HEADING_2));
-    const fields = normalizeTradeReviewSections(trade.reviewSections);
-    for (const [key, label] of Object.entries({ setup: "Setup", entry: "Entry", exit: "Exit", didRight: "What I did right", didWrong: "What I did wrong", general: "General review" })) {
-      if (fields[key as keyof TradeReviewSections].trim()) children.push(paragraph([text(`${label}: `, { bold: true }), text(fields[key as keyof TradeReviewSections])]));
-    }
-    if (trade.notes.trim()) children.push(paragraph([text("Legacy notes: ", { bold: true }), text(trade.notes)]));
-    children.push(heading("Primary Read", HeadingLevel.HEADING_2));
-    children.push(paragraph([text(tradeReview.primaryRead)]));
-    children.push(heading("Review Notes", HeadingLevel.HEADING_2));
-    children.push(paragraph([text(tradeReview.reviewNotes)]));
-    children.push(heading("Chart Analysis", HeadingLevel.HEADING_2));
-    chartAnalysisBullets(tradeReview.chartAnalysis).forEach((item) => children.push(bullet(item)));
-    children.push(heading("Action Items", HeadingLevel.HEADING_2));
-    tradeReview.actionItems.forEach((item) => children.push(bullet(item)));
-    children.push(heading("Setup Criteria Summary", HeadingLevel.HEADING_2));
-    criteriaSummary(trade, templates).forEach((item) => children.push(bullet(item)));
-    children.push(heading("Executions", HeadingLevel.HEADING_2));
-    children.push(simpleTable([["Type", "Date and time", "Price", "Shares", "P&L"], ...trade.executions.map((fill) => [fill.type, `${fill.date} ${fill.time || ""}`, fmt(fill.price), String(fill.shares), money(fill.pnl)])], [1200, 2600, 1800, 1800, 1960]));
-    children.push(heading("Charts and Model Examples", HeadingLevel.HEADING_2));
-    children.push(...await imageRunsForTrade(evidence.images[trade.id] || []));
-    if (trade.chartLinks.length) children.push(paragraph([text(`Chart links (references only): ${trade.chartLinks.join(", ")}`)]));
-    const context = buildPromptTrades([trade], templates, evidence)[0];
-    children.push(heading("Strategy Context", HeadingLevel.HEADING_2));
-    for (const source of context.strategyKnowledge) children.push(paragraph([text(`${source.setupName} — ${source.title}. ${source.url}\n${source.content}`)]));
-    for (const example of context.modelExampleMatches) children.push(paragraph([text(`${example.setupName} — ${example.symbol} (${example.quality}). ${example.outcome} ${example.source} ${example.sourceUrl}\n${example.notes}`)]));
-  }
-
-  children.push(heading("Bottom Line"));
-  children.push(paragraph([text(review.bottomLine)]));
-  children.push(heading("What to Work On"));
-  children.push(paragraph([text(review.workOn.primaryFocus, { bold: true })], { keepNext: true }));
   review.workOn.priorities.forEach((priority, index) => {
     children.push(heading(`${index + 1} ${priority.issue}`, HeadingLevel.HEADING_2));
-    const references = priority.evidenceTradeIds.map((id) => { const trade = trades.find((item) => item.id === id)!; return `${trade.symbol} ${trade.entryDate} (${id})`; });
-    children.push(paragraph([text(`Evidence (${new Set(priority.evidenceTradeIds).size} ${new Set(priority.evidenceTradeIds).size === 1 ? "trade" : "trades"}): ${priority.evidence}\nTrades: ${references.join(", ")}`)]));
+    const references = priority.evidenceTradeIds.map((id) => { const trade = trades.find((item) => item.id === id)!; return `${trade.symbol} ${trade.entryDate}`; });
+    children.push(paragraph([text(`Seen in: ${references.join(", ")}. ${priority.evidence}`)]));
     children.push(paragraph([text(`Why it matters: ${priority.outcomeImpact}`)]));
     children.push(paragraph([text(`Rule going forward: ${priority.rule}`, { bold: true })]));
-    children.push(paragraph([text(`Measure of improvement: ${priority.measure}`)]));
-    children.push(paragraph([text(`Confidence: ${priority.confidence}`)]));
+    children.push(paragraph([text(`Track: ${priority.measure}`)]));
   });
+  children.push(heading("Bottom Line"));
+  children.push(paragraph([text(review.bottomLine)]));
 
   return new Document({
     creator: "Branden Journal",
