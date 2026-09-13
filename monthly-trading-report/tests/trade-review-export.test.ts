@@ -9,11 +9,11 @@ import { tradeChecklistScore, tradeReviewMissingFields } from "../lib/trade-revi
 import { loadReviewImage } from "../lib/trade-review-evidence";
 import { trade, templates, evidence, review } from "./fixtures/trade-review-export";
 
-function chart() {
+function chart(label = "Chart layout test") {
   const canvas = createCanvas(1200, 600);
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, 1200, 600);
-  ctx.fillStyle = "#263026"; ctx.font = "30px Arial"; ctx.fillText("Chart layout test", 40, 55);
+  ctx.fillStyle = "#263026"; ctx.font = "30px Arial"; ctx.fillText(label, 40, 55);
   ctx.strokeStyle = "#6f8f5f"; ctx.lineWidth = 3; ctx.beginPath(); ctx.moveTo(40, 480); ctx.lineTo(340, 360); ctx.lineTo(560, 380); ctx.lineTo(880, 230); ctx.lineTo(1160, 280); ctx.stroke();
   return `data:image/png;base64,${canvas.toBuffer("image/png").toString("base64")}`;
 }
@@ -43,13 +43,26 @@ test("export grade exactly matches log points grading and manual override", () =
 test("all charts including later trades use high detail with exact trade IDs", () => {
   const items = [trade(), trade({ id: "trade-2" })];
   const data = evidence();
-  for (const item of items) data.images[item.id] = Array.from({ length: 6 }, (_, i) => ({ label: `chart ${i}`, dataUrl: chart() }));
+  for (const item of items) data.images[item.id] = Array.from({ length: 6 }, (_, i) => ({ label: `chart ${i}`, dataUrl: chart(`${item.id} chart ${i}`) }));
   const request = buildReviewRequest(items, templates, data, "2026-09-01", "2026-09-07");
   const images = request.input[0].content.filter((part) => part.type === "input_image");
   assert.equal(images.length, 12); assert(images.every((part) => part.detail === "high"));
   assert(JSON.stringify(request).includes("Trade ID trade-2"));
   assert.equal(request.model, DEFAULT_TRADE_REVIEW_MODEL); assert.equal(request.reasoning.effort, "medium");
   assert.equal(request.store, false); assert(!("temperature" in request));
+});
+
+test("sends a shared setup-example chart once while retaining every trade association", () => {
+  const items = [trade(), trade({ id: "trade-2", symbol: "TWO" })];
+  const shared = chart("Shared model example");
+  const data = evidence();
+  for (const item of items) data.images[item.id] = [{ label: "Shared comparison example", dataUrl: shared }];
+  const request = buildReviewRequest(items, templates, data, "2026-09-01", "2026-09-07");
+  const content = request.input[0].content;
+  assert.equal(content.filter((part) => part.type === "input_image").length, 1);
+  const labels = content.filter((part) => part.type === "input_text").map((part) => part.text).join("\n");
+  assert(labels.includes("Trade ID trade-1"));
+  assert(labels.includes("Trade ID trade-2"));
 });
 
 test("oversized text fails explicitly instead of silently truncating", () => {
@@ -77,7 +90,7 @@ test("rejects missing priorities, invented evidence IDs, empty actions, and tick
 
 test("image evidence decodes faithfully and rejects unreadable references", async () => {
   const image = await loadReviewImage(chart(), "Actual chart", trade());
-  assert(image.dataUrl.startsWith("data:image/png;base64,"));
+  assert.match(image.dataUrl, /^data:image\/(?:png|jpeg);base64,/);
   await assert.rejects(loadReviewImage("https://example.com/chart", "Example chart", trade(), { kind: "strategy-example", exampleId: "ex1" }), /Re-upload/);
 });
 
@@ -101,7 +114,7 @@ test("loads stored strategy-example charts from their journal screenshot owner",
       })
     }
   );
-  assert(image.dataUrl.startsWith("data:image/png;base64,"));
+  assert.match(image.dataUrl, /^data:image\/(?:png|jpeg);base64,/);
 });
 
 test("rejects a strategy-example chart owned by a different example", async () => {

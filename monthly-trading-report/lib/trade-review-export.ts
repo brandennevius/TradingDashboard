@@ -463,11 +463,18 @@ export function buildReviewRequest(trades: TradeLogEntry[], templates: SetupChec
   if (content[0].type === "input_text" && content[0].text.length > 1_000_000) {
     throw new Error("The full review context is too large. Narrow the trade filters or reduce the active strategy sources; no evidence was omitted.");
   }
+  const imageContexts = new Map<string, string[]>();
   for (const trade of trades) {
     for (const image of evidence.images[trade.id] || []) {
-      content.push({ type: "input_text", text: `Trade ID ${trade.id}, ${trade.symbol}, entry ${trade.entryDate}. ${image.label}` });
-      content.push({ type: "input_image", image_url: image.dataUrl, detail: "high" });
+      const context = `Trade ID ${trade.id}, ${trade.symbol}, entry ${trade.entryDate}. ${image.label}`;
+      const contexts = imageContexts.get(image.dataUrl) || [];
+      contexts.push(context);
+      imageContexts.set(image.dataUrl, contexts);
     }
+  }
+  for (const [imageUrl, contexts] of imageContexts) {
+    content.push({ type: "input_text", text: contexts.join("\n") });
+    content.push({ type: "input_image", image_url: imageUrl, detail: "high" });
   }
   const format = aiReviewJsonSchema(promptTrades);
   const request = {
@@ -654,8 +661,9 @@ async function imageRunsForTrade(images: ReviewImage[]) {
     const data = Buffer.from(image.dataUrl.split(",")[1], "base64");
     const decoded = await loadImage(data);
     const scale = Math.min(600 / decoded.width, 620 / decoded.height, 1);
+    const type = image.dataUrl.startsWith("data:image/jpeg;") ? "jpg" as const : "png" as const;
     runs.push(new Paragraph({ children: [text(image.label, { bold: true })], keepNext: true }));
-    runs.push(new Paragraph({ children: [new ImageRun({ data, type: "png",
+    runs.push(new Paragraph({ children: [new ImageRun({ data, type,
       transformation: { width: Math.round(decoded.width * scale), height: Math.round(decoded.height * scale) },
       altText: { name: image.label, title: image.label, description: image.label }
     })] }));
@@ -798,4 +806,3 @@ export async function buildDocument(trades: TradeLogEntry[], templates: SetupChe
     ]
   });
 }
-

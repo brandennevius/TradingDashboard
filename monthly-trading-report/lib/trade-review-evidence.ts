@@ -88,9 +88,18 @@ export async function loadReviewImage(
   try {
     const image = await loadImage(bytes);
     if (!image.width || !image.height || image.width * image.height > 40_000_000) throw new Error("Image dimensions exceed limit");
-    const canvas = createCanvas(image.width, image.height);
-    canvas.getContext("2d").drawImage(image, 0, 0);
-    return { label, dataUrl: `data:image/png;base64,${canvas.toBuffer("image/png").toString("base64")}` };
+    const scale = Math.min(1, 2400 / Math.max(image.width, image.height), Math.sqrt(4_500_000 / (image.width * image.height)));
+    const width = Math.max(1, Math.round(image.width * scale));
+    const height = Math.max(1, Math.round(image.height * scale));
+    const canvas = createCanvas(width, height);
+    const context = canvas.getContext("2d");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, width, height);
+    context.drawImage(image, 0, 0, width, height);
+    const png = canvas.toBuffer("image/png");
+    const jpeg = canvas.toBuffer("image/jpeg", 88);
+    const normalized = jpeg.length < png.length ? { mime: "image/jpeg", bytes: jpeg } : { mime: "image/png", bytes: png };
+    return { label, dataUrl: `data:${normalized.mime};base64,${normalized.bytes.toString("base64")}` };
   } catch {
     throw new Error(`Cannot decode ${label}. Re-upload a readable chart image before exporting.`);
   }
@@ -99,12 +108,16 @@ export async function loadReviewImage(
 export async function collectReviewEvidence(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], signal?: AbortSignal): Promise<ReviewEvidence> {
   const evidence: ReviewEvidence = { images: {}, excursions: {} };
   let imageBytes = 0;
+  const countedImages = new Set<string>();
   for (const trade of trades) {
     signal?.throwIfAborted();
     evidence.images[trade.id] = [];
     const add = async (image: ReviewImage) => {
-      imageBytes += Buffer.byteLength(image.dataUrl);
-      if (imageBytes > 43 * 1024 * 1024) throw new Error("The full chart set is too large. Narrow the trade filters or reduce active example charts; no charts were skipped.");
+      if (!countedImages.has(image.dataUrl)) {
+        countedImages.add(image.dataUrl);
+        imageBytes += Buffer.byteLength(image.dataUrl);
+        if (imageBytes > 43 * 1024 * 1024) throw new Error("The unique chart set is too large. Narrow the trade filters or reduce active example charts; no charts were skipped.");
+      }
       evidence.images[trade.id].push(image);
     };
     for (const [index, screenshot] of trade.screenshots.entries()) {
