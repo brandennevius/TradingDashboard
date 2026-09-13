@@ -78,7 +78,53 @@ test("rejects missing priorities, invented evidence IDs, empty actions, and tick
 test("image evidence decodes faithfully and rejects unreadable references", async () => {
   const image = await loadReviewImage(chart(), "Actual chart", trade());
   assert(image.dataUrl.startsWith("data:image/png;base64,"));
-  await assert.rejects(loadReviewImage("https://example.com/chart", "Example chart", trade(), true), /Re-upload/);
+  await assert.rejects(loadReviewImage("https://example.com/chart", "Example chart", trade(), { kind: "strategy-example", exampleId: "ex1" }), /Re-upload/);
+});
+
+test("loads stored strategy-example charts from their journal screenshot owner", async () => {
+  const dataUrl = chart();
+  const bytes = Buffer.from(dataUrl.split(",")[1], "base64");
+  const image = await loadReviewImage(
+    "/api/cam-journal/screenshots/example-image-1",
+    "Stored comparison chart",
+    trade(),
+    { kind: "strategy-example", exampleId: "ex1" },
+    {
+      trade: async () => null,
+      journal: async () => ({
+        id: "example-image-1",
+        entityType: "setup-strategy-example",
+        entityId: "ex1",
+        fileName: "example.png",
+        mimeType: "image/png",
+        imageData: bytes
+      })
+    }
+  );
+  assert(image.dataUrl.startsWith("data:image/png;base64,"));
+});
+
+test("rejects a strategy-example chart owned by a different example", async () => {
+  await assert.rejects(
+    loadReviewImage(
+      "/api/cam-journal/screenshots/example-image-1",
+      "Stored comparison chart",
+      trade(),
+      { kind: "strategy-example", exampleId: "ex1" },
+      {
+        trade: async () => null,
+        journal: async () => ({
+          id: "example-image-1",
+          entityType: "setup-strategy-example",
+          entityId: "different-example",
+          fileName: "example.png",
+          mimeType: "image/png",
+          imageData: Buffer.from("not-used")
+        })
+      }
+    ),
+    /Re-upload/
+  );
 });
 
 test("Responses request handles completion, refusal, incomplete output, and API failure", async () => {
