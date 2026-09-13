@@ -987,15 +987,33 @@ export default function BrandenTradeLogPage() {
 
     try {
       updateReviewProgress(25, "Analyzing trades and preparing the report", "Reviewing all notes, charts, setup context, and MAE/MFE. Larger exports may take several minutes.");
-      const response = await fetch("/api/journal/branden/trade-log/export-review", {
+      const exportPayload = {
+        tradeIds: filteredTrades.map((trade) => trade.id),
+        startDate,
+        endDate
+      };
+      let response = await fetch("/api/journal/branden/trade-log/export-review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          tradeIds: filteredTrades.map((trade) => trade.id),
-          startDate,
-          endDate
-        })
+        body: JSON.stringify(exportPayload)
       });
+
+      const pollingStartedAt = Date.now();
+      while (response.status === 202) {
+        const pending = await response.json().catch(() => ({}));
+        const reviewJobId = typeof pending.reviewJobId === "string" ? pending.reviewJobId : "";
+        if (!reviewJobId) throw new Error("The AI review did not return a valid job. Please retry.");
+        const elapsed = Date.now() - pollingStartedAt;
+        if (elapsed > 9.5 * 60 * 1000) throw new Error("The AI review is taking longer than expected. Please retry the export.");
+        const percent = Math.min(88, 35 + Math.round(elapsed / (8 * 60 * 1000) * 53));
+        updateReviewProgress(percent, "AI review in progress", "Astra is analyzing every selected trade and chart. You can keep this page open while it finishes.");
+        await new Promise((resolve) => window.setTimeout(resolve, 5_000));
+        response = await fetch("/api/journal/branden/trade-log/export-review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...exportPayload, reviewJobId })
+        });
+      }
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));

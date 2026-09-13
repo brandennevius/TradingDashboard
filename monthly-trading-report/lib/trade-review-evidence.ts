@@ -38,6 +38,19 @@ const defaultReviewImageLoaders: ReviewImageLoaders = {
   journal: getCamJournalScreenshot
 };
 
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, worker: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await worker(items[index]);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 function storedImagePath(value: string) {
   if (!value.startsWith("/")) return [];
   try {
@@ -109,34 +122,58 @@ export async function collectReviewEvidence(trades: TradeLogEntry[], templates: 
   const evidence: ReviewEvidence = { images: {}, excursions: {} };
   let imageBytes = 0;
   const countedImages = new Set<string>();
+  const imageLoads = new Map<string, Promise<ReviewImage>>();
+  const tasks: { tradeId: string; cacheKey: string; load: () => Promise<ReviewImage> }[] = [];
   for (const trade of trades) {
-    signal?.throwIfAborted();
     evidence.images[trade.id] = [];
-    const add = async (image: ReviewImage) => {
-      if (!countedImages.has(image.dataUrl)) {
-        countedImages.add(image.dataUrl);
-        imageBytes += Buffer.byteLength(image.dataUrl);
-        if (imageBytes > 43 * 1024 * 1024) throw new Error("The unique chart set is too large. Narrow the trade filters or reduce active example charts; no charts were skipped.");
-      }
-      evidence.images[trade.id].push(image);
-    };
     for (const [index, screenshot] of trade.screenshots.entries()) {
-      await add(await loadReviewImage(screenshot, `${trade.symbol} ${trade.entryDate} actual trade chart ${index + 1}`, trade, { kind: "trade" }));
+      tasks.push({
+        tradeId: trade.id,
+        cacheKey: `trade:${trade.id}:${screenshot}`,
+        load: () => loadReviewImage(screenshot, `${trade.symbol} ${trade.entryDate} actual trade chart ${index + 1}`, trade, { kind: "trade" })
+      });
     }
     const matched = templates.filter((template) => trade.setupTags.some((tag) => tag.trim().toLowerCase() === template.setupName.trim().toLowerCase()));
     for (const template of matched) {
       for (const example of (template.strategyExamples || []).filter((item) => item.active !== false)) {
         for (const [index, screenshot] of example.screenshots.entries()) {
-          await add(await loadReviewImage(
-            screenshot,
-            `Comparison example ${example.id}: ${example.symbol} ${example.quality}, ${template.setupName}, chart ${index + 1}`,
-            trade,
-            { kind: "strategy-example", exampleId: example.id }
-          ));
+          tasks.push({
+            tradeId: trade.id,
+            cacheKey: `strategy-example:${example.id}:${screenshot}`,
+            load: () => loadReviewImage(
+              screenshot,
+              `Comparison example ${example.id}: ${example.symbol} ${example.quality}, ${template.setupName}, chart ${index + 1}`,
+              trade,
+              { kind: "strategy-example", exampleId: example.id }
+            )
+          });
         }
       }
     }
-    evidence.excursions[trade.id] = await loadReviewExcursion(trade, signal);
   }
+
+  const loadedImages = await mapWithConcurrency(tasks, 4, async (task) => {
+    signal?.throwIfAborted();
+    let image = imageLoads.get(task.cacheKey);
+    if (!image) {
+      image = task.load();
+      imageLoads.set(task.cacheKey, image);
+    }
+    return { tradeId: task.tradeId, image: await image };
+  });
+  for (const { tradeId, image } of loadedImages) {
+    if (!countedImages.has(image.dataUrl)) {
+      countedImages.add(image.dataUrl);
+      imageBytes += Buffer.byteLength(image.dataUrl);
+      if (imageBytes > 43 * 1024 * 1024) throw new Error("The unique chart set is too large. Narrow the trade filters or reduce active example charts; no charts were skipped.");
+    }
+    evidence.images[tradeId].push(image);
+  }
+
+  const excursions = await mapWithConcurrency(trades, 4, async (trade) => {
+    signal?.throwIfAborted();
+    return { tradeId: trade.id, excursion: await loadReviewExcursion(trade, signal) };
+  });
+  for (const { tradeId, excursion } of excursions) evidence.excursions[tradeId] = excursion;
   return evidence;
 }

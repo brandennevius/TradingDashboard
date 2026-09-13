@@ -492,25 +492,57 @@ export function buildReviewRequest(trades: TradeLogEntry[], templates: SetupChec
   return request;
 }
 
-export async function generateAiReview(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], evidence: ReviewEvidence, startDate: string, endDate: string, signal?: AbortSignal) {
+type OpenAiReviewResponse = {
+  id?: unknown;
+  status?: unknown;
+  output?: { type: string; content?: { type: string; text?: string }[] }[];
+};
+
+function reviewResponseError(response: Response) {
+  return `AI review failed (HTTP ${response.status}). Check model access and API limits, or retry.`;
+}
+
+export function pendingAiReviewId(value: unknown) {
+  if (!value || typeof value !== "object") return "";
+  const data = value as OpenAiReviewResponse;
+  const id = typeof data.id === "string" ? data.id : "";
+  return ["queued", "in_progress"].includes(String(data.status)) && /^resp_[A-Za-z0-9_-]+$/.test(id) ? id : "";
+}
+
+export function completedAiReview(value: unknown, trades: TradeLogEntry[], templates: SetupChecklistTemplate[], evidence: ReviewEvidence) {
+  if (!value || typeof value !== "object") throw new Error("The AI review returned an invalid response.");
+  const data = value as OpenAiReviewResponse;
+  if (data.status !== "completed") throw new Error("The AI review did not finish. Retry the export; no partial report was created.");
+  const parts = (data.output || []).flatMap((item) => item.type === "message" ? item.content || [] : []);
+  if (parts.some((part) => part.type === "refusal")) throw new Error("The AI could not complete this review. No partial report was exported.");
+  const content = parts.filter((part) => part.type === "output_text").map((part) => part.text).join("");
+  if (!content) throw new Error("The AI review returned an empty response.");
+  return validateAiReview(JSON.parse(content), trades, buildPromptTrades(trades, templates, evidence));
+}
+
+export async function startAiReview(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], evidence: ReviewEvidence, startDate: string, endDate: string, signal?: AbortSignal) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("The review service has no OpenAI API key configured.");
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(240_000)]) : AbortSignal.timeout(240_000),
-    body: JSON.stringify(buildReviewRequest(trades, templates, evidence, startDate, endDate))
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
+    body: JSON.stringify({ ...buildReviewRequest(trades, templates, evidence, startDate, endDate), background: true })
   });
-  if (!response.ok) {
-    throw new Error(`AI review failed (HTTP ${response.status}). Check model access and API limits, or retry with fewer trades.`);
-  }
-  const data = await response.json();
-  if (data.status !== "completed") throw new Error("The AI review did not finish. Narrow the trade filters and retry; no partial report was exported.");
-  const parts = (data.output || []).flatMap((item: { type: string; content?: { type: string; text?: string }[] }) => item.type === "message" ? item.content || [] : []);
-  if (parts.some((part: { type: string }) => part.type === "refusal")) throw new Error("The AI could not complete this review. No partial report was exported.");
-  const content = parts.filter((part: { type: string }) => part.type === "output_text").map((part: { text: string }) => part.text).join("");
-  if (!content) throw new Error("The AI review returned an empty response.");
-  return validateAiReview(JSON.parse(content), trades, buildPromptTrades(trades, templates, evidence));
+  if (!response.ok) throw new Error(reviewResponseError(response));
+  return response.json() as Promise<OpenAiReviewResponse>;
+}
+
+export async function retrieveAiReview(reviewId: string, signal?: AbortSignal) {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error("The review service has no OpenAI API key configured.");
+  if (!/^resp_[A-Za-z0-9_-]+$/.test(reviewId)) throw new Error("The AI review job is invalid. Start the export again.");
+  const response = await fetch(`https://api.openai.com/v1/responses/${encodeURIComponent(reviewId)}`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000)
+  });
+  if (!response.ok) throw new Error(reviewResponseError(response));
+  return response.json() as Promise<OpenAiReviewResponse>;
 }
 
 

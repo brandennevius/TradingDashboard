@@ -4,7 +4,7 @@ import { Packer } from "docx";
 import JSZip from "jszip";
 import { createCanvas } from "@napi-rs/canvas";
 import { writeFile } from "node:fs/promises";
-import { buildDocument, buildPromptTrades, buildReviewRequest, DEFAULT_TRADE_REVIEW_MODEL, generateAiReview, validateAiReview } from "../lib/trade-review-export";
+import { buildDocument, buildPromptTrades, buildReviewRequest, completedAiReview, DEFAULT_TRADE_REVIEW_MODEL, pendingAiReviewId, retrieveAiReview, startAiReview, validateAiReview } from "../lib/trade-review-export";
 import { tradeChecklistScore, tradeReviewMissingFields } from "../lib/trade-review";
 import { loadReviewImage } from "../lib/trade-review-evidence";
 import { trade, templates, evidence, review } from "./fixtures/trade-review-export";
@@ -140,21 +140,29 @@ test("rejects a strategy-example chart owned by a different example", async () =
   );
 });
 
-test("Responses request handles completion, refusal, incomplete output, and API failure", async () => {
+test("background Responses flow submits, polls, completes, and rejects terminal failures", async () => {
   const oldFetch = globalThis.fetch; const oldKey = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = "test-key";
-  let mode = "completed";
+  let mode = "in_progress";
   globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith("/resp_test")) return Response.json({ id: "resp_test", status: mode });
     assert.equal(url, "https://api.openai.com/v1/responses");
-    const body = JSON.parse(String(init?.body)); assert.equal(body.text.format.type, "json_schema");
+    const body = JSON.parse(String(init?.body));
+    assert.equal(body.text.format.type, "json_schema");
+    assert.equal(body.background, true);
     if (mode === "failed") return new Response("Unavailable", { status: 429 });
-    return Response.json({ status: mode === "incomplete" ? "incomplete" : "completed", output: [{ type: "message", content: mode === "refusal" ? [{ type: "refusal" }] : [{ type: "output_text", text: JSON.stringify(review()) }] }] });
+    return Response.json({ id: "resp_test", status: mode });
   };
   try {
-    assert.equal((await generateAiReview([trade()], templates, evidence(), "", "")).workOn.priorities.length, 1);
-    for (const state of ["refusal", "incomplete", "failed"]) {
-      mode = state; await assert.rejects(generateAiReview([trade()], templates, evidence(), "", ""));
-    }
+    const started = await startAiReview([trade()], templates, evidence(), "", "");
+    assert.equal(pendingAiReviewId(started), "resp_test");
+    assert.equal(pendingAiReviewId(await retrieveAiReview("resp_test")), "resp_test");
+    const completed = { id: "resp_test", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(review()) }] }] };
+    assert.equal(completedAiReview(completed, [trade()], templates, evidence()).workOn.priorities.length, 1);
+    assert.throws(() => completedAiReview({ ...completed, status: "incomplete" }, [trade()], templates, evidence()), /did not finish/);
+    assert.throws(() => completedAiReview({ ...completed, output: [{ type: "message", content: [{ type: "refusal" }] }] }, [trade()], templates, evidence()), /could not complete/);
+    mode = "failed";
+    await assert.rejects(startAiReview([trade()], templates, evidence(), "", ""), /HTTP 429/);
   } finally { globalThis.fetch = oldFetch; if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; }
 });
 
