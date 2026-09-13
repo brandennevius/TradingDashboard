@@ -57,11 +57,18 @@ export async function POST(request: Request) {
     const uniqueImages = new Set(Object.values(evidence.images).flat().map((image) => image.dataUrl)).size;
     logReviewExport("evidence-ready", { phase: reviewJobId ? "finalize" : "submit", ms: Date.now() - startedAt, imageOccurrences, uniqueImages });
     const trades = lifecycleTrades.map((trade) => tradeForRange(trade, startDate, endDate));
-    const response = aiResponse || await startAiReview(trades, templates, evidence, startDate, endDate, signal);
+    let response = aiResponse;
+    let priceCheck: { inputTokens: number; maximumCostUsd: number; model: string } | null = null;
+    if (!response) {
+      const started = await startAiReview(trades, templates, evidence, startDate, endDate, signal);
+      response = started.response;
+      priceCheck = { inputTokens: started.inputTokens, maximumCostUsd: started.maximumCostUsd, model: started.model };
+      logReviewExport("price-checked", { inputTokens: started.inputTokens, maximumCostUsd: Number(started.maximumCostUsd.toFixed(4)) });
+    }
     const responsePendingId = pendingAiReviewId(response);
     if (responsePendingId) {
       logReviewExport("submitted", { ms: Date.now() - startedAt });
-      return NextResponse.json({ reviewJobId: responsePendingId, status: response.status }, { status: 202 });
+      return NextResponse.json({ reviewJobId: responsePendingId, status: response.status, ...(priceCheck || {}) }, { status: 202 });
     }
     const review = completedAiReview(response, trades, templates, evidence);
     const document = await buildDocument(trades, templates, startDate, endDate, evidence, review);

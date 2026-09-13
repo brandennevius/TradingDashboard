@@ -16,8 +16,10 @@ import { tradeChecklistScore, normalizeTradeReviewSections } from "./trade-revie
 import type { TradeExcursionResult } from "./trade-excursion";
 import { loadImage } from "@napi-rs/canvas";
 
-export const DEFAULT_TRADE_REVIEW_MODEL = "gpt-6-astra";
-export type ReviewImage = { label: string; dataUrl: string };
+export const DEFAULT_TRADE_REVIEW_MODEL = "gpt-5.6-luna";
+export const MAX_TRADE_REVIEW_COST_USD = 0.25;
+export const TRADE_REVIEW_MAX_OUTPUT_TOKENS = 16_000;
+export type ReviewImage = { label: string; dataUrl: string; analysisDetail?: "low" | "high" };
 export type ReviewEvidence = {
   excursions: Record<string, TradeExcursionResult>;
   images: Record<string, ReviewImage[]>;
@@ -457,31 +459,35 @@ Write clear, direct paragraphs and concise actionable bullets. Return the struct
 
 export function buildReviewRequest(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], evidence: ReviewEvidence, startDate: string, endDate: string) {
   const promptTrades = buildPromptTrades(trades, templates, evidence);
-  const content: Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string; detail: "high" }> = [
+  const content: Array<{ type: "input_text"; text: string } | { type: "input_image"; image_url: string; detail: "low" | "high" }> = [
     { type: "input_text", text: JSON.stringify({ period: { startDate, endDate }, numericContext: numericContext(trades, templates), trades: promptTrades }) }
   ];
   if (content[0].type === "input_text" && content[0].text.length > 1_000_000) {
     throw new Error("The full review context is too large. Narrow the trade filters or reduce the active strategy sources; no evidence was omitted.");
   }
-  const imageContexts = new Map<string, string[]>();
+  const imageContexts = new Map<string, { contexts: string[]; detail: "low" | "high" }>();
   for (const trade of trades) {
     for (const image of evidence.images[trade.id] || []) {
       const context = `Trade ID ${trade.id}, ${trade.symbol}, entry ${trade.entryDate}. ${image.label}`;
-      const contexts = imageContexts.get(image.dataUrl) || [];
-      contexts.push(context);
-      imageContexts.set(image.dataUrl, contexts);
+      const existing = imageContexts.get(image.dataUrl);
+      if (existing) {
+        existing.contexts.push(context);
+        if (image.analysisDetail === "high") existing.detail = "high";
+      } else {
+        imageContexts.set(image.dataUrl, { contexts: [context], detail: image.analysisDetail || "high" });
+      }
     }
   }
-  for (const [imageUrl, contexts] of imageContexts) {
-    content.push({ type: "input_text", text: contexts.join("\n") });
-    content.push({ type: "input_image", image_url: imageUrl, detail: "high" });
+  for (const [imageUrl, image] of imageContexts) {
+    content.push({ type: "input_text", text: image.contexts.join("\n") });
+    content.push({ type: "input_image", image_url: imageUrl, detail: image.detail });
   }
   const format = aiReviewJsonSchema(promptTrades);
   const request = {
-    model: process.env.OPENAI_TRADE_REVIEW_MODEL?.trim() || DEFAULT_TRADE_REVIEW_MODEL,
+    model: DEFAULT_TRADE_REVIEW_MODEL,
     reasoning: { effort: "medium" },
     store: false,
-    max_output_tokens: 32768,
+    max_output_tokens: TRADE_REVIEW_MAX_OUTPUT_TOKENS,
     instructions: REVIEW_INSTRUCTIONS,
     input: [{ role: "user", content }],
     text: { format: { type: "json_schema", ...format } }
@@ -500,6 +506,33 @@ type OpenAiReviewResponse = {
 
 function reviewResponseError(response: Response) {
   return `AI review failed (HTTP ${response.status}). Check model access and API limits, or retry.`;
+}
+
+export function maximumTradeReviewCostUsd(inputTokens: number, outputTokens = TRADE_REVIEW_MAX_OUTPUT_TOKENS) {
+  const longContext = inputTokens > 272_000;
+  const inputRatePerMillion = 0.20 * (longContext ? 2 : 1);
+  const outputRatePerMillion = 1.20 * (longContext ? 1.5 : 1);
+  return inputTokens / 1_000_000 * inputRatePerMillion + outputTokens / 1_000_000 * outputRatePerMillion;
+}
+
+async function countReviewInputTokens(request: ReturnType<typeof buildReviewRequest>, apiKey: string, signal?: AbortSignal) {
+  const response = await fetch("https://api.openai.com/v1/responses/input_tokens", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
+    body: JSON.stringify({
+      model: request.model,
+      instructions: request.instructions,
+      input: request.input,
+      reasoning: request.reasoning,
+      text: request.text
+    })
+  });
+  if (!response.ok) throw new Error(`Could not price-check the AI review (HTTP ${response.status}). No paid review was started.`);
+  const data = await response.json() as { input_tokens?: unknown };
+  const inputTokens = Number(data.input_tokens);
+  if (!Number.isFinite(inputTokens) || inputTokens < 1) throw new Error("Could not determine the AI review token count. No paid review was started.");
+  return inputTokens;
 }
 
 export function pendingAiReviewId(value: unknown) {
@@ -523,14 +556,20 @@ export function completedAiReview(value: unknown, trades: TradeLogEntry[], templ
 export async function startAiReview(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], evidence: ReviewEvidence, startDate: string, endDate: string, signal?: AbortSignal) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("The review service has no OpenAI API key configured.");
+  const request = buildReviewRequest(trades, templates, evidence, startDate, endDate);
+  const inputTokens = await countReviewInputTokens(request, apiKey, signal);
+  const maximumCostUsd = maximumTradeReviewCostUsd(inputTokens);
+  if (maximumCostUsd > MAX_TRADE_REVIEW_COST_USD) {
+    throw new Error(`This report would cost up to $${maximumCostUsd.toFixed(2)}, above the $${MAX_TRADE_REVIEW_COST_USD.toFixed(2)} safety ceiling. Narrow the trade filters or reduce active example charts. No paid review was started.`);
+  }
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(90_000)]) : AbortSignal.timeout(90_000),
-    body: JSON.stringify({ ...buildReviewRequest(trades, templates, evidence, startDate, endDate), background: true })
+    body: JSON.stringify({ ...request, background: true })
   });
   if (!response.ok) throw new Error(reviewResponseError(response));
-  return response.json() as Promise<OpenAiReviewResponse>;
+  return { response: await response.json() as OpenAiReviewResponse, inputTokens, maximumCostUsd, model: request.model };
 }
 
 export async function retrieveAiReview(reviewId: string, signal?: AbortSignal) {

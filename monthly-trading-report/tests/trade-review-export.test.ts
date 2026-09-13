@@ -4,7 +4,7 @@ import { Packer } from "docx";
 import JSZip from "jszip";
 import { createCanvas } from "@napi-rs/canvas";
 import { writeFile } from "node:fs/promises";
-import { buildDocument, buildPromptTrades, buildReviewRequest, completedAiReview, DEFAULT_TRADE_REVIEW_MODEL, pendingAiReviewId, retrieveAiReview, startAiReview, validateAiReview } from "../lib/trade-review-export";
+import { buildDocument, buildPromptTrades, buildReviewRequest, completedAiReview, DEFAULT_TRADE_REVIEW_MODEL, MAX_TRADE_REVIEW_COST_USD, maximumTradeReviewCostUsd, pendingAiReviewId, retrieveAiReview, startAiReview, validateAiReview } from "../lib/trade-review-export";
 import { tradeChecklistScore, tradeReviewMissingFields } from "../lib/trade-review";
 import { loadReviewImage } from "../lib/trade-review-evidence";
 import { trade, templates, evidence, review } from "./fixtures/trade-review-export";
@@ -56,10 +56,11 @@ test("sends a shared setup-example chart once while retaining every trade associ
   const items = [trade(), trade({ id: "trade-2", symbol: "TWO" })];
   const shared = chart("Shared model example");
   const data = evidence();
-  for (const item of items) data.images[item.id] = [{ label: "Shared comparison example", dataUrl: shared }];
+  for (const item of items) data.images[item.id] = [{ label: "Shared comparison example", dataUrl: shared, analysisDetail: "low" }];
   const request = buildReviewRequest(items, templates, data, "2026-09-01", "2026-09-07");
   const content = request.input[0].content;
   assert.equal(content.filter((part) => part.type === "input_image").length, 1);
+  assert.equal(content.find((part) => part.type === "input_image")?.detail, "low");
   const labels = content.filter((part) => part.type === "input_text").map((part) => part.text).join("\n");
   assert(labels.includes("Trade ID trade-1"));
   assert(labels.includes("Trade ID trade-2"));
@@ -91,6 +92,7 @@ test("rejects missing priorities, invented evidence IDs, empty actions, and tick
 test("image evidence decodes faithfully and rejects unreadable references", async () => {
   const image = await loadReviewImage(chart(), "Actual chart", trade());
   assert.match(image.dataUrl, /^data:image\/(?:png|jpeg);base64,/);
+  assert.equal(image.analysisDetail, "high");
   await assert.rejects(loadReviewImage("https://example.com/chart", "Example chart", trade(), { kind: "strategy-example", exampleId: "ex1" }), /Re-upload/);
 });
 
@@ -115,6 +117,7 @@ test("loads stored strategy-example charts from their journal screenshot owner",
     }
   );
   assert.match(image.dataUrl, /^data:image\/(?:png|jpeg);base64,/);
+  assert.equal(image.analysisDetail, "low");
 });
 
 test("rejects a strategy-example chart owned by a different example", async () => {
@@ -146,6 +149,11 @@ test("background Responses flow submits, polls, completes, and rejects terminal 
   let mode = "in_progress";
   globalThis.fetch = async (url, init) => {
     if (String(url).endsWith("/resp_test")) return Response.json({ id: "resp_test", status: mode });
+    if (String(url).endsWith("/responses/input_tokens")) {
+      const body = JSON.parse(String(init?.body));
+      assert.equal(body.model, "gpt-5.6-luna");
+      return Response.json({ object: "response.input_tokens", input_tokens: 200_000 });
+    }
     assert.equal(url, "https://api.openai.com/v1/responses");
     const body = JSON.parse(String(init?.body));
     assert.equal(body.text.format.type, "json_schema");
@@ -155,7 +163,8 @@ test("background Responses flow submits, polls, completes, and rejects terminal 
   };
   try {
     const started = await startAiReview([trade()], templates, evidence(), "", "");
-    assert.equal(pendingAiReviewId(started), "resp_test");
+    assert.equal(pendingAiReviewId(started.response), "resp_test");
+    assert(started.maximumCostUsd <= MAX_TRADE_REVIEW_COST_USD);
     assert.equal(pendingAiReviewId(await retrieveAiReview("resp_test")), "resp_test");
     const completed = { id: "resp_test", status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: JSON.stringify(review()) }] }] };
     assert.equal(completedAiReview(completed, [trade()], templates, evidence()).workOn.priorities.length, 1);
@@ -163,6 +172,27 @@ test("background Responses flow submits, polls, completes, and rejects terminal 
     assert.throws(() => completedAiReview({ ...completed, output: [{ type: "message", content: [{ type: "refusal" }] }] }, [trade()], templates, evidence()), /could not complete/);
     mode = "failed";
     await assert.rejects(startAiReview([trade()], templates, evidence(), "", ""), /HTTP 429/);
+  } finally { globalThis.fetch = oldFetch; if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; }
+});
+
+test("cost ceiling includes long-context and maximum output pricing", () => {
+  assert.equal(maximumTradeReviewCostUsd(200_000), 0.0592);
+  assert(maximumTradeReviewCostUsd(534_770) < MAX_TRADE_REVIEW_COST_USD);
+  assert(maximumTradeReviewCostUsd(600_000) > MAX_TRADE_REVIEW_COST_USD);
+});
+
+test("price preflight blocks an over-budget generation request", async () => {
+  const oldFetch = globalThis.fetch; const oldKey = process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = "test-key";
+  let requests = 0;
+  globalThis.fetch = async (url) => {
+    requests += 1;
+    assert(String(url).endsWith("/responses/input_tokens"));
+    return Response.json({ object: "response.input_tokens", input_tokens: 600_000 });
+  };
+  try {
+    await assert.rejects(startAiReview([trade()], templates, evidence(), "", ""), /safety ceiling.*No paid review was started/);
+    assert.equal(requests, 1);
   } finally { globalThis.fetch = oldFetch; if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; }
 });
 

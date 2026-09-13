@@ -999,14 +999,18 @@ export default function BrandenTradeLogPage() {
       });
 
       const pollingStartedAt = Date.now();
+      let priceDetail = "";
       while (response.status === 202) {
         const pending = await response.json().catch(() => ({}));
         const reviewJobId = typeof pending.reviewJobId === "string" ? pending.reviewJobId : "";
         if (!reviewJobId) throw new Error("The AI review did not return a valid job. Please retry.");
+        if (Number.isFinite(Number(pending.maximumCostUsd))) {
+          priceDetail = ` Estimated maximum model cost: $${Number(pending.maximumCostUsd).toFixed(2)}.`;
+        }
         const elapsed = Date.now() - pollingStartedAt;
         if (elapsed > 9.5 * 60 * 1000) throw new Error("The AI review is taking longer than expected. Please retry the export.");
         const percent = Math.min(88, 35 + Math.round(elapsed / (8 * 60 * 1000) * 53));
-        updateReviewProgress(percent, "AI review in progress", "Astra is analyzing every selected trade and chart. You can keep this page open while it finishes.");
+        updateReviewProgress(percent, "AI review in progress", `Luna is analyzing every selected trade and chart.${priceDetail} You can keep this page open while it finishes.`);
         await new Promise((resolve) => window.setTimeout(resolve, 5_000));
         response = await fetch("/api/journal/branden/trade-log/export-review", {
           method: "POST",

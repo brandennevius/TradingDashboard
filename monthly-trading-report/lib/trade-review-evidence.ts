@@ -112,7 +112,11 @@ export async function loadReviewImage(
     const png = canvas.toBuffer("image/png");
     const jpeg = canvas.toBuffer("image/jpeg", 88);
     const normalized = jpeg.length < png.length ? { mime: "image/jpeg", bytes: jpeg } : { mime: "image/png", bytes: png };
-    return { label, dataUrl: `data:${normalized.mime};base64,${normalized.bytes.toString("base64")}` };
+    return {
+      label,
+      dataUrl: `data:${normalized.mime};base64,${normalized.bytes.toString("base64")}`,
+      analysisDetail: owner.kind === "trade" ? "high" : "low"
+    };
   } catch {
     throw new Error(`Cannot decode ${label}. Re-upload a readable chart image before exporting.`);
   }
