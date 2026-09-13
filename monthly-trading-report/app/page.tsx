@@ -5668,7 +5668,9 @@ export default function Home() {
                     ["general", "General review"]
                   ] as Array<[keyof TradeReviewSections, string]>).map(([key, label]) => (
                     <label key={key}>
-                      {label}{key !== "general" ? <span className="review-required-marker" title="Required to clear Needs Review"> *</span> : " (optional)"}
+                      <span>
+                        {label}{key !== "general" ? <span className="review-required-marker" title="Required to clear Needs Review"> *</span> : " (optional)"}
+                      </span>
                       <textarea
                         className="trade-review-row-textarea"
                         rows={2}
@@ -6345,7 +6347,9 @@ export default function Home() {
                     ["general", "General review"]
                   ] as Array<[keyof TradeReviewSections, string]>).map(([key, label]) => (
                     <label key={key}>
-                      {label}{key !== "general" ? <span className="review-required-marker" title="Required to clear Needs Review"> *</span> : " (optional)"}
+                      <span>
+                        {label}{key !== "general" ? <span className="review-required-marker" title="Required to clear Needs Review"> *</span> : " (optional)"}
+                      </span>
                       <textarea
                         className="trade-review-row-textarea"
                         rows={2}
