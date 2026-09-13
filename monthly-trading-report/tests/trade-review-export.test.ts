@@ -75,6 +75,13 @@ test("sends shared strategy text once while retaining references from every trad
   assert(!prompt.includes('"strategyKnowledge"'));
 });
 
+test("supplies an identity hint for ambiguous ticker symbols", () => {
+  const request = buildReviewRequest([trade({ symbol: "USB" })], templates, evidence(), "2026-09-01", "2026-09-07");
+  const prompt = request.input[0].content.find((part) => part.type === "input_text")?.text || "";
+  assert(prompt.includes("U.S. Bancorp"));
+  assert(prompt.includes("Financials"));
+});
+
 test("oversized text fails explicitly instead of silently truncating", () => {
   assert.throws(() => buildReviewRequest([trade({ notes: "x".repeat(1_000_001) })], templates, evidence(), "", ""), /no evidence was omitted/);
 });
@@ -185,9 +192,9 @@ test("background Responses flow submits, polls, completes, and rejects terminal 
 });
 
 test("cost ceiling includes long-context and maximum output pricing", () => {
-  assert(Math.abs(maximumTradeReviewCostUsd(200_000) - 0.0496) < 1e-10);
+  assert(Math.abs(maximumTradeReviewCostUsd(200_000) - 0.046) < 1e-10);
   assert(maximumTradeReviewCostUsd(534_770) < MAX_TRADE_REVIEW_COST_USD);
-  assert(maximumTradeReviewCostUsd(600_000) > MAX_TRADE_REVIEW_COST_USD);
+  assert(maximumTradeReviewCostUsd(610_000) > MAX_TRADE_REVIEW_COST_USD);
 });
 
 test("price preflight blocks an over-budget generation request", async () => {
@@ -197,7 +204,7 @@ test("price preflight blocks an over-budget generation request", async () => {
   globalThis.fetch = async (url) => {
     requests += 1;
     assert(String(url).endsWith("/responses/input_tokens"));
-    return Response.json({ object: "response.input_tokens", input_tokens: 600_000 });
+    return Response.json({ object: "response.input_tokens", input_tokens: 610_000 });
   };
   try {
     await assert.rejects(startAiReview([trade()], templates, evidence(), "", ""), /safety ceiling.*No paid review was started/);

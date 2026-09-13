@@ -16,7 +16,7 @@ import type { TradeExcursionResult } from "./trade-excursion";
 
 export const DEFAULT_TRADE_REVIEW_MODEL = "gpt-5.6-luna";
 export const MAX_TRADE_REVIEW_COST_USD = 0.25;
-export const TRADE_REVIEW_MAX_OUTPUT_TOKENS = 8_000;
+export const TRADE_REVIEW_MAX_OUTPUT_TOKENS = 5_000;
 export type ReviewImage = { label: string; dataUrl: string; analysisDetail?: "low" | "high" };
 export type ReviewEvidence = {
   excursions: Record<string, TradeExcursionResult>;
@@ -28,6 +28,9 @@ const PAGE_WIDTH_DXA = 9360;
 const ACCENT = "6F8F5F";
 const LIGHT_GREEN = "E9F6E4";
 const BORDER = "C8DDBD";
+const AMBIGUOUS_SYMBOL_IDENTITIES: Record<string, string> = {
+  USB: "U.S. Bancorp, a U.S. bank in the Financials sector; do not interpret USB as the technology acronym."
+};
 
 type ReviewPromptTrade = {
   reviewKey: string;
@@ -120,7 +123,7 @@ const tradeReviewSchema = {
   additionalProperties: false,
   required: ["mainLesson"],
   properties: {
-    mainLesson: { type: "string", description: "One concise sentence, specific to this trade, for the supporting trade snapshot." }
+    mainLesson: { type: "string", maxLength: 140, description: "One concise sentence of no more than 20 words, specific to this trade, for the supporting trade snapshot." }
   }
 };
 
@@ -136,25 +139,25 @@ function aiReviewJsonSchema(promptTrades: ReviewPromptTrade[]) {
       additionalProperties: false,
       required: ["overallTakeaway", "keyThemes", "improved", "needsWork", "exposureAnalysis", "workOn", "bottomLine", "tradeReviews"],
       properties: {
-        overallTakeaway: { type: "string" },
-        keyThemes: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } },
-        improved: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } },
-        needsWork: { type: "array", minItems: 1, maxItems: 5, items: { type: "string" } },
+        overallTakeaway: { type: "string", maxLength: 700 },
+        keyThemes: { type: "array", minItems: 1, maxItems: 4, items: { type: "string", maxLength: 280 } },
+        improved: { type: "array", minItems: 1, maxItems: 4, items: { type: "string", maxLength: 280 } },
+        needsWork: { type: "array", minItems: 1, maxItems: 4, items: { type: "string", maxLength: 280 } },
         exposureAnalysis: {
           type: "object", additionalProperties: false, required: ["summary", "groups"],
           properties: {
-            summary: { type: "string" },
-            groups: { type: "array", maxItems: 5, items: {
+            summary: { type: "string", maxLength: 500 },
+            groups: { type: "array", maxItems: 3, items: {
               type: "object", additionalProperties: false,
               required: ["label", "type", "symbols", "evidenceTradeIds", "performance", "correlation", "takeaway", "confidence"],
               properties: {
-                label: { type: "string" },
+                label: { type: "string", maxLength: 90 },
                 type: { type: "string", enum: ["sector", "industry", "theme", "repeated_symbol", "instrument"] },
                 symbols: { type: "array", minItems: 1, items: { type: "string" } },
                 evidenceTradeIds: { type: "array", minItems: 1, items: { type: "string", enum: requiredTradeKeys } },
-                performance: { type: "string" },
-                correlation: { type: "string" },
-                takeaway: { type: "string" },
+                performance: { type: "string", maxLength: 180 },
+                correlation: { type: "string", maxLength: 180 },
+                takeaway: { type: "string", maxLength: 180 },
                 confidence: { type: "string", enum: ["low", "medium", "high"] }
               }
             } }
@@ -373,6 +376,9 @@ function numericContext(trades: TradeLogEntry[], templates: SetupChecklistTempla
     setupPerformance: groupedPerformance(groupBy(primarySetup)).sort((a, b) => b.tradeCount - a.tradeCount),
     repeatedSymbols: groupedPerformance(groupBy((trade) => trade.symbol)).filter((group) => group.tradeCount > 1).sort((a, b) => b.tradeCount - a.tradeCount),
     sidePerformance: groupedPerformance(groupBy((trade) => trade.side)),
+    instrumentIdentityHints: Object.fromEntries([...new Set(trades.map((trade) => trade.symbol.toUpperCase()))]
+      .filter((symbol) => AMBIGUOUS_SYMBOL_IDENTITIES[symbol])
+      .map((symbol) => [symbol, AMBIGUOUS_SYMBOL_IDENTITIES[symbol]])),
     missingNotes,
     missingScreenshots
   };
@@ -400,7 +406,7 @@ export function validateAiReview(value: unknown, trades: TradeLogEntry[], prompt
     !Array.isArray(parsed.improved) ||
     !Array.isArray(parsed.needsWork) ||
     typeof parsed.exposureAnalysis?.summary !== "string" || !parsed.exposureAnalysis.summary.trim() ||
-    !Array.isArray(parsed.exposureAnalysis?.groups) || parsed.exposureAnalysis.groups.length > 5 ||
+    !Array.isArray(parsed.exposureAnalysis?.groups) || parsed.exposureAnalysis.groups.length > 3 ||
     typeof parsed.workOn?.primaryFocus !== "string" || !parsed.workOn.primaryFocus.trim() ||
     !Array.isArray(parsed.workOn?.priorities) || !parsed.workOn.priorities.length || parsed.workOn.priorities.length > 3 ||
     typeof parsed.bottomLine !== "string" || !parsed.bottomLine.trim()
@@ -454,7 +460,8 @@ Assess entry/exit decisions and risk in context, not solely on whether a trade w
 MAE/MFE are full-lifecycle measures with an as-of date; results may cover only exits in the selected period. Do not mix these scopes or treat MFE as achievable profit.
 Unavailable excursion data stays unavailable, never zero. Label proxy estimates. Do not invent price levels, events, causes, or hypothetical dollar savings.
 Analyze exposure across the period. Identify repeated symbols, sectors, industries, setup clusters, market themes, index or currency exposure, and trades likely to have moved together. State whether each cluster helped or hurt based on the supplied results. Sector or industry labels inferred from ticker knowledge must be marked as an inference and given an appropriate confidence. Do not claim statistical correlation from this small sample.
-Make this a concise period-level review, not a trade-by-trade dossier. Summarize three to five themes, three to five positives, and three to five mistakes. Put only one short mainLesson sentence per trade in the supporting snapshot.
+Ticker symbols can be ambiguous. Use numericContext.instrumentIdentityHints when supplied, and confirm the company or instrument identity before inferring a sector. Never classify a ticker from its letters alone.
+Make this a concise period-level review, not a trade-by-trade dossier. Summarize three to four themes, three to four positives, and three to four mistakes. Return no more than three exposure groups, choosing only the concentrations that most affected the period. Put one mainLesson of no more than 20 words per trade in the supporting snapshot. Keep the full report near 1,500 words.
 For workOn, identify the biggest lagging part of the trader's process in THIS period and make it the primary focus going forward.
 Rank one to three supported priorities by recurrence, severity, and controllability. Every priority must cite exact evidenceTradeIds and concrete evidence.
 Explain the likely mechanism affecting outcomes without promising improved returns. Give a specific behavioral rule and measurable adherence target with a review horizon.
@@ -739,18 +746,16 @@ function scorecardTable(trades: TradeLogEntry[], templates: SetupChecklistTempla
   );
 }
 
-function exposureTable(review: AiReview, trades: TradeLogEntry[]) {
-  const tradeById = new Map(trades.map((trade) => [trade.id, trade]));
+function exposureTable(review: AiReview) {
   return simpleTable(
     [
       ["Exposure", "Symbols", "Period Result", "What It Means"],
       ...review.exposureAnalysis.groups.map((group) => {
-        const dates = [...new Set(group.evidenceTradeIds.map((id) => tradeById.get(id)?.entryDate).filter(Boolean))];
         return [
           group.label,
           group.symbols.join(", "),
           group.performance,
-          `${group.correlation} ${group.takeaway}${dates.length ? ` Trades entered: ${dates.join(", ")}.` : ""}`
+          `${group.correlation} ${group.takeaway}`
         ];
       })
     ],
@@ -783,7 +788,7 @@ export async function buildDocument(trades: TradeLogEntry[], templates: SetupChe
     ...review.needsWork.map(bullet),
     heading("Exposure and Correlation"),
     paragraph([text(review.exposureAnalysis.summary)]),
-    ...(review.exposureAnalysis.groups.length ? [exposureTable(review, trades)] : []),
+    ...(review.exposureAnalysis.groups.length ? [exposureTable(review)] : []),
     paragraph([text("Exposure groupings describe overlapping risk and observed period results; they are not a statistical correlation study.", { italics: true })]),
     heading("Trade Snapshot"),
     paragraph([text("This table links the period themes to the individual trades.", { italics: true })]),
