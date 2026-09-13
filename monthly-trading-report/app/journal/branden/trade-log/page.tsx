@@ -5,7 +5,7 @@ import type { DragEvent } from "react";
 import type { SetupChecklistTemplate, TradeLogEntry, TraderUser } from "@/lib/types";
 import type { TradeExcursionResult } from "@/lib/trade-excursion";
 import { buildTradeLogCsv, tradeLogCsvFilename } from "@/lib/trade-log-csv";
-import { tradeChecklistScore as checklistScore, tradeNeedsReview } from "@/lib/trade-review";
+import { tradeChecklistScore as checklistScore, tradeNeedsReview, tradeReviewMissingFields } from "@/lib/trade-review";
 
 type PortfolioSettingsResponse = {
   portfolios?: string[];
@@ -932,18 +932,20 @@ export default function BrandenTradeLogPage() {
       return;
     }
 
+    const incomplete = filteredTrades.map((trade) => ({ trade, missing: tradeReviewMissingFields(trade, setupTemplates) })).filter((item) => item.missing.length);
+    if (incomplete.length) {
+      setError(`Complete the required review fields before exporting: ${incomplete.map(({ trade, missing }) => `${trade.symbol} (${trade.entryDate}): ${missing.join(", ")}`).join("; ")}`);
+      return;
+    }
+
     setIsExportingReview(true);
     setStatus("");
     setError("");
     updateReviewProgress(8, "Preparing trade review", `Collecting ${filteredTrades.length} visible trades and setup context.`);
-    const progressTimers = [
-      window.setTimeout(() => updateReviewProgress(22, "Sending to OpenAI", "Submitting filtered trades, notes, setup criteria, and screenshots."), 500),
-      window.setTimeout(() => updateReviewProgress(48, "Reviewing trades", "OpenAI is building the trade-by-trade review."), 1800),
-      window.setTimeout(() => updateReviewProgress(68, "Analyzing details", "Checking setup criteria, notes, executions, and chart context."), 4500),
-      window.setTimeout(() => updateReviewProgress(82, "Building document", "Formatting the review into a downloadable DOCX."), 9000)
-    ];
+
 
     try {
+      updateReviewProgress(25, "Analyzing trades and preparing the report", "Reviewing all notes, charts, setup context, and MAE/MFE. Larger exports may take several minutes.");
       const response = await fetch("/api/journal/branden/trade-log/export-review", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -956,7 +958,7 @@ export default function BrandenTradeLogPage() {
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
-        throw new Error(data.error || "Could not export the review document. Try again after OpenAI is fixed.");
+        throw new Error(data.error || "Could not export the review document. Please retry or narrow the trade filters.");
       }
 
       updateReviewProgress(92, "Downloading DOCX", "The review is complete. Preparing the file download.");
@@ -977,12 +979,11 @@ export default function BrandenTradeLogPage() {
         open: true,
         percent: 100,
         title: "Export failed",
-        detail: exportError instanceof Error ? exportError.message : "Could not export the review document. Try again after OpenAI is fixed."
+        detail: exportError instanceof Error ? exportError.message : "Could not export the review document. Please retry or narrow the trade filters."
       });
-      setError(exportError instanceof Error ? exportError.message : "Could not export the review document. Try again after OpenAI is fixed.");
+      setError(exportError instanceof Error ? exportError.message : "Could not export the review document. Please retry or narrow the trade filters.");
       setStatus("");
     } finally {
-      progressTimers.forEach(window.clearTimeout);
       setIsExportingReview(false);
     }
   }

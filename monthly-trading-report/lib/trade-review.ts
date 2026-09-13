@@ -98,13 +98,21 @@ export function tradeChecklistScore(trade: TradeLogEntry, templates: SetupCheckl
   return { earned, total, grade: grade?.label || "Unscored" };
 }
 
-export function tradeNeedsReview(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
+export function tradeReviewMissingFields(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
+  const missing: string[] = [];
   const grade = tradeChecklistScore(trade, templates).grade.trim();
-  return (
-    !Number.isFinite(trade.risk) || !trade.risk ||
-    !grade || grade.toLowerCase() === "unscored" ||
-    !trade.setupTags.some((setup) => setup.trim().length > 0) ||
-    !hasCompletedTradeReview(trade.reviewSections) ||
-    !trade.screenshots.some((screenshot) => screenshot.trim().length > 0)
-  );
+  if (!Number.isFinite(trade.risk) || !trade.risk) missing.push("nonzero risk");
+  if (!grade || grade.toLowerCase() === "unscored") missing.push("grade");
+  if (!trade.setupTags.some((setup) => setup.trim())) missing.push("selected setup");
+  const sections = normalizeTradeReviewSections(trade.reviewSections);
+  const labels = { setup: "Setup review", entry: "Entry review", exit: "Exit review", didRight: "What I did right", didWrong: "What I did wrong" };
+  for (const key of requiredTradeReviewSections) {
+    if (!sections[key].trim()) missing.push(labels[key]);
+  }
+  if (!trade.screenshots.some((screenshot) => screenshot.trim())) missing.push("screenshot");
+  return missing;
+}
+
+export function tradeNeedsReview(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
+  return tradeReviewMissingFields(trade, templates).length > 0;
 }

@@ -46,7 +46,8 @@ export async function fetchTradeIntradayBars(
   instrument: ExcursionInstrument,
   from: string,
   to: string,
-  interval = process.env.FMP_TRADE_EXCURSION_INTERVAL?.trim() || "5min"
+  interval = process.env.FMP_TRADE_EXCURSION_INTERVAL?.trim() || "5min",
+  signal?: AbortSignal
 ): Promise<IntradayFetchResult> {
   const apiKey = process.env.FMP_API_KEY?.trim();
   if (!apiKey) return { bars: [], provider: "fmp", interval, error: "FMP_API_KEY is not configured in this environment." };
@@ -67,6 +68,7 @@ export async function fetchTradeIntradayBars(
       url.searchParams.set("to", chunk.to);
       const response = await fetch(url, {
         headers: { apikey: apiKey },
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
         next: { revalidate: 60 * 60 * 6 }
       });
       if (!response.ok) return { bars: [] as ExcursionBar[], error: `FMP intraday request returned HTTP ${response.status}.` };
