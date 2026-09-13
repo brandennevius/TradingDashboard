@@ -1,4 +1,4 @@
-import type { TradeReviewSections } from "./types";
+import type { SetupChecklistTemplate, TradeLogEntry, TradeReviewSections } from "./types";
 
 export const emptyTradeReviewSections: TradeReviewSections = {
   setup: "",
@@ -25,20 +25,11 @@ export function hasTradeReviewContent(value: TradeReviewSections) {
   return Object.values(value).some((section) => section.trim().length > 0);
 }
 
-export const minimumCompletedTradeReviewSections = 3;
+export const requiredTradeReviewSections = ["setup", "entry", "exit", "didRight", "didWrong"] as const;
 
-export function completedTradeReviewSectionCount(value: unknown) {
-  return Object.values(normalizeTradeReviewSections(value))
-    .filter((section) => section.trim().length > 0)
-    .length;
-}
-
-export function hasCompletedTradeReview(value: unknown, legacyNotes = "") {
-  const completedSections = completedTradeReviewSectionCount(value);
-  if (completedSections >= minimumCompletedTradeReviewSections) return true;
-
-  // Preserve completion for older trades that only have the legacy free-form notes field.
-  return completedSections === 0 && String(legacyNotes || "").trim().length > 0;
+export function hasCompletedTradeReview(value: unknown) {
+  const sections = normalizeTradeReviewSections(value);
+  return requiredTradeReviewSections.every((key) => sections[key].trim().length > 0);
 }
 
 const legacyLabels: Array<{ label: string; key: keyof TradeReviewSections }> = [
@@ -72,4 +63,48 @@ export function reviewSectionsFromLegacyNotes(notes: string) {
 export function resolvedTradeReviewSections(value: unknown, legacyNotes = "") {
   const sections = normalizeTradeReviewSections(value);
   return hasTradeReviewContent(sections) ? sections : reviewSectionsFromLegacyNotes(legacyNotes);
+}
+
+function setupTemplateFor(setupName: string, templates: SetupChecklistTemplate[]) {
+  return templates.find((template) => template.setupName.trim().toLowerCase() === setupName.trim().toLowerCase());
+}
+
+export function tradeChecklistScore(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
+  const template = setupTemplateFor(trade.setupTags[0] || "", templates);
+  const items = trade.checklistItems || [];
+  const total = items.reduce((sum, item) => sum + Number(item.points || 0), 0);
+  const earned = items.reduce((sum, item) => {
+    const points = Number(item.points || 0);
+    if ((item.inputType || "boolean") === "points") {
+      return sum + Math.max(0, Math.min(points, Number(item.score || 0)));
+    }
+
+    return sum + (item.met ? points : 0);
+  }, 0);
+  const manualGrade = trade.manualGrade?.trim();
+
+  if (!template?.gradeBands?.length || !total) {
+    return { earned, total, grade: manualGrade || "Unscored" };
+  }
+
+  if (manualGrade) {
+    return { earned, total, grade: manualGrade };
+  }
+
+  const grade = [...template.gradeBands]
+    .sort((a, b) => b.minScore - a.minScore)
+    .find((band) => earned >= band.minScore && (band.maxScore === null || earned <= band.maxScore));
+
+  return { earned, total, grade: grade?.label || "Unscored" };
+}
+
+export function tradeNeedsReview(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
+  const grade = tradeChecklistScore(trade, templates).grade.trim();
+  return (
+    !Number.isFinite(trade.risk) || !trade.risk ||
+    !grade || grade.toLowerCase() === "unscored" ||
+    !trade.setupTags.some((setup) => setup.trim().length > 0) ||
+    !hasCompletedTradeReview(trade.reviewSections) ||
+    !trade.screenshots.some((screenshot) => screenshot.trim().length > 0)
+  );
 }

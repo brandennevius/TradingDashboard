@@ -38,7 +38,7 @@ import type {
 } from "@/lib/types";
 import { displayTradeReturnPercent, tradeReturnLabel } from "@/lib/trade-return";
 import type { TradeExcursionResult } from "@/lib/trade-excursion";
-import { emptyTradeReviewSections, hasCompletedTradeReview, resolvedTradeReviewSections } from "@/lib/trade-review";
+import { emptyTradeReviewSections, tradeNeedsReview, resolvedTradeReviewSections } from "@/lib/trade-review";
 import BrandenSidebar from "./components/BrandenSidebar";
 
 const BottomToBullChecklist = dynamic(() => import("./components/BottomToBullChecklist"), {
@@ -1457,15 +1457,6 @@ function parseBrokerStatementTrades(csvText: string): TradeFormState[] {
     });
 
   return forms;
-}
-
-function tradeNeedsReview(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
-  return (
-    !numberValue(trade.risk) ||
-    !hasCompletedTradeReview(trade.reviewSections, trade.notes) ||
-    (!trade.screenshots.length && !(trade.chartLinks || []).length) ||
-    !resolvedTradeChecklistItems(trade, templates).length
-  );
 }
 
 function tradeBadgeClass(status: TradeLogEntry["status"]) {
@@ -3492,7 +3483,7 @@ export default function Home() {
         <div className="trade-checklist-heading">
           <div>
             <h3>
-              Setup Criteria <span className="review-required-marker" title="Required to clear Needs Review">*</span>
+              Setup Criteria
             </h3>
             <span>
               {score.earned}/{score.total} points / {score.total ? score.grade : currentForm.manualGrade || "Unscored"}
@@ -5584,7 +5575,7 @@ export default function Home() {
                         </select>
                       </label>
                       <label>
-                        Grade
+                        Grade <span className="review-required-marker" title="A manual or calculated grade is required to clear Needs Review">*</span>
                         <input
                           value={editTradeForm.manualGrade}
                           onChange={(event) => updateEditTradeField("manualGrade", event.target.value)}
@@ -5648,7 +5639,7 @@ export default function Home() {
                         </>
                       ) : null}
                       <label className="trade-form-wide">
-                        Chart links <span className="review-required-marker" title="A screenshot or chart link is required to clear Needs Review">*</span>
+                        Chart links (optional)
                         <input
                           value={editTradeForm.chartLinks.join(", ")}
                           onChange={(event) =>
@@ -5677,7 +5668,7 @@ export default function Home() {
                     ["general", "General review"]
                   ] as Array<[keyof TradeReviewSections, string]>).map(([key, label]) => (
                     <label key={key}>
-                      {label}
+                      {label}{key !== "general" ? <span className="review-required-marker" title="Required to clear Needs Review"> *</span> : " (optional)"}
                       <textarea
                         className="trade-review-row-textarea"
                         rows={2}
@@ -5706,7 +5697,7 @@ export default function Home() {
 	                <div className="trade-section-heading-row">
 	                  <h3>Screenshots</h3>
                     <span className="trade-review-required-note">
-                      <span className="review-required-marker">*</span> screenshot or chart link required
+                      <span className="review-required-marker">*</span> at least one screenshot required
                     </span>
 	                  {selectedTrade.userId === user.id ? (
 	                    <label className="trade-screenshot-upload">
@@ -6247,7 +6238,7 @@ export default function Home() {
                     <input type="number" step="any" inputMode="decimal" value={String(tradeForm.shares)} onChange={(event) => updateTradeField("shares", event.target.value)} />
                   </label>
                   <label>
-                    Risk $
+                    Risk $ <span className="review-required-marker" title="Required to clear Needs Review">*</span>
                     <input type="number" step="any" inputMode="decimal" value={String(tradeForm.risk)} onChange={(event) => updateTradeField("risk", event.target.value)} />
                   </label>
                   <label>
@@ -6280,7 +6271,7 @@ export default function Home() {
                     <input value={tradeForm.tradeQuality} onChange={(event) => updateTradeField("tradeQuality", event.target.value)} placeholder="A+ thesis, chased, late exit" />
                   </label>
                   <label>
-                    Setup
+                    Setup <span className="review-required-marker" title="Required to clear Needs Review">*</span>
                     <select value={primarySetupName(tradeForm.setupTags)} onChange={(event) => updateTradeSetupTags("create", event.target.value)}>
                       {setupAssignmentOptions(primarySetupName(tradeForm.setupTags)).map((option) => (
                         <option key={option || "__none__"} value={option}>
@@ -6298,15 +6289,15 @@ export default function Home() {
                     {renderCustomTagField("create", tradeForm.customTags)}
                   </label>
                   <label>
-                    Grade
+                    Grade <span className="review-required-marker" title="Required to clear Needs Review">*</span>
                     <input value={tradeForm.manualGrade} onChange={(event) => updateTradeField("manualGrade", event.target.value)} placeholder="A, B+, C" />
                   </label>
                   <label>
-                    Screenshots
+                    Screenshots <span className="review-required-marker" title="Required to clear Needs Review">*</span>
                     <input type="file" accept="image/*" multiple onChange={(event) => attachTradeScreenshots(event.target.files)} />
                   </label>
                   <label>
-                    Chart links
+                    Chart links (optional)
                     <input
                       value={tradeForm.chartLinks.join(", ")}
                       onChange={(event) =>
@@ -6354,7 +6345,7 @@ export default function Home() {
                     ["general", "General review"]
                   ] as Array<[keyof TradeReviewSections, string]>).map(([key, label]) => (
                     <label key={key}>
-                      {label}
+                      {label}{key !== "general" ? <span className="review-required-marker" title="Required to clear Needs Review"> *</span> : " (optional)"}
                       <textarea
                         className="trade-review-row-textarea"
                         rows={2}

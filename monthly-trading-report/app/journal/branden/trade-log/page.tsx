@@ -5,7 +5,7 @@ import type { DragEvent } from "react";
 import type { SetupChecklistTemplate, TradeLogEntry, TraderUser } from "@/lib/types";
 import type { TradeExcursionResult } from "@/lib/trade-excursion";
 import { buildTradeLogCsv, tradeLogCsvFilename } from "@/lib/trade-log-csv";
-import { hasCompletedTradeReview } from "@/lib/trade-review";
+import { tradeChecklistScore as checklistScore, tradeNeedsReview } from "@/lib/trade-review";
 
 type PortfolioSettingsResponse = {
   portfolios?: string[];
@@ -198,43 +198,6 @@ function countsAsSettledTrade(trade: TradeLogEntry) {
 
 function primarySetup(trade: TradeLogEntry) {
   return trade.setupTags[0] || "No setup";
-}
-
-function setupTemplateFor(setupName: string, templates: SetupChecklistTemplate[]) {
-  return templates.find((template) => template.setupName.trim().toLowerCase() === setupName.trim().toLowerCase());
-}
-
-function checklistScore(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
-  const template = setupTemplateFor(primarySetup(trade), templates);
-  const items = template?.criteria?.length ? trade.checklistItems : trade.checklistItems;
-  const total = items.reduce((sum, item) => sum + Number(item.points || 0), 0);
-  const earned = items.reduce((sum, item) => {
-    const points = Number(item.points || 0);
-    if ((item.inputType || "boolean") === "points") {
-      return sum + Math.max(0, Math.min(points, Number(item.score || 0)));
-    }
-
-    return sum + (item.met ? points : 0);
-  }, 0);
-  const manualGrade = trade.manualGrade?.trim();
-
-  if (!template?.gradeBands?.length || !total) {
-    return { earned, total, grade: manualGrade || "Unscored" };
-  }
-
-  if (manualGrade) {
-    return { earned, total, grade: manualGrade };
-  }
-
-  const grade = [...template.gradeBands]
-    .sort((a, b) => b.minScore - a.minScore)
-    .find((band) => earned >= band.minScore && (band.maxScore === null || earned <= band.maxScore));
-
-  return { earned, total, grade: grade?.label || "Unscored" };
-}
-
-function tradeNeedsReview(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
-  return !trade.risk || !hasCompletedTradeReview(trade.reviewSections, trade.notes) || (!trade.screenshots.length && !(trade.chartLinks || []).length) || !checklistScore(trade, templates).total;
 }
 
 function longestStreak(trades: TradeLogEntry[], status: TradeLogEntry["status"]) {
