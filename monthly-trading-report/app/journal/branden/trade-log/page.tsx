@@ -53,6 +53,15 @@ type ReviewExportProgress = {
   detail: string;
 };
 
+type ReviewCompletionIssue = {
+  id: string;
+  symbol: string;
+  entryDate: string;
+  side: TradeLogEntry["side"];
+  avgEntry: number;
+  missing: string[];
+};
+
 const filterKeys: TradeFilterKey[] = ["status", "side", "symbol", "setup", "grade", "review"];
 const tradeColumnKeys = [
   "status",
@@ -421,6 +430,7 @@ export default function BrandenTradeLogPage() {
     title: "",
     detail: ""
   });
+  const [reviewCompletionIssues, setReviewCompletionIssues] = useState<ReviewCompletionIssue[]>([]);
   const [columnPreferences, setColumnPreferences] = useState<Record<string, ColumnPreference[]>>({});
   const [selectedTradeIds, setSelectedTradeIds] = useState<string[]>([]);
   const [draggedColumn, setDraggedColumn] = useState<TradeColumnKey | null>(null);
@@ -552,6 +562,27 @@ export default function BrandenTradeLogPage() {
   useEffect(() => {
     setSelectedTradeIds((current) => current.filter((tradeId) => filteredTrades.some((trade) => trade.id === tradeId)));
   }, [filteredTrades]);
+
+  useEffect(() => {
+    setReviewCompletionIssues((current) => {
+      if (!current.length) return current;
+      const visibleById = new Map(filteredTrades.map((trade) => [trade.id, trade]));
+      const next = current.flatMap((issue) => {
+        const trade = visibleById.get(issue.id);
+        if (!trade) return [];
+        const missing = tradeReviewMissingFields(trade, setupTemplates);
+        return missing.length ? [{
+          id: trade.id,
+          symbol: trade.symbol,
+          entryDate: trade.entryDate,
+          side: trade.side,
+          avgEntry: trade.avgEntry,
+          missing
+        }] : [];
+      });
+      return JSON.stringify(next) === JSON.stringify(current) ? current : next;
+    });
+  }, [filteredTrades, setupTemplates]);
 
   const summary = useMemo(() => {
     const settled = filteredTrades.filter(countsAsSettledTrade);
@@ -934,10 +965,20 @@ export default function BrandenTradeLogPage() {
 
     const incomplete = filteredTrades.map((trade) => ({ trade, missing: tradeReviewMissingFields(trade, setupTemplates) })).filter((item) => item.missing.length);
     if (incomplete.length) {
-      setError(`Complete the required review fields before exporting: ${incomplete.map(({ trade, missing }) => `${trade.symbol} (${trade.entryDate}): ${missing.join(", ")}`).join("; ")}`);
+      setError("");
+      setStatus("");
+      setReviewCompletionIssues(incomplete.map(({ trade, missing }) => ({
+        id: trade.id,
+        symbol: trade.symbol,
+        entryDate: trade.entryDate,
+        side: trade.side,
+        avgEntry: trade.avgEntry,
+        missing
+      })));
       return;
     }
 
+    setReviewCompletionIssues([]);
     setIsExportingReview(true);
     setStatus("");
     setError("");
@@ -958,6 +999,26 @@ export default function BrandenTradeLogPage() {
 
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
+        if (response.status === 422 && Array.isArray(data.incompleteTrades)) {
+          const tradesById = new Map(trades.map((trade) => [trade.id, trade]));
+          const issues = data.incompleteTrades.flatMap((issue: { id?: unknown; missing?: unknown }) => {
+            const trade = tradesById.get(String(issue.id || ""));
+            const missing = Array.isArray(issue.missing) ? issue.missing.map(String).filter(Boolean) : [];
+            return trade && missing.length ? [{
+              id: trade.id,
+              symbol: trade.symbol,
+              entryDate: trade.entryDate,
+              side: trade.side,
+              avgEntry: trade.avgEntry,
+              missing
+            }] : [];
+          });
+          if (issues.length) {
+            setReviewCompletionIssues(issues);
+            setReviewExportProgress((current) => ({ ...current, open: false }));
+            return;
+          }
+        }
         throw new Error(data.error || "Could not export the review document. Please retry or narrow the trade filters.");
       }
 
@@ -1054,6 +1115,47 @@ export default function BrandenTradeLogPage() {
 
         {status ? <p className="status trade-log-status">{status}</p> : null}
         {error ? <p className="status error">{error}</p> : null}
+        {reviewCompletionIssues.length ? (
+          <section className="review-completion-panel" role="region" aria-labelledby="review-completion-title">
+            <div className="review-completion-heading">
+              <div>
+                <p className="eyebrow">AI review export</p>
+                <h2 id="review-completion-title" role="alert">{reviewCompletionIssues.length} {reviewCompletionIssues.length === 1 ? "trade needs" : "trades need"} review</h2>
+                <p>Complete each missing field below, then run the export again.</p>
+              </div>
+              <button className="trade-muted-button" type="button" onClick={() => setReviewCompletionIssues([])}>
+                Hide checklist
+              </button>
+            </div>
+            <div className="review-completion-grid">
+              {reviewCompletionIssues.map((issue) => (
+                <article className="review-completion-item" key={issue.id}>
+                  <div className="review-completion-trade">
+                    <div>
+                      <strong>{issue.symbol}</strong>
+                      <span>
+                        {issue.entryDate} · {issue.side} · entry {issue.avgEntry ? issue.avgEntry.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) : "-"}
+                      </span>
+                    </div>
+                    <button
+                      className="trade-muted-button review-completion-open"
+                      type="button"
+                      onClick={() => { window.location.href = tradeDetailHref(issue.id); }}
+                    >
+                      Review trade
+                    </button>
+                  </div>
+                  <div className="review-completion-missing">
+                    <span>Missing</span>
+                    <ul>
+                      {issue.missing.map((field) => <li key={field}>{field}</li>)}
+                    </ul>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
         {isLoading ? <p className="status">Loading trade log...</p> : null}
         {reviewExportProgress.open ? (
           <div className="review-export-modal-backdrop" role="status" aria-live="polite">

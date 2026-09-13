@@ -2500,6 +2500,127 @@ th {
   margin: 8px 0 14px;
 }
 
+.review-completion-panel {
+  background: #fff8f2;
+  border: 1px solid rgba(182, 83, 79, 0.3);
+  border-radius: 14px;
+  box-shadow: 0 12px 34px rgba(86, 61, 54, 0.1);
+  color: #4b3733;
+  margin: 12px 0 18px;
+  padding: 20px;
+}
+
+.review-completion-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.review-completion-heading .eyebrow {
+  color: #a34a46;
+  margin: 0 0 4px;
+}
+
+.review-completion-heading h2 {
+  color: #6f302d;
+  font-size: 1.35rem;
+  margin: 0 0 5px;
+}
+
+.review-completion-heading p:not(.eyebrow) {
+  color: #765c56;
+  font-weight: 700;
+  margin: 0;
+}
+
+.review-completion-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.review-completion-item {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(182, 83, 79, 0.18);
+  border-radius: 10px;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.review-completion-trade {
+  align-items: flex-start;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.review-completion-trade strong {
+  color: #4b2927;
+  display: block;
+  font-size: 1.05rem;
+}
+
+.review-completion-trade span {
+  color: #806660;
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 750;
+  margin-top: 2px;
+}
+
+.review-completion-open {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.review-completion-missing > span {
+  color: #9a4b47;
+  display: block;
+  font-size: 0.7rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin-bottom: 7px;
+  text-transform: uppercase;
+}
+
+.review-completion-missing ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.review-completion-missing li {
+  background: rgba(182, 83, 79, 0.09);
+  border: 1px solid rgba(182, 83, 79, 0.18);
+  border-radius: 999px;
+  color: #813d39;
+  font-size: 0.76rem;
+  font-weight: 850;
+  padding: 5px 9px;
+}
+
+@media (max-width: 760px) {
+  .review-completion-heading,
+  .review-completion-trade {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .review-completion-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .review-completion-open {
+    width: 100%;
+  }
+}
+
 .review-export-modal-backdrop {
   align-items: center;
   background: rgba(38, 48, 38, 0.34);
