@@ -6,6 +6,7 @@ import type { SetupChecklistTemplate, TradeLogEntry, TraderUser } from "@/lib/ty
 import type { TradeExcursionResult } from "@/lib/trade-excursion";
 import { buildTradeLogCsv, tradeLogCsvFilename } from "@/lib/trade-log-csv";
 import { tradeChecklistScore as checklistScore, tradeNeedsReview, tradeReviewMissingFields } from "@/lib/trade-review";
+import type { WeeklyFocus } from "@/lib/weekly-focus";
 
 type PortfolioSettingsResponse = {
   portfolios?: string[];
@@ -435,6 +436,10 @@ export default function BrandenTradeLogPage() {
   const [selectedTradeIds, setSelectedTradeIds] = useState<string[]>([]);
   const [draggedColumn, setDraggedColumn] = useState<TradeColumnKey | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<TradeColumnKey | null>(null);
+  const [weeklyFocus, setWeeklyFocus] = useState<WeeklyFocus | null>(null);
+  const [weeklyFocusText, setWeeklyFocusText] = useState("");
+  const [weeklyFocusMessage, setWeeklyFocusMessage] = useState("");
+  const [isSavingWeeklyFocus, setIsSavingWeeklyFocus] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -443,8 +448,14 @@ export default function BrandenTradeLogPage() {
       setIsLoading(true);
       setError("");
 
-      const tradeLogResponse = await fetch("/api/journal/branden/trade-log", { cache: "no-store" });
-      const tradeLogData = await tradeLogResponse.json().catch(() => ({}));
+      const [tradeLogResponse, focusResponse] = await Promise.all([
+        fetch("/api/journal/branden/trade-log", { cache: "no-store" }),
+        fetch("/api/settings/weekly-focus", { cache: "no-store" })
+      ]);
+      const [tradeLogData, focusData] = await Promise.all([
+        tradeLogResponse.json().catch(() => ({})),
+        focusResponse.json().catch(() => ({}))
+      ]);
 
       if (cancelled) {
         return;
@@ -464,6 +475,13 @@ export default function BrandenTradeLogPage() {
           ? tradeLogData.preferences
           : {}
       );
+      if (focusResponse.ok && focusData.focus) {
+        const focus = focusData.focus as WeeklyFocus;
+        setWeeklyFocus(focus);
+        setWeeklyFocusText(focus.summary || "");
+      } else if (!focusResponse.ok) {
+        setWeeklyFocusMessage(focusData.error || "Could not load the weekly focus.");
+      }
       setActivePortfolio((current) => current || String(tradeLogData.defaultPortfolio || ""));
       setIsLoading(false);
     }
@@ -957,6 +975,31 @@ export default function BrandenTradeLogPage() {
     setReviewExportProgress({ open: true, percent, title, detail });
   }
 
+  async function saveWeeklyFocus() {
+    setIsSavingWeeklyFocus(true);
+    setWeeklyFocusMessage("");
+    try {
+      const response = await fetch("/api/settings/weekly-focus", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          summary: weeklyFocusText,
+          focusItems: weeklyFocus?.focus_items || []
+        })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.focus) throw new Error(data.error || "Could not save the weekly focus.");
+      const focus = data.focus as WeeklyFocus;
+      setWeeklyFocus(focus);
+      setWeeklyFocusText(focus.summary || "");
+      setWeeklyFocusMessage(focus.status === "AVAILABLE" ? "Weekly focus saved for AI Review exports." : "Weekly focus cleared.");
+    } catch (saveError) {
+      setWeeklyFocusMessage(saveError instanceof Error ? saveError.message : "Could not save the weekly focus.");
+    } finally {
+      setIsSavingWeeklyFocus(false);
+    }
+  }
+
   async function exportReviewDocx() {
     if (!filteredTrades.length) {
       setStatus("No visible trades to export.");
@@ -1080,6 +1123,36 @@ export default function BrandenTradeLogPage() {
             <span>{filteredTrades.length} visible rows</span>
           </div>
         </header>
+
+        <section className="trade-log-weekly-focus daily-review-card" aria-labelledby="trade-log-weekly-focus-title">
+          <div className="trade-log-weekly-focus-copy">
+            <p className="eyebrow">AI Review page header</p>
+            <h2 id="trade-log-weekly-focus-title">Weekly Focus</h2>
+            <p>This text appears above the report content on every page of the AI Review document.</p>
+            <span>{weeklyFocus?.week_start ? `Week of ${weeklyFocus.week_start}` : "No weekly focus saved"}</span>
+          </div>
+          <div className="trade-log-weekly-focus-editor">
+            <label htmlFor="trade-log-weekly-focus-text">Focus for this week</label>
+            <textarea
+              id="trade-log-weekly-focus-text"
+              rows={3}
+              maxLength={360}
+              value={weeklyFocusText}
+              disabled={Boolean(user?.readOnly)}
+              onChange={(event) => setWeeklyFocusText(event.target.value)}
+              placeholder="Example: Take only planned swing setups and follow the written exit rule."
+            />
+            <div className="trade-log-weekly-focus-controls">
+              <span>{weeklyFocusText.length}/360</span>
+              {!user?.readOnly ? (
+                <button type="button" onClick={saveWeeklyFocus} disabled={isSavingWeeklyFocus}>
+                  {isSavingWeeklyFocus ? "Saving..." : "Save weekly focus"}
+                </button>
+              ) : null}
+            </div>
+            {weeklyFocusMessage ? <p className="status">{weeklyFocusMessage}</p> : null}
+          </div>
+        </section>
 
         <section className="branden-route-toolbar">
           <label>

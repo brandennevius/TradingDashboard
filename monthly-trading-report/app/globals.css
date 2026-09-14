@@ -2000,6 +2000,72 @@ th {
   padding: 8px 10px;
 }
 
+.trade-log-weekly-focus {
+  align-items: start;
+  display: grid;
+  gap: 18px;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(320px, 1.3fr);
+}
+
+.trade-log-weekly-focus-copy h2 {
+  font-size: 1.25rem;
+  margin: 2px 0 7px;
+}
+
+.trade-log-weekly-focus-copy > p:not(.eyebrow) {
+  color: #6f7469;
+  line-height: 1.45;
+  margin: 0 0 8px;
+}
+
+.trade-log-weekly-focus-copy > span,
+.trade-log-weekly-focus-controls > span {
+  color: #6f7469;
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.trade-log-weekly-focus-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.trade-log-weekly-focus-editor label {
+  color: #4c5549;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.trade-log-weekly-focus-editor textarea {
+  background: rgba(255, 250, 240, 0.86);
+  border: 1px solid rgba(185, 214, 168, 0.9);
+  border-radius: 8px;
+  color: #2f352d;
+  font: inherit;
+  line-height: 1.45;
+  min-height: 88px;
+  padding: 10px 12px;
+  resize: vertical;
+  width: 100%;
+}
+
+.trade-log-weekly-focus-controls {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+}
+
+.trade-log-weekly-focus-controls button {
+  min-height: 38px;
+}
+
+@media (max-width: 760px) {
+  .trade-log-weekly-focus {
+    grid-template-columns: 1fr;
+  }
+}
+
 .trade-date-quick-filters {
   align-items: center;
   display: flex;

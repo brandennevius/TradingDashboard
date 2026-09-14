@@ -2,6 +2,7 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  Header,
   HeadingLevel,
   Paragraph,
   Table,
@@ -13,6 +14,7 @@ import {
 import type { SetupChecklistTemplate, TradeLogEntry, TradeReviewSections } from "./types";
 import { tradeChecklistScore, normalizeTradeReviewSections } from "./trade-review";
 import type { TradeExcursionResult } from "./trade-excursion";
+import type { WeeklyFocus } from "./weekly-focus";
 
 export const DEFAULT_TRADE_REVIEW_MODEL = "gpt-5.6-luna";
 export const MAX_TRADE_REVIEW_COST_USD = 0.25;
@@ -763,7 +765,28 @@ function exposureTable(review: AiReview) {
   );
 }
 
-export async function buildDocument(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], startDate: string, endDate: string, _evidence: ReviewEvidence, review: AiReview) {
+function weeklyFocusHeader(focus?: WeeklyFocus) {
+  const summary = focus?.status === "AVAILABLE" ? String(focus.summary || "").replace(/\s+/g, " ").trim() : "";
+  if (!summary) return null;
+  return new Header({
+    children: [new Paragraph({
+      children: [
+        text(`WEEKLY FOCUS${focus?.week_start ? ` · WEEK OF ${focus.week_start}` : ""}  `, { bold: true, color: ACCENT, size: 17 }),
+        text(summary, { color: "263026", size: 17 })
+      ],
+      border: { bottom: { style: BorderStyle.SINGLE, color: BORDER, size: 6, space: 6 } },
+      spacing: { after: 80, line: 210 }
+    })]
+  });
+}
+
+export async function buildDocument(trades: TradeLogEntry[], templates: SetupChecklistTemplate[], startDate: string, endDate: string, _evidence: ReviewEvidence, review: AiReview, weeklyFocus?: WeeklyFocus) {
+  const repeatingHeader = weeklyFocusHeader(weeklyFocus);
+  const sectionHeaders = repeatingHeader ? {
+    default: repeatingHeader,
+    first: weeklyFocusHeader(weeklyFocus)!,
+    even: weeklyFocusHeader(weeklyFocus)!
+  } : undefined;
   const children: (Paragraph | Table)[] = [
     new Paragraph({
       text: "Branden Trade Review",
@@ -843,9 +866,10 @@ export async function buildDocument(trades: TradeLogEntry[], templates: SetupChe
     },
     sections: [
       {
+        headers: sectionHeaders,
         properties: {
           page: {
-            margin: { top: 720, right: 720, bottom: 720, left: 720 }
+            margin: { top: repeatingHeader ? 1260 : 720, right: 720, bottom: 720, left: 720, header: 300 }
           }
         },
         children

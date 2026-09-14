@@ -1,7 +1,7 @@
 import { Packer } from "docx";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { getSetupChecklistTemplates, listBrandenVisibleTrades } from "@/lib/store";
+import { getSetupChecklistTemplates, getWeeklyProcessFocus, listBrandenVisibleTrades } from "@/lib/store";
 import { tradeReviewMissingFields } from "@/lib/trade-review";
 import { buildDocument, completedAiReview, pendingAiReviewId, retrieveAiReview, safeFilePart, sortedTradesByRequest, startAiReview, tradeForRange } from "@/lib/trade-review-export";
 import { collectReviewEvidence } from "@/lib/trade-review-evidence";
@@ -42,7 +42,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ reviewJobId: pendingId, status: aiResponse?.status }, { status: 202 });
     }
 
-    const [allTrades, templates] = await Promise.all([listBrandenVisibleTrades(), getSetupChecklistTemplates()]);
+    const [allTrades, templates, weeklyFocus] = await Promise.all([
+      listBrandenVisibleTrades(),
+      getSetupChecklistTemplates(),
+      getWeeklyProcessFocus("branden")
+    ]);
     const lifecycleTrades = sortedTradesByRequest(allTrades, tradeIds);
     if (lifecycleTrades.length !== tradeIds.length) return NextResponse.json({ error: "Some trades are no longer available. Refresh the trade log before exporting." }, { status: 409 });
     const incomplete = lifecycleTrades.map((trade) => ({ id: trade.id, symbol: trade.symbol, entryDate: trade.entryDate, missing: tradeReviewMissingFields(trade, templates) })).filter((trade) => trade.missing.length);
@@ -71,7 +75,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ reviewJobId: responsePendingId, status: response.status, ...(priceCheck || {}) }, { status: 202 });
     }
     const review = completedAiReview(response, trades, templates, evidence);
-    const document = await buildDocument(trades, templates, startDate, endDate, evidence, review);
+    const document = await buildDocument(trades, templates, startDate, endDate, evidence, review, weeklyFocus);
     const buffer = await Packer.toBuffer(document);
     const filename = `branden-trade-review-${safeFilePart(startDate || "all")}-to-${safeFilePart(endDate || "today")}.docx`;
     logReviewExport("complete", { phase: reviewJobId ? "finalize" : "submit", ms: Date.now() - startedAt, bytes: buffer.length });
