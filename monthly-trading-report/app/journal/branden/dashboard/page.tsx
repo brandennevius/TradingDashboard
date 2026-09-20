@@ -597,6 +597,10 @@ export default function BrandenDashboardPage() {
                         <YAxis
                           yAxisId="edge"
                           orientation="right"
+                          domain={[
+                            (dataMin: number) => Math.min(dataMin, 0),
+                            (dataMax: number) => Math.max(dataMax, 0)
+                          ]}
                           axisLine={false}
                           tickLine={false}
                           tick={{ fill: "#6f7469", fontSize: 11 }}
@@ -639,6 +643,10 @@ export default function BrandenDashboardPage() {
                         <YAxis
                           yAxisId="edge"
                           orientation="right"
+                          domain={[
+                            (dataMin: number) => Math.min(dataMin, 0),
+                            (dataMax: number) => Math.max(dataMax, 0)
+                          ]}
                           axisLine={false}
                           tickLine={false}
                           tick={{ fill: "#6f7469", fontSize: 11 }}
