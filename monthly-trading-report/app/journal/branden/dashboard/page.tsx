@@ -284,7 +284,8 @@ export default function BrandenDashboardPage() {
     () =>
       visibleTrades
         .filter((trade) => !activePortfolio || trade.portfolioTag === activePortfolio)
-        .filter((trade) => countsAsClosedLifecycleTrade(trade) && inDateRange(trade.exitDate, startDate, endDate)),
+        .filter((trade) => countsAsClosedLifecycleTrade(trade) && inDateRange(trade.exitDate, startDate, endDate))
+        .map((trade) => tradeForRange(trade, startDate, endDate)),
     [activePortfolio, endDate, startDate, visibleTrades]
   );
 
