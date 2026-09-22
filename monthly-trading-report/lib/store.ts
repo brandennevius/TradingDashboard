@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import { versionSetupTemplates } from "./setup-versioning";
 import crypto from "crypto";
 import path from "path";
 import { Pool, type PoolClient } from "pg";
@@ -312,7 +313,12 @@ function checklistItems(value: unknown): TradeChecklistItem[] {
         id: String(rawItem.id || `criteria-${index}`),
         criteria,
         points,
-        met: Boolean(rawItem.met)
+        met: Boolean(rawItem.met),
+        inputType: rawItem.inputType === "points" ? "points" : "boolean",
+        score: Number.isFinite(Number(rawItem.score)) ? Number(rawItem.score) : undefined,
+        groupName: String(rawItem.groupName || ""),
+        importTagKey: String(rawItem.importTagKey || ""),
+        importTagValue: String(rawItem.importTagValue || "")
       };
     })
     .filter(Boolean) as TradeChecklistItem[];
@@ -1026,6 +1032,10 @@ function normalizeSetupTemplates(value: unknown): SetupChecklistTemplate[] {
 
       return {
         id: String(rawTemplate.id || `setup-template-${index}`),
+        familyId: String(rawTemplate.familyId || rawTemplate.id || `setup-template-${index}`),
+        familyName: String(rawTemplate.familyName || setupName),
+        version: Number(rawTemplate.version) || 1,
+        archived: rawTemplate.archived === true,
         setupName,
         description: String(rawTemplate.description || ""),
         knowledgeSources: normalizeSetupKnowledgeSources(rawTemplate.knowledgeSources),
@@ -1781,23 +1791,32 @@ export async function saveSetupChecklistTemplates(templates: SetupChecklistTempl
     }
 
     const settings = await readLocalSettings();
-    settings.setupChecklistTemplates = normalized;
+    const versioned = versionSetupTemplates(normalizeSetupTemplates(settings.setupChecklistTemplates), normalized);
+    settings.setupChecklistTemplates = versioned;
     await writeLocalSettings(settings);
-    return normalized;
+    return versioned;
   }
 
   await ensureSettingsTable();
   const migration = await migrateSetupTemplateEmbeddedScreenshots(normalized);
-  const result = await db.query(
-    `
-      insert into app_settings (key, value)
-      values ($1, $2::jsonb)
-      on conflict (key) do update set value = excluded.value, updated_at = now()
-      returning value;
-    `,
-    ["setup_checklist_templates", JSON.stringify(migration.templates)]
-  );
-  return normalizeSetupTemplates(result.rows[0]?.value);
+  const client = await db.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("select pg_advisory_xact_lock(hashtext('setup_checklist_templates'))");
+    const current = await client.query("select value from app_settings where key = $1 for update", ["setup_checklist_templates"]);
+    const versioned = versionSetupTemplates(normalizeSetupTemplates(current.rows[0]?.value), migration.templates);
+    await client.query(
+      "insert into app_settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value, updated_at = now()",
+      ["setup_checklist_templates", JSON.stringify(versioned)]
+    );
+    await client.query("COMMIT");
+    return versioned;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function migrateSetupTemplateEmbeddedScreenshots(templates: SetupChecklistTemplate[]) {

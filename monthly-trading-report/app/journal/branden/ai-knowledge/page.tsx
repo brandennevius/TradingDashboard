@@ -435,7 +435,7 @@ export default function BrandenSetupBuilderPage() {
       }
 
       setUser(setupData.user || null);
-      setSetupTemplateDrafts(Array.isArray(setupData.setupChecklists) ? setupData.setupChecklists : []);
+      setSetupTemplateDrafts((setupData.setupChecklists || []).filter((template: SetupChecklistTemplate) => !template.archived));
       setIsLoading(false);
     }
 
@@ -1009,7 +1009,7 @@ export default function BrandenSetupBuilderPage() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) return setStatus(data.error || "Could not save setup checklists.");
-    setSetupTemplateDrafts(data.setupChecklists || []);
+    setSetupTemplateDrafts((data.setupChecklists || []).filter((template: SetupChecklistTemplate) => !template.archived));
     setStatus(successMessage);
   }
 

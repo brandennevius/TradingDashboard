@@ -40,7 +40,12 @@ function checklistItems(value: unknown): TradeChecklistItem[] {
         id: String(rawItem.id || `criteria-${index}-${Date.now()}`),
         criteria,
         points,
-        met: Boolean(rawItem.met)
+        met: Boolean(rawItem.met),
+        inputType: rawItem.inputType === "points" ? "points" : "boolean",
+        score: Number.isFinite(Number(rawItem.score)) ? Number(rawItem.score) : undefined,
+        groupName: String(rawItem.groupName || ""),
+        importTagKey: String(rawItem.importTagKey || ""),
+        importTagValue: String(rawItem.importTagValue || "")
       };
     })
     .filter(Boolean) as TradeChecklistItem[];

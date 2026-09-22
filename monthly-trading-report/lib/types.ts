@@ -76,6 +76,10 @@ export type ChecklistGradeBand = {
 };
 
 export type SetupChecklistTemplate = {
+  familyId?: string;
+  familyName?: string;
+  version?: number;
+  archived?: boolean;
   id: string;
   setupName: string;
   description: string;

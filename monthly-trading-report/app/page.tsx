@@ -1047,7 +1047,7 @@ function checklistFromSetupTemplate(
 function resolvedTradeChecklistItems(trade: TradeLogEntry, templates: SetupChecklistTemplate[]) {
   const template = setupTemplateFor(trade.setupTags[0] || "", templates);
 
-  if (!template) {
+  if (trade.checklistItems?.length || !template) {
     return trade.checklistItems || [];
   }
 
@@ -2348,7 +2348,7 @@ export default function Home() {
 
     const nextTemplates = data.setupChecklists || [];
     setSetupTemplates(nextTemplates);
-    setSetupTemplateDrafts(nextTemplates);
+    setSetupTemplateDrafts(nextTemplates.filter((template: SetupChecklistTemplate) => !template.archived));
   }
 
   async function loadMarketCycleEntries() {
@@ -2902,7 +2902,7 @@ export default function Home() {
     }
 
     setSetupTemplates(data.setupChecklists);
-    setSetupTemplateDrafts(data.setupChecklists);
+    setSetupTemplateDrafts(data.setupChecklists.filter((template: SetupChecklistTemplate) => !template.archived));
     setStatus("Setup checklists saved.");
   }
 
@@ -3198,8 +3198,8 @@ export default function Home() {
     return Array.from(
       new Set([
         "",
-        ...setupTemplates.map((template) => template.setupName.trim()).filter(Boolean),
-        ...setupOptions,
+        ...setupTemplates.filter((template) => !template.archived).map((template) => template.setupName.trim()).filter(Boolean),
+        ...setupOptions.filter((name) => !setupTemplates.some((template) => template.archived && template.setupName === name)),
         currentValue.trim()
       ].filter((value) => value !== undefined))
     );

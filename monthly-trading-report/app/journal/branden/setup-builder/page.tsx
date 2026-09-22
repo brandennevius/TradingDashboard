@@ -407,6 +407,7 @@ function syncTemplate(template: SetupChecklistTemplate, groups = template.groups
 export default function BrandenSetupBuilderPage() {
   const [user, setUser] = useState<TraderUser | null>(null);
   const [setupTemplateDrafts, setSetupTemplateDrafts] = useState<SetupChecklistTemplate[]>([]);
+  const [setupHistory, setSetupHistory] = useState<SetupChecklistTemplate[]>([]);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -435,7 +436,8 @@ export default function BrandenSetupBuilderPage() {
       }
 
       setUser(setupData.user || null);
-      setSetupTemplateDrafts(Array.isArray(setupData.setupChecklists) ? setupData.setupChecklists : []);
+      setSetupTemplateDrafts((setupData.setupChecklists || []).filter((template: SetupChecklistTemplate) => !template.archived));
+      setSetupHistory((setupData.setupChecklists || []).filter((template: SetupChecklistTemplate) => template.archived));
       setIsLoading(false);
     }
 
@@ -1009,7 +1011,8 @@ export default function BrandenSetupBuilderPage() {
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) return setStatus(data.error || "Could not save setup checklists.");
-    setSetupTemplateDrafts(data.setupChecklists || []);
+    setSetupTemplateDrafts((data.setupChecklists || []).filter((template: SetupChecklistTemplate) => !template.archived));
+    setSetupHistory((data.setupChecklists || []).filter((template: SetupChecklistTemplate) => template.archived));
     setStatus(successMessage);
   }
 
@@ -1023,10 +1026,22 @@ export default function BrandenSetupBuilderPage() {
           <div className="trade-panel-heading">
             <div>
               <h3>Setup Builder</h3>
-              <span>Define strategy criteria, grade rules, and optional Excel tag mappings.</span>
+              <span>Changing criteria or grade rules creates a new version. Existing trades keep their assigned version.</span>
             </div>
             <Link className="trade-muted-button" href="/journal/branden/dashboard">Back to Dashboard</Link>
           </div>
+          {setupHistory.length > 0 ? (
+            <details>
+              <summary>Previous setup versions ({setupHistory.length})</summary>
+              {setupHistory.map((template) => (
+                <details key={template.id}>
+                  <summary>{template.setupName} · v{template.version || 1} · Archived</summary>
+                  <ul>{template.groups.flatMap((group) => group.criteria).map((item) => <li key={item.id}>{item.criteria} — {item.points} points</li>)}</ul>
+                  <p>{template.gradeBands.map((band) => `${band.label}: ${band.minScore}–${band.maxScore ?? "above"}`).join("; ")}</p>
+                </details>
+              ))}
+            </details>
+          ) : null}
           {isLoading ? <p className="status">Loading setup builder...</p> : null}
           {error ? <p className="status error">{error}</p> : null}
           {!canEdit && user ? <p className="muted">Read-only access. Setup criteria and grade rules cannot be changed.</p> : null}
