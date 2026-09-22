@@ -11,6 +11,7 @@ import {
 import type { CfStatementReplacementTrade } from "./cf-import-reconciliation";
 import { runAtomicCfImport, type CfWorkingOrderMetadata } from "./cf-import-idempotency";
 import { normalizeTradeReviewSections } from "./trade-review";
+import { displayTradeReturnPercent } from "./trade-return";
 import { createUserDefinedWeeklyFocus, normalizeWeeklyFocus, type WeeklyFocus } from "./weekly-focus";
 import type {
   ChecklistGradeBand,
@@ -552,7 +553,7 @@ function mergeCfContinuationIntoOpenTrade(existing: TradeLogEntry, input: TradeL
     risk,
     pnl,
     rMultiple: risk ? pnl / risk : 0,
-    returnPercent: entryValue ? (pnl / entryValue) * 100 : 0,
+    returnPercent: displayTradeReturnPercent({ symbol: input.symbol, side: input.side, avgEntry, exitPrice, shares: entryShares, pnl }) ?? 0,
     daysInTrade: daysBetween(existing.entryDate || input.entryDate, isOpen ? new Date().toISOString().slice(0, 10) : latestExit?.date || input.exitDate || ""),
     setupTags: input.setupTags.length ? input.setupTags : existing.setupTags,
     mistakeTags: input.mistakeTags.length ? input.mistakeTags : existing.mistakeTags,

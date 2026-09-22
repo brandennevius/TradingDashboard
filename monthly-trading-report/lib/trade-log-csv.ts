@@ -1,4 +1,5 @@
 import { resolvedTradeReviewSections } from "./trade-review";
+import { classifyTradeAsset, displayTradeReturnPercent } from "./trade-return";
 import type { TradeExcursionResult } from "./trade-excursion";
 import type { TradeLogEntry } from "./types";
 
@@ -100,7 +101,9 @@ export function buildTradeLogCsv(items: TradeLogCsvItem[], context: TradeLogCsvC
       period_r: periodTrade.rMultiple,
       commission: trade.commission,
       used_margin: trade.usedMargin,
-      return_percent: trade.returnPercent,
+      return_percent: classifyTradeAsset(trade.symbol) === "equity"
+        ? trade.returnPercent
+        : displayTradeReturnPercent(trade) ?? "",
       days_in_trade: trade.daysInTrade,
       grade: item.grade,
       review_status: item.reviewStatus,

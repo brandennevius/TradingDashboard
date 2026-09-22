@@ -1,4 +1,5 @@
 import type { TradeExecution, TradeLogInput, TradeSide, TradeStatus } from "./types";
+import { classifyTradeAsset, displayTradeReturnPercent } from "./trade-return";
 
 type ParsedImportTrade = TradeLogInput;
 export type ParsedOpenPositionRow = {
@@ -576,7 +577,9 @@ function transactionsFromExecutions(executions: TradeExecution[]) {
     const price = parseNumber(String(execution.price));
     const pnl = parseNumber(String(execution.pnl));
     const commission = Math.abs(parseNumber(String(execution.commission)));
-    const executionFingerprint = [transactionId, direction, execution.type, execution.date, execution.time, shares, price, pnl, commission].join("|");
+    // Equal-sized allocations are distinct pieces of one broker transaction.
+    // Only deduplicate a repeated execution, not another piece with equal values.
+    const executionFingerprint = [execution.id, transactionId, direction, execution.type, execution.date, execution.time, shares, price, pnl, commission].join("|");
     if (seenExecutions.has(executionFingerprint)) continue;
     seenExecutions.add(executionFingerprint);
 
@@ -834,7 +837,9 @@ function buildPositionTrades(
         continue;
       }
 
-      const pnlBaseShares = closedShares || row.shares;
+      // The unmatched closing remainder also receives its share of this broker P&L.
+      // Allocate against the entire transaction so rebuilding cannot multiply it.
+      const pnlBaseShares = row.shares;
       const pnlShare = pnlBaseShares ? row.settledPnl * (matchedSize / pnlBaseShares) : row.settledPnl;
       const closeCommissionBaseShares = closedShares + openShares || row.shares;
       const closeCommissionShare = closeCommissionBaseShares
@@ -995,7 +1000,6 @@ function buildPositionTrades(
 
     const exitPrice = cycle.exitedShares ? cycle.exitValue / cycle.exitedShares : 0;
     const commission = cycle.totalEntryCommission + cycle.closeCommission;
-    const costBasis = cycle.totalEntryValue;
 
     return {
       userId,
@@ -1018,7 +1022,16 @@ function buildPositionTrades(
       risk: 0,
       pnl: cycle.realizedPnl,
       rMultiple: 0,
-      returnPercent: costBasis ? (cycle.realizedPnl / costBasis) * 100 : 0,
+      returnPercent: classifyTradeAsset(cycle.symbol) === "equity"
+        ? cycle.totalEntryValue ? (cycle.realizedPnl / cycle.totalEntryValue) * 100 : 0
+        : displayTradeReturnPercent({
+        symbol: cycle.symbol,
+        side: cycle.side,
+        avgEntry: cycle.displayEntryPrice,
+        exitPrice,
+        shares: cycle.totalEntryShares,
+        pnl: cycle.realizedPnl
+        }) ?? 0,
       daysInTrade: daysBetween(cycle.entryDate, isOpen ? new Date().toISOString().slice(0, 10) : cycle.latestExitDate),
       setupTags: [],
       mistakeTags: [],

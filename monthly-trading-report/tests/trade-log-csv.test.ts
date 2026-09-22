@@ -73,3 +73,11 @@ test("filename identifies portfolio and selected date range", () => {
     "branden-trade-log-CF-Statement-2026-09-01-to-2026-09-07.csv"
   );
 });
+
+test("forex exports price return instead of dividing dollar P&L by lot quantity", () => {
+  const forex = trade({ symbol: "EUR/USD", side: "SHORT", avgEntry: 1.2, exitPrice: 1.188, shares: 0.1, pnl: 120, returnPercent: 100_000 });
+  const csv = buildTradeLogCsv([{ trade: forex, periodTrade: forex, grade: "", reviewStatus: "Needs Review" }], context);
+  const header = csv.split("\r\n")[0].replace(/^\uFEFF/, "").split(",").map((cell) => cell.slice(1, -1));
+  const row = csv.split("\r\n")[1].split(",").map((cell) => cell.slice(1, -1));
+  assert(Math.abs(Number(row[header.indexOf("return_percent")]) - 1) < 1e-9);
+});

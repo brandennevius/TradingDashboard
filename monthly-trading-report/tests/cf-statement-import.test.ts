@@ -5,6 +5,32 @@ import { applyManualFieldsToCfStatementTrade } from "../lib/cf-import-reconcilia
 import { cfImportTradesEquivalent, mergeCfExecutionHistory, replaceActiveWorkingOrders, runAtomicCfImport, type CfWorkingOrderMetadata } from "../lib/cf-import-idempotency";
 import type { TradeExecution, TradeLogEntry, TradeLogInput } from "../lib/types";
 
+for (const [settledPnl, openingShares, matchedShares] of [[911.08, 0.27, 0.05], [-911.08, 0.27, 0.05], [0, 0.27, 0.05], [241.94, 0.72, 0.5]]) {
+  test(`split closing transactions conserve broker P&L (${settledPnl}, ${matchedShares} matched) across repeated rebuilds`, () => {
+    const parsed = parseCfStatementText([
+      `1:1 02/01/2026 11:54:11.378 Sell ${openingShares} EUR/USD 1.17348 1001 — 0.27`,
+      "1:2 02/01/2026 16:56:47.922 Buy 0.22 EUR/USD 1.17238 1002 122.32 0.22",
+      `1:3 05/01/2026 09:43:25.602 Buy 1.00 EUR/USD 1.16786 1003 ${settledPnl} 1.00`
+    ].join("\n"), "branden", "CF_Statement");
+    let trades = parsed.trades;
+    for (let replay = 0; replay < 20; replay += 1) {
+      const exits = trades.flatMap((trade) => trade.executions || [])
+        .filter((execution) => execution.sourceKey === "cf-transaction:1:3");
+      assert.equal(exits.length, 2);
+      assert(exits.every((execution) => execution.type === "EXIT"));
+      assert(Math.abs(exits.reduce((sum, execution) => sum + execution.shares, 0) - 1) < 1e-9);
+      assert(Math.abs(exits.reduce((sum, execution) => sum + execution.pnl, 0) - settledPnl) < 1e-8);
+      assert(Math.abs(exits.find((execution) => execution.shares === matchedShares)!.pnl - settledPnl * matchedShares) < 1e-8);
+      assert(Math.abs(trades.reduce((sum, trade) => sum + trade.pnl, 0) - (122.32 + settledPnl)) < 1e-8);
+      assert(Math.abs(trades.reduce((sum, trade) => sum + trade.commission, 0) - 1.49) < 1e-8);
+      trades = buildCfTradesFromExecutionHistory(
+        [...trades, ...trades].flatMap((trade) => (trade.executions || []).map((execution) => ({ ...execution, source: trade.symbol }))),
+        [], [], "branden", "CF_Statement"
+      );
+    }
+  });
+}
+
 function importedTrade(): TradeLogEntry {
   return {
     id: "branden-lly", userId: "branden", importSource: "cf-statement-pdf", importRowKey: "lly-row", symbol: "LLY", side: "LONG", status: "OPEN",
