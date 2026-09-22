@@ -81,3 +81,11 @@ test("forex exports price return instead of dividing dollar P&L by lot quantity"
   const row = csv.split("\r\n")[1].split(",").map((cell) => cell.slice(1, -1));
   assert(Math.abs(Number(row[header.indexOf("return_percent")]) - 1) < 1e-9);
 });
+
+test("named copper contracts export price return", () => {
+  const copper = trade({ symbol: "COPPER", side: "LONG", avgEntry: 6.5, exitPrice: 6.63, shares: 1, pnl: 325, returnPercent: 5_000 });
+  const csv = buildTradeLogCsv([{ trade: copper, periodTrade: copper, grade: "", reviewStatus: "Needs Review" }], context);
+  const header = csv.split("\r\n")[0].replace(/^\uFEFF/, "").split(",").map((cell) => cell.slice(1, -1));
+  const row = csv.split("\r\n")[1].split(",").map((cell) => cell.slice(1, -1));
+  assert(Math.abs(Number(row[header.indexOf("return_percent")]) - 2) < 1e-9);
+});

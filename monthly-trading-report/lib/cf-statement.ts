@@ -994,7 +994,8 @@ function buildPositionTrades(
       tags.push("Partial exits");
     }
 
-    if (!cycle.executions.some((execution) => execution.type === "ENTRY")) {
+    const hasEntryExecution = cycle.executions.some((execution) => execution.type === "ENTRY");
+    if (!hasEntryExecution) {
       tags.push("Needs review");
     }
 
@@ -1022,7 +1023,9 @@ function buildPositionTrades(
       risk: 0,
       pnl: cycle.realizedPnl,
       rMultiple: 0,
-      returnPercent: classifyTradeAsset(cycle.symbol) === "equity"
+      returnPercent: !hasEntryExecution
+        ? 0
+        : classifyTradeAsset(cycle.symbol) === "equity"
         ? cycle.totalEntryValue ? (cycle.realizedPnl / cycle.totalEntryValue) * 100 : 0
         : displayTradeReturnPercent({
         symbol: cycle.symbol,

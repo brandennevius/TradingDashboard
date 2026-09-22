@@ -13,11 +13,17 @@ const fiatCurrencies = new Set([
   "USD"
 ]);
 
+const namedLeveragedSymbols = new Set(["COPPER"]);
+
 export function classifyTradeAsset(symbol: string): TradeAssetClass {
   const normalized = symbol.trim().replace(/^#/, "").toUpperCase();
 
   if (normalized.startsWith(".")) {
     return "index-cfd";
+  }
+
+  if (namedLeveragedSymbols.has(normalized)) {
+    return "leveraged";
   }
 
   const [base, quote, ...rest] = normalized.split("/");

@@ -389,3 +389,16 @@ test("settled unmatched closing rows do not become fake open reverse positions",
   assert.equal(upsTrades.filter((trade) => trade.status === "OPEN").length, 0);
   assert(upsTrades.some((trade) => trade.customTags.includes("Needs review") && trade.status !== "OPEN"));
 });
+
+test("carryover exits without a documented entry do not invent a return percentage", () => {
+  const parsed = parseCfStatementText([
+    "31 Dec 2025 00:00 - 22 Sep 2026 17:14",
+    "16/09/2026 05:00 Sell 1.00 COPPER 6.6655 6.5176 100.00 — — — -180.30 0.00 —",
+    "1834251:235877 17/09/2026 05:12:19.606 Buy 1.00 COPPER 6.5176 1001 -180.30 0.00"
+  ].join("\n"), "branden", "CF_Statement");
+
+  const copper = parsed.trades.find((trade) => trade.symbol === "COPPER");
+  assert(copper);
+  assert(copper.customTags.includes("Needs review"));
+  assert.equal(copper.returnPercent, 0);
+});
