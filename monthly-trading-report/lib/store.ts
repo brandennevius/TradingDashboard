@@ -361,6 +361,10 @@ function tradeExecutions(value: unknown): TradeExecution[] {
 }
 
 function rowToTrade(row: Record<string, unknown>): TradeLogEntry {
+  const executions = tradeExecutions(row.executions);
+  const importedWithoutEntry = String(row.import_source || "") === "cf-statement-pdf"
+    && !executions.some((execution) => execution.type === "ENTRY");
+
   return {
     id: String(row.id),
     userId: String(row.user_id),
@@ -383,7 +387,7 @@ function rowToTrade(row: Record<string, unknown>): TradeLogEntry {
     risk: Number(row.risk),
     pnl: Number(row.pnl),
     rMultiple: Number(row.r_multiple),
-    returnPercent: Number(row.return_percent),
+    returnPercent: importedWithoutEntry ? 0 : Number(row.return_percent),
     daysInTrade: Number(row.days_in_trade),
     setupTags: stringArray(row.setup_tags),
     mistakeTags: stringArray(row.mistake_tags),
@@ -397,7 +401,7 @@ function rowToTrade(row: Record<string, unknown>): TradeLogEntry {
     reviewSections: normalizeTradeReviewSections(row.review_sections),
     screenshots: stringArray(row.screenshots),
     chartLinks: stringArray(row.chart_links),
-    executions: tradeExecutions(row.executions),
+    executions,
     hidden: Boolean(row.hidden),
     groupId: "",
     groupRole: "none",
