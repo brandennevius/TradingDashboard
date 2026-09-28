@@ -8,6 +8,7 @@ const CF_SYSTEM_TAGS = new Set([
   "Closed Transaction",
   "Partial exits",
   "Needs review",
+  "Quantity unavailable",
   "Combined trade",
   "Auto recalculated"
 ]);
@@ -87,4 +88,3 @@ export function applyManualFieldsToCfStatementTrade(
     hidden: exact ? existing.hidden : rebuiltTrade.hidden
   };
 }
-

@@ -612,7 +612,7 @@ function transactionsFromExecutions(executions: TradeExecution[]) {
   }
 
   return Array.from(grouped.values())
-    .filter((row) => row.shares > 0 && row.symbol && row.tradeDate)
+    .filter((row) => (row.shares > 0 || isSettledTransaction(row.settledPnlRaw)) && row.symbol && row.tradeDate)
     .sort((a, b) => toTimestamp(a.tradeDate, a.timeValue) - toTimestamp(b.tradeDate, b.timeValue));
 }
 
@@ -752,6 +752,15 @@ function buildPositionTrades(
 
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex];
+    // Some broker statements print rounded quantities as 0.00 despite reporting
+    // settled P&L. Preserve the settlement without guessing quantity or consuming
+    // an existing lot whose relationship to this transaction is unknown.
+    if (row.shares === 0) {
+      if (isSettledTransaction(row.settledPnlRaw)) {
+        recordUnmatchedClosingRow(row, 0);
+      }
+      continue;
+    }
     const matchedLots = row.direction === "Sell" ? longLotsBySymbol[row.symbol] || [] : shortLotsBySymbol[row.symbol] || [];
     const shouldCloseExistingLot = matchedLots.some((lot) => lot.sharesRemaining > 0.000001);
 
@@ -998,8 +1007,11 @@ function buildPositionTrades(
     if (!hasEntryExecution) {
       tags.push("Needs review");
     }
+    if (exitExecutions.some((execution) => execution.shares === 0)) {
+      tags.push("Quantity unavailable");
+    }
 
-    const exitPrice = cycle.exitedShares ? cycle.exitValue / cycle.exitedShares : 0;
+    const exitPrice = cycle.exitedShares ? cycle.exitValue / cycle.exitedShares : exitExecutions.at(-1)?.price || 0;
     const commission = cycle.totalEntryCommission + cycle.closeCommission;
 
     return {

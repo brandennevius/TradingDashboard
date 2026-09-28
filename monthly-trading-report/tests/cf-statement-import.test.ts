@@ -402,3 +402,51 @@ test("carryover exits without a documented entry do not invent a return percenta
   assert(copper.customTags.includes("Needs review"));
   assert.equal(copper.returnPercent, 0);
 });
+
+test("rounded-zero copper settlements preserve broker P&L through import and replay", () => {
+  const parsed = parseCfStatementText([
+    "26 Sep 2026 18:00 - 28 Sep 2026 17:51",
+    "1834251:322742 28/09/2026 06:52:44.945 Buy 0.00 COPPER 6.5743 15466617 46.21 —",
+    "1834251:322760 28/09/2026 07:00:08.250 Buy 0.00 COPPER 6.5753 15466620 76.58 —",
+    "1834251:324137 28/09/2026 09:47:52.739 Buy 0.00 COPPER 6.5716 15469711 59.57 —",
+    "1834251:324627 28/09/2026 10:10:27.945 Sell 0.00 COPPER 6.5570 15471085 — —",
+    "1834251:326202 28/09/2026 11:37:41.179 Buy 0.00 COPPER 6.5693 15474391 8.76 —",
+    "1834251:326207 28/09/2026 11:37:46.242 Buy 0.00 COPPER 6.5693 15474397 10.67 —",
+    "1834251:326212 28/09/2026 11:37:51.002 Buy 0.00 COPPER 6.5693 15474453 10.59 —",
+    "1834251:326562 28/09/2026 12:11:59.588 Sell 0.00 COPPER 6.5486 15475349 — —",
+    "1834251:326566 28/09/2026 12:12:10.222 Sell 0.00 COPPER 6.5504 15475354 — —",
+    "1834251:326577 28/09/2026 12:12:16.542 Sell 0.00 COPPER 6.5504 15475367 — —",
+    "1834251:326832 28/09/2026 12:26:51.326 Buy 1.00 COPPER 6.5913 15291840 -16.30 —"
+  ].join("\n"), "branden", "CF_Statement");
+  const history = (trades: TradeLogInput[]) => trades.flatMap(trade =>
+    (trade.executions || []).map(execution => ({ ...execution, source: trade.symbol })));
+  const current = history(parsed.trades);
+  const first = buildCfTradesFromExecutionHistory(current, [], [], "branden", "CF_Statement");
+  const replay = buildCfTradesFromExecutionHistory(mergeCfExecutionHistory(history(first), current), [], [], "branden", "CF_Statement");
+  assert.equal(first.length, 7);
+  assert.equal(Math.round(first.reduce((sum, trade) => sum + trade.pnl, 0) * 100), 19608);
+  assert.equal(first.filter(trade => trade.status === "WIN").length, 6);
+  assert.equal(first.filter(trade => trade.status === "OPEN").length, 0);
+  for (const trade of first.filter(trade => trade.shares === 0)) {
+    assert(trade.customTags.includes("Needs review"));
+    assert(trade.customTags.includes("Quantity unavailable"));
+    assert.equal(trade.executions?.length, 1);
+    assert.equal(trade.executions?.[0].type, "EXIT");
+    assert.equal(trade.exitPrice, trade.executions?.[0].price);
+  }
+  assert.deepEqual(replay, first);
+});
+
+test("zero-size settlements retain losses, breakeven and fees without consuming known lots", () => {
+  const executions: TradeExecution[] = [
+    { id: "entry", sourceKey: "cf-transaction:entry", type: "ENTRY", date: "2026-09-28", time: "09:00:00", side: "LONG", shares: 2, price: 10, pnl: 0, commission: 0, source: "TEST" },
+    { id: "loss", sourceKey: "cf-transaction:loss", type: "EXIT", date: "2026-09-28", time: "10:00:00", side: "LONG", shares: 0, price: 9, pnl: -12, commission: 0.5, source: "TEST" },
+    { id: "flat", sourceKey: "cf-transaction:flat", type: "EXIT", date: "2026-09-28", time: "11:00:00", side: "LONG", shares: 0, price: 10, pnl: 0, commission: 0.25, source: "TEST" }
+  ];
+  const trades = buildCfTradesFromExecutionHistory(executions, [], [], "branden", "CF_Statement");
+  assert.equal(trades.find(trade => trade.status === "OPEN")?.shares, 2);
+  const settlements = trades.filter(trade => trade.shares === 0);
+  assert.equal(settlements.length, 2);
+  assert.equal(settlements.reduce((sum, trade) => sum + trade.pnl, 0), -12);
+  assert.equal(settlements.reduce((sum, trade) => sum + trade.commission, 0), 0.75);
+});
