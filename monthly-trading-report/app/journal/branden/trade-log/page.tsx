@@ -1,5 +1,6 @@
 "use client";
 
+import { buildMergedTrade, validateMergeSelection, MERGED_TRADE_SOURCE } from "@/lib/trade-merge";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
 import type { SetupChecklistTemplate, TradeLogEntry, TraderUser } from "@/lib/types";
@@ -434,6 +435,13 @@ export default function BrandenTradeLogPage() {
   const [reviewCompletionIssues, setReviewCompletionIssues] = useState<ReviewCompletionIssue[]>([]);
   const [columnPreferences, setColumnPreferences] = useState<Record<string, ColumnPreference[]>>({});
   const [selectedTradeIds, setSelectedTradeIds] = useState<string[]>([]);
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergePreview, setMergePreview] = useState<{ ids: string[]; undo: boolean; summary: string } | null>(null);
+  const mergeDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (mergePreview) mergeDialog.current?.showModal();
+    else mergeDialog.current?.close();
+  }, [mergePreview]);
   const [draggedColumn, setDraggedColumn] = useState<TradeColumnKey | null>(null);
   const [dragOverColumn, setDragOverColumn] = useState<TradeColumnKey | null>(null);
   const [weeklyFocus, setWeeklyFocus] = useState<WeeklyFocus | null>(null);
@@ -924,6 +932,50 @@ export default function BrandenTradeLogPage() {
     });
   }
 
+  function previewMerge(undo = false) {
+    if (!canEditBrandenJournal || isMerging) return;
+    setError("");
+    const ids = selectedVisibleTrades.map(trade => trade.id);
+    const members = trades.filter(trade => ids.includes(trade.id));
+    try {
+      if (undo) {
+        if (members.length !== 1 || members[0].importSource !== MERGED_TRADE_SOURCE) throw new Error("Select one merged trade to undo.");
+        setMergePreview({ ids, undo, summary: "Restore the source trades as separate journal entries. Notes added only to the merged entry will not transfer to the originals." });
+      } else {
+        validateMergeSelection(members);
+        const preview = buildMergedTrade(members, "preview");
+        setMergePreview({ ids, undo, summary: `${members.length} ${preview.symbol} ${preview.side} trades · ${preview.executions.length} executions · $${preview.pnl.toFixed(2)} total P&L` });
+      }
+    } catch (mergeError) {
+      setError(mergeError instanceof Error ? mergeError.message : "Could not prepare merge.");
+    }
+  }
+
+  async function changeMerge() {
+    if (!canEditBrandenJournal || isMerging || !mergePreview) return;
+    const { ids, undo } = mergePreview;
+    setIsMerging(true);
+    setError("");
+    try {
+      const response = await fetch("/api/trades/merge", {
+        method: undo ? "DELETE" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(undo ? { tradeId: ids[0] } : { tradeIds: ids })
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not update merge.");
+      setTrades(data.trades);
+      setSelectedTradeIds([]);
+      setMergePreview(null);
+      setStatus(undo ? "Merge undone. Source trades restored." : "Trades merged. Select the merged entry to undo.");
+    } catch (mergeError) {
+      setMergePreview(null);
+      setError(mergeError instanceof Error ? mergeError.message : "Could not update merge.");
+    } finally {
+      setIsMerging(false);
+    }
+  }
+
   async function hideSelectedTrades() {
     if (!canEditBrandenJournal) {
       setStatus("Read-only access. Trades cannot be hidden.");
@@ -1326,7 +1378,15 @@ export default function BrandenTradeLogPage() {
 	                  <button className="trade-muted-button" type="button" onClick={exportCsv} disabled={isExportingCsv || !filteredTrades.length}>
 	                    {isExportingCsv ? "Preparing CSV..." : "Export CSV"}
 	                  </button>
-	                  <button className="trade-muted-button" type="button" onClick={hideSelectedTrades} disabled={!canEditBrandenJournal || !selectedVisibleTrades.length}>
+                    <button className="trade-muted-button" type="button" onClick={() => previewMerge()} disabled={!canEditBrandenJournal || isMerging || selectedVisibleTrades.length < 2}>
+                      {isMerging ? "Updating merge..." : "Merge selected"}
+                    </button>
+                    {selectedVisibleTrades.length === 1 && selectedVisibleTrades[0].importSource === MERGED_TRADE_SOURCE ? (
+                      <button className="trade-muted-button" type="button" onClick={() => previewMerge(true)} disabled={!canEditBrandenJournal || isMerging}>
+                        Undo merge
+                      </button>
+                    ) : null}
+	                  <button className="trade-muted-button" type="button" onClick={hideSelectedTrades} disabled={!canEditBrandenJournal || isMerging || !selectedVisibleTrades.length}>
 	                    Hide selected
 	                  </button>
 	                  <button className="trade-muted-button" type="button" onClick={exportReviewDocx} disabled={isExportingReview || !filteredTrades.length}>
@@ -1418,6 +1478,15 @@ export default function BrandenTradeLogPage() {
             </div>
           </>
         ) : null}
+        <dialog ref={mergeDialog} className="trade-merge-dialog" aria-labelledby="merge-dialog-title" onCancel={(event) => { if (isMerging) event.preventDefault(); else setMergePreview(null); }}>
+          <h2 id="merge-dialog-title">{mergePreview?.undo ? "Undo merge?" : "Merge into one trade?"}</h2>
+          <p>{mergePreview?.summary}</p>
+          {!mergePreview?.undo ? <p>Confirm these records belong to the same trade. All executions are included, even outside the date filter. Unknown quantities remain flagged. You can undo the merge later.</p> : null}
+          <div className="trade-merge-dialog-actions">
+            <button type="button" className="trade-muted-button" onClick={() => setMergePreview(null)} disabled={isMerging} autoFocus>Cancel</button>
+            <button type="button" onClick={changeMerge} disabled={isMerging}>{isMerging ? "Saving..." : mergePreview?.undo ? "Restore source trades" : "Confirm merge"}</button>
+          </div>
+        </dialog>
       </div>
   );
 }

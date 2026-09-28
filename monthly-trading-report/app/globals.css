@@ -9189,3 +9189,17 @@ th {
     max-width: calc(100vw - 24px);
   }
 }
+
+.trade-merge-dialog {
+  width: min(520px, calc(100vw - 36px));
+  border: 1px solid #b9d6a8;
+  border-radius: 10px;
+  padding: 24px;
+  color: #2f352d;
+  background: #fffaf0;
+  box-shadow: 0 24px 80px rgba(47, 53, 45, 0.25);
+}
+.trade-merge-dialog::backdrop { background: rgba(47, 53, 45, 0.42); }
+.trade-merge-dialog h2 { margin-top: 0; }
+.trade-merge-dialog p { line-height: 1.5; }
+.trade-merge-dialog-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }

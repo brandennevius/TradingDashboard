@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import { MERGED_TRADE_SOURCE, mergeTradeRecords, undoTradeMerge, reconcileTradeMerges } from "./trade-merge";
 import { versionSetupTemplates } from "./setup-versioning";
 import crypto from "crypto";
 import path from "path";
@@ -409,8 +410,8 @@ function rowToTrade(row: Record<string, unknown>): TradeLogEntry {
     chartLinks: stringArray(row.chart_links),
     executions,
     hidden: Boolean(row.hidden),
-    groupId: "",
-    groupRole: "none",
+    groupId: String(row.group_id || ""),
+    groupRole: row.group_role === "parent" || row.group_role === "child" ? row.group_role : "none",
     createdAt: new Date(String(row.created_at)).toISOString(),
     updatedAt: new Date(String(row.updated_at)).toISOString()
   };
@@ -3001,6 +3002,7 @@ function materializeCfStatementTrades(trades: CfStatementReplacementTrade[], por
 }
 
 async function replaceCfStatementTradesWithClient(client: PoolClient, userId: string, portfolioTag: string, trades: CfStatementReplacementTrade[]) {
+    await client.query("lock table trade_logs in share row exclusive mode");
     await client.query(
       "delete from trade_logs where user_id = $1 and portfolio_tag = $2 and import_source = 'cf-statement-pdf'",
       [userId, portfolioTag]
@@ -3065,6 +3067,9 @@ async function replaceCfStatementTradesWithClient(client: PoolClient, userId: st
         values
       );
     }
+    const current = await client.query(`select ${tradeColumns} from trade_logs where user_id = $1 and portfolio_tag = $2`, [userId, portfolioTag]);
+    const before = current.rows.map(rowToTrade);
+    await persistMergeChanges(client, before, reconcileTradeMerges(before));
 }
 
 export async function replaceCfStatementTrades(userId: string, portfolioTag: string, trades: CfStatementReplacementTrade[]) {
@@ -3077,7 +3082,7 @@ export async function replaceCfStatementTrades(userId: string, portfolioTag: str
       (trade) => !(trade.userId === userId && trade.portfolioTag === portfolioTag && trade.importSource === "cf-statement-pdf")
     );
     const nextTrades = materializeCfStatementTrades(trades, portfolioTag, now);
-    await writeLocalTrades([...retained, ...nextTrades].sort(tradeLogOrder));
+    await writeLocalTrades(reconcileTradeMerges([...retained, ...nextTrades]).sort(tradeLogOrder));
     return { count: nextTrades.length };
   }
 
@@ -3130,7 +3135,7 @@ export async function replaceCfStatementImport(
         const retained = previousTrades.filter(
           (trade) => !(trade.userId === userId && trade.portfolioTag === portfolioTag && trade.importSource === "cf-statement-pdf")
         );
-        await writeLocalTrades([...retained, ...materializeCfStatementTrades(trades, portfolioTag, now)].sort(tradeLogOrder));
+        await writeLocalTrades(reconcileTradeMerges([...retained, ...materializeCfStatementTrades(trades, portfolioTag, now)]).sort(tradeLogOrder));
       }
       await writeLocalSettings({
         ...previousSettings,
@@ -3422,6 +3427,11 @@ export async function upsertTrade(input: TradeLogInput) {
 }
 
 export async function updateTrade(id: string, userId: string, input: TradeLogInput) {
+  const stored = await getTradeForUser(id, userId);
+  if (stored?.groupRole === "child") throw new Error("Undo the merge before editing its source trades.");
+  if (stored?.importSource === MERGED_TRADE_SOURCE) {
+    input = { ...input, importSource: stored.importSource, importRowKey: stored.importRowKey, portfolioTag: stored.portfolioTag, side: stored.side };
+  }
   const now = new Date().toISOString();
   const db = getPool();
 
@@ -3453,8 +3463,8 @@ export async function updateTrade(id: string, userId: string, input: TradeLogInp
       tradeQuality: input.tradeQuality || "",
       reviewSections: normalizeTradeReviewSections(input.reviewSections || existing.reviewSections),
       executions: input.executions || existing.executions || [],
-      groupId: "",
-      groupRole: "none",
+      groupId: existing.groupId,
+      groupRole: existing.groupRole,
       hidden: existing.hidden,
       id,
       userId,
@@ -3892,6 +3902,7 @@ export async function cleanupLegacyCombinedTrades(userId: string) {
 }
 
 export async function setTradeHidden(id: string, userId: string, hidden: boolean, customTags?: string[]) {
+  if ((await getTradeForUser(id, userId))?.groupRole === "child") throw new Error("Undo the merge to restore its source trades.");
   const db = getPool();
 
   if (!db) {
@@ -3932,6 +3943,8 @@ export async function setTradeHidden(id: string, userId: string, hidden: boolean
 }
 
 export async function deleteTrade(id: string, userId: string) {
+  const stored = await getTradeForUser(id, userId);
+  if (stored?.groupId || stored?.importSource === MERGED_TRADE_SOURCE) throw new Error("Undo the merge before deleting its trades.");
   const db = getPool();
 
   if (!db) {
@@ -4279,6 +4292,60 @@ export async function importBrandenJournalBackup(value: unknown) {
   } catch (error) {
     await client.query("rollback");
     throw error;
+  } finally {
+    client.release();
+  }
+}
+
+// Persist the parent and source visibility together, using the same transaction
+// as a statement replacement so dashboard totals never count both versions.
+async function persistMergeChanges(client: PoolClient, before: TradeLogEntry[], after: TradeLogEntry[]) {
+  const afterIds = new Set(after.map(t => t.id));
+  for (const removed of before.filter(t => !afterIds.has(t.id))) {
+    await client.query("delete from trade_logs where id = $1 and user_id = $2", [removed.id, removed.userId]);
+  }
+  const columns = tradeColumns.split(", ");
+  for (const trade of after) {
+    if (JSON.stringify(before.find(t => t.id === trade.id)) === JSON.stringify(trade)) continue;
+    const record = Object.fromEntries(columns.map(column => {
+      const key = column.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase()) as keyof TradeLogEntry;
+      return [column, column === "review_sections" ? normalizeTradeReviewSections(trade.reviewSections) : trade[key] ?? null];
+    }));
+    await client.query(
+      `insert into trade_logs (${tradeColumns})
+       select ${tradeColumns} from jsonb_populate_record(null::trade_logs, $1::jsonb)
+       on conflict (id) do update set ${columns.filter(c => c !== "id" && c !== "user_id" && c !== "created_at").map(c => `${c} = excluded.${c}`).join(", ")}`,
+      [JSON.stringify(record)]
+    );
+  }
+}
+
+export async function changeTradeMerge(userId: string, selection: string[] | string) {
+  const change = (trades: TradeLogEntry[]) => typeof selection === "string"
+    ? undoTradeMerge(trades, selection, userId)
+    : mergeTradeRecords(trades, selection, userId, `${userId}-merge-${crypto.randomUUID()}`);
+  const db = getPool();
+  if (!db) {
+    if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required before merging trades.");
+    const next = change(await readLocalTrades());
+    await writeLocalTrades(next.sort(tradeLogOrder));
+    return next.filter(t => t.userId === userId && !t.hidden);
+  }
+  await ensureTradeTable();
+  const client = await db.connect();
+  try {
+    return await runAtomicCfImport({
+      begin: () => client.query("begin").then(() => undefined),
+      commit: () => client.query("commit").then(() => undefined),
+      rollback: () => client.query("rollback").then(() => undefined)
+    }, async () => {
+      await client.query("lock table trade_logs in share row exclusive mode");
+      const result = await client.query(`select ${tradeColumns} from trade_logs where user_id = $1`, [userId]);
+      const before = result.rows.map(rowToTrade);
+      const after = change(before);
+      await persistMergeChanges(client, before, after);
+      return after.filter(t => !t.hidden).sort(tradeLogOrder);
+    });
   } finally {
     client.release();
   }

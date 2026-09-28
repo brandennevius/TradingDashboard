@@ -59,6 +59,7 @@ export function applyManualFieldsToCfStatementTrade(
   rebuiltTrade: TradeLogInput,
   existingTrades: TradeLogEntry[]
 ): CfStatementReplacementTrade {
+  existingTrades = existingTrades.filter(trade => trade.importSource !== "manual-merge");
   const exact = existingTrades.find((trade) => trade.importRowKey === rebuiltTrade.importRowKey);
   const fallback = existingTrades.find((trade) => tradeManualKey(trade) === tradeManualKey(rebuiltTrade));
   const manualOpenAdoption = findManualOpenAdoptionCandidate(rebuiltTrade, existingTrades);
