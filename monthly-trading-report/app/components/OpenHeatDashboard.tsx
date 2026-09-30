@@ -443,22 +443,21 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
           <article>
             <span>Gross exposure</span>
             <strong>{formatCurrency(exposure.dollars)}</strong>
-            <small>{exposure.missingCount ? `${exposure.missingCount} positions missing price or quantity data` : "Total position value · Long + short"}</small>
+            {exposure.missingCount > 0 ? <small>{exposure.missingCount} positions missing price or quantity data</small> : null}
           </article>
           <article>
             <span>% of account equity</span>
             <strong>{formatPercent(exposure.equityPct)}</strong>
-            <small>Exposure ÷ {formatCurrency(accountEquity)} equity</small>
           </article>
           <article>
             <span>% of remaining drawdown</span>
             <strong>{formatPercent(exposure.drawdownPct)}</strong>
-            <small>{exposure.remainingDrawdown === 0 ? "No drawdown cushion remaining" : "Exposure ÷ remaining drawdown cushion"}</small>
+            {exposure.remainingDrawdown === 0 ? <small>No drawdown cushion remaining</small> : null}
           </article>
           <article>
             <span>Remaining drawdown</span>
             <strong>{formatCurrency(exposure.remainingDrawdown)}</strong>
-            <small>{accountLossThreshold === null ? "Account loss floor unavailable" : `Equity above ${formatCurrency(accountLossThreshold)} account floor`}</small>
+            {accountLossThreshold === null ? <small>Account loss floor unavailable</small> : null}
           </article>
         </div>
       </section>
