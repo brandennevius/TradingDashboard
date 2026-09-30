@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import OpenHeatDashboard from "@/app/components/OpenHeatDashboard";
 import TimeStopMonitor from "@/app/components/TimeStopMonitor";
+import { ACCOUNT_LOSS_THRESHOLD_DOLLARS } from "@/lib/portfolio-exposure";
 import type { BrokerPortfolioSnapshot } from "@/lib/broker-portfolio-snapshot";
 import type { TradeLogEntry, TraderUser } from "@/lib/types";
 
@@ -117,6 +118,7 @@ export default function BrandenOpenPositionsPage() {
             <OpenHeatDashboard
               trades={brandenTrades}
               activePortfolio={activePortfolio}
+              accountLossThreshold={activePortfolio === "CF_Statement" ? ACCOUNT_LOSS_THRESHOLD_DOLLARS : null}
               onSelectTrade={user ? openTradeDetail : undefined}
               portfolioMeta={portfolioMeta}
               brokerPortfolioSnapshots={brokerPortfolioSnapshots}

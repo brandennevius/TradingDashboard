@@ -5,7 +5,8 @@ import type { TradeChecklistItem, TradeExecution, TradeLogEntry } from "./types"
 import { normalizeWeeklyFocus, type WeeklyFocus } from "./weekly-focus";
 
 export const MONTH_TO_DATE_SNAPSHOT_SCHEMA_VERSION = "month-to-date-trading-snapshot-v1";
-export const ACCOUNT_LOSS_THRESHOLD_DOLLARS = 688_000;
+import { ACCOUNT_LOSS_THRESHOLD_DOLLARS } from "./portfolio-exposure";
+export { ACCOUNT_LOSS_THRESHOLD_DOLLARS } from "./portfolio-exposure";
 export type MtdSnapshotStatus = "COMPLETE" | "COMPLETE_WITH_WARNINGS" | "BLOCKED";
 export type MtdDiagnostic = {
   code: string;

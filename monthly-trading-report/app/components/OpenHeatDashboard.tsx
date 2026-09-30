@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { BrokerPortfolioPosition, BrokerPortfolioSnapshot } from "@/lib/broker-portfolio-snapshot";
 import type { TradeExecution, TradeLogEntry } from "@/lib/types";
+import { portfolioExposure } from "@/lib/portfolio-exposure";
 
 type Props = {
   trades: TradeLogEntry[];
@@ -10,6 +11,7 @@ type Props = {
   onSelectTrade?: (tradeId: string) => void;
   portfolioMeta?: Record<string, PortfolioMeta>;
   brokerPortfolioSnapshots?: BrokerPortfolioSnapshot[];
+  accountLossThreshold?: number | null;
 };
 
 type LatestPrice = {
@@ -297,7 +299,7 @@ export function buildOpenPositionRiskRow(
   };
 }
 
-export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTrade, portfolioMeta, brokerPortfolioSnapshots = [] }: Props) {
+export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTrade, portfolioMeta, brokerPortfolioSnapshots = [], accountLossThreshold = null }: Props) {
   const [prices, setPrices] = useState<Record<string, LatestPrice>>({});
   const [isLoadingPrices, setIsLoadingPrices] = useState(false);
 
@@ -377,6 +379,7 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
   );
 
   const missingRiskCount = riskRows.filter((row) => row.status === "missing").length;
+  const exposure = portfolioExposure(riskRows.map((row) => row.positionValue), accountEquity, accountLossThreshold);
   const fallbackRiskCount = riskRows.filter((row) => row.status === "fallback").length;
   const totalOpenHeat = missingRiskCount ? null : riskRows.reduce((sum, row) => sum + (row.dollarRisk || 0), 0);
   const netStopPnl = missingRiskCount ? null : riskRows.reduce((sum, row) => sum + (row.stopOutcome || 0), 0);
@@ -433,6 +436,32 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
           <small>Current equity minus balance at risk</small>
         </article>
       </div>
+
+      <section aria-label="Portfolio exposure">
+        <h3>Portfolio exposure</h3>
+        <div className="open-heat-kpi-grid">
+          <article>
+            <span>Gross exposure</span>
+            <strong>{formatCurrency(exposure.dollars)}</strong>
+            <small>{exposure.missingCount ? `${exposure.missingCount} positions missing price or quantity data` : "Total position value · Long + short"}</small>
+          </article>
+          <article>
+            <span>% of account equity</span>
+            <strong>{formatPercent(exposure.equityPct)}</strong>
+            <small>Exposure ÷ {formatCurrency(accountEquity)} equity</small>
+          </article>
+          <article>
+            <span>% of remaining drawdown</span>
+            <strong>{formatPercent(exposure.drawdownPct)}</strong>
+            <small>{exposure.remainingDrawdown === 0 ? "No drawdown cushion remaining" : "Exposure ÷ remaining drawdown cushion"}</small>
+          </article>
+          <article>
+            <span>Remaining drawdown</span>
+            <strong>{formatCurrency(exposure.remainingDrawdown)}</strong>
+            <small>{accountLossThreshold === null ? "Account loss floor unavailable" : `Equity above ${formatCurrency(accountLossThreshold)} account floor`}</small>
+          </article>
+        </div>
+      </section>
 
       <div className="open-heat-warning">
         <strong>{warningText}</strong>
