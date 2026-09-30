@@ -476,14 +476,14 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
               <th>Shares</th>
               <th>Entry</th>
               <th>Current</th>
-              <th>Floating $</th>
-              <th>Floating %</th>
               <th>Stop</th>
               <th>Position value</th>
               <th>Portfolio weight</th>
               <th>Stop P&L</th>
               <th>B-A-R $</th>
               <th>B-A-R %</th>
+              <th>Floating $</th>
+              <th>Floating %</th>
             </tr>
           </thead>
           <tbody>
@@ -501,14 +501,6 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
                   {formatPrice(row.currentPrice)}
                   {row.priceDate ? <span>{row.priceDate}</span> : null}
                 </td>
-                <td className={row.floatingPnl !== null && row.floatingPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>
-                  {row.floatingPnl !== null && row.floatingPnl >= 0 ? "+" : ""}
-                  {formatCurrency(row.floatingPnl)}
-                </td>
-                <td className={row.floatingPct !== null && row.floatingPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>
-                  {row.floatingPct !== null && row.floatingPct >= 0 ? "+" : ""}
-                  {formatPercent(row.floatingPct)}
-                </td>
                 <td>{row.stopLabel}</td>
                 <td>{formatCurrency(row.positionValue)}</td>
                 <td>{formatPercent(row.weightPct)}</td>
@@ -518,6 +510,14 @@ export default function OpenHeatDashboard({ trades, activePortfolio, onSelectTra
                 </td>
                 <td className={row.dollarRisk ? "open-heat-negative" : ""}>{formatCurrency(row.dollarRisk)}</td>
                 <td className={row.riskPct ? "open-heat-negative" : ""}>{row.riskPct === null ? "—" : `-${formatPercent(row.riskPct)}`}</td>
+                <td className={row.floatingPnl !== null && row.floatingPnl >= 0 ? "open-heat-positive" : "open-heat-negative"}>
+                  {row.floatingPnl !== null && row.floatingPnl >= 0 ? "+" : ""}
+                  {formatCurrency(row.floatingPnl)}
+                </td>
+                <td className={row.floatingPct !== null && row.floatingPct >= 0 ? "open-heat-positive" : "open-heat-negative"}>
+                  {row.floatingPct !== null && row.floatingPct >= 0 ? "+" : ""}
+                  {formatPercent(row.floatingPct)}
+                </td>
               </tr>
             ))}
             {!riskRows.length ? (
