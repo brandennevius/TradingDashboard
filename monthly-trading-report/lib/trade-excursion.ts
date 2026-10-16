@@ -1,9 +1,9 @@
 import crypto from "crypto";
 import type { TradeExecution, TradeLogEntry } from "./types";
 
-export const TRADE_EXCURSION_VERSION = "trade-excursion-v1";
+export const TRADE_EXCURSION_VERSION = "trade-excursion-v2-alpaca-regular";
 
-export type ExcursionInstrumentMode = "EXACT" | "FUTURES_PROXY" | "UNSUPPORTED";
+export type ExcursionInstrumentMode = "EXACT" | "ETF_PROXY" | "UNSUPPORTED";
 
 export type ExcursionInstrument = {
   sourceSymbol: string;
@@ -42,16 +42,10 @@ export type TradeExcursionResult = {
   barsEvaluated: number;
 };
 
-const CFD_FUTURES_MAP: Record<string, Omit<ExcursionInstrument, "sourceSymbol">> = {
-  ".US500": { providerSymbol: "ESUSD", mode: "FUTURES_PROXY", label: "S&P 500 CFD mapped to ES futures" },
-  ".US100": { providerSymbol: "NQUSD", mode: "FUTURES_PROXY", label: "Nasdaq-100 CFD mapped to NQ futures" },
-  ".US30": { providerSymbol: "YMUSD", mode: "FUTURES_PROXY", label: "Dow CFD mapped to YM futures" }
-};
-
-const CFD_SYMBOL_ENV: Record<string, string> = {
-  ".US500": "FMP_US500_FUTURES_SYMBOL",
-  ".US100": "FMP_US100_FUTURES_SYMBOL",
-  ".US30": "FMP_US30_FUTURES_SYMBOL"
+const CFD_ETF_MAP: Record<string, Omit<ExcursionInstrument, "sourceSymbol">> = {
+  ".US500": { providerSymbol: "SPY", mode: "ETF_PROXY", label: "S&P 500 CFD estimated from SPY ETF (regular US session only)" },
+  ".US100": { providerSymbol: "QQQ", mode: "ETF_PROXY", label: "Nasdaq-100 CFD estimated from QQQ ETF (regular US session only)" },
+  ".US30": { providerSymbol: "DIA", mode: "ETF_PROXY", label: "Dow CFD estimated from DIA ETF (regular US session only)" }
 };
 
 function cleanSymbol(value: string) {
@@ -60,16 +54,8 @@ function cleanSymbol(value: string) {
 
 export function excursionInstrument(value: string): ExcursionInstrument {
   const symbol = cleanSymbol(value);
-  const mapped = CFD_FUTURES_MAP[symbol];
-  if (mapped) {
-    const configuredSymbol = process.env[CFD_SYMBOL_ENV[symbol]]?.trim().toUpperCase();
-    return { sourceSymbol: symbol, ...mapped, providerSymbol: configuredSymbol || mapped.providerSymbol };
-  }
-
-  const forex = symbol.match(/^([A-Z]{3})\/([A-Z]{3})$/);
-  if (forex) {
-    return { sourceSymbol: symbol, providerSymbol: `${forex[1]}${forex[2]}`, mode: "EXACT", label: "Spot FX" };
-  }
+  const mapped = CFD_ETF_MAP[symbol];
+  if (mapped) return { sourceSymbol: symbol, ...mapped };
 
   if (/^[A-Z][A-Z0-9.-]*$/.test(symbol)) {
     return { sourceSymbol: symbol, providerSymbol: symbol, mode: "EXACT", label: "Listed security" };
@@ -79,7 +65,11 @@ export function excursionInstrument(value: string): ExcursionInstrument {
 }
 
 function timestamp(date: string, time: string) {
-  const normalizedTime = /^\d{2}:\d{2}(:\d{2})?$/.test(time) ? (time.length === 5 ? `${time}:00` : time) : "00:00:00";
+  const match = /^(?:([01]\d|2[0-3])):([0-5]\d)(?::([0-5]\d)(?:\.(\d{1,9}))?)?$/.exec(time);
+  // Equal-width fractional seconds preserve ordering, including executions exactly on a bar boundary.
+  const normalizedTime = match
+    ? `${match[1]}:${match[2]}:${match[3] || "00"}.${(match[4] || "").padEnd(9, "0")}`
+    : "00:00:00.000000000";
   return `${date} ${normalizedTime}`;
 }
 
@@ -120,6 +110,7 @@ function normalizedExecutions(trade: TradeLogEntry) {
 export function tradeExcursionInputHash(trade: TradeLogEntry, asOf: string) {
   const payload = JSON.stringify({
     version: TRADE_EXCURSION_VERSION,
+    interval: process.env.TRADE_EXCURSION_INTERVAL?.trim() || "5min",
     id: trade.id,
     symbol: cleanSymbol(trade.symbol),
     side: trade.side,
@@ -156,7 +147,7 @@ export function calculateTradeExcursion(
   options: { provider?: string; interval?: string; asOf?: string; instrument?: ExcursionInstrument } = {}
 ): TradeExcursionResult {
   const instrument = options.instrument || excursionInstrument(trade.symbol);
-  const provider = options.provider || "fmp";
+  const provider = options.provider || "alpaca";
   const interval = options.interval || "5min";
   const asOf = options.asOf || trade.exitDate || new Date().toISOString().slice(0, 10);
   const executions = normalizedExecutions(trade);
@@ -170,9 +161,9 @@ export function calculateTradeExcursion(
 
   const firstEntry = executions.find((execution) => execution.type === "ENTRY")!;
   const firstEntryTimestamp = timestamp(firstEntry.date, firstEntry.time);
-  const anchorBar = bars.find((bar) => bar.time >= firstEntryTimestamp) || bars.at(-1)!;
-  const priceScale = instrument.mode === "FUTURES_PROXY" ? finite(firstEntry.price) / finite(anchorBar.close) : 1;
-  if (!Number.isFinite(priceScale) || priceScale <= 0) return unavailable(trade, instrument, "The futures proxy could not be anchored to the broker entry price.", provider, interval, asOf);
+  const anchorBar = bars.find((bar) => timestamp(bar.time.slice(0, 10), bar.time.slice(11)) >= firstEntryTimestamp) || bars.at(-1)!;
+  const priceScale = instrument.mode === "ETF_PROXY" ? finite(firstEntry.price) / finite(anchorBar.close) : 1;
+  if (!Number.isFinite(priceScale) || priceScale <= 0) return unavailable(trade, instrument, "The ETF proxy could not be anchored to the broker entry price.", provider, interval, asOf);
 
   const direction = trade.side === "SHORT" ? -1 : 1;
   const lots: { shares: number; price: number }[] = [];
@@ -209,11 +200,12 @@ export function calculateTradeExcursion(
   }
 
   for (const bar of bars) {
-    while (eventIndex < executions.length && timestamp(executions[eventIndex].date, executions[eventIndex].time) < bar.time) {
+    const barTimestamp = timestamp(bar.time.slice(0, 10), bar.time.slice(11));
+    while (eventIndex < executions.length && timestamp(executions[eventIndex].date, executions[eventIndex].time) < barTimestamp) {
       apply(executions[eventIndex]);
       eventIndex += 1;
     }
-    while (eventIndex < executions.length && timestamp(executions[eventIndex].date, executions[eventIndex].time) === bar.time && executions[eventIndex].type === "ENTRY") {
+    while (eventIndex < executions.length && timestamp(executions[eventIndex].date, executions[eventIndex].time) === barTimestamp && executions[eventIndex].type === "ENTRY") {
       apply(executions[eventIndex]);
       eventIndex += 1;
     }
@@ -227,7 +219,7 @@ export function calculateTradeExcursion(
       if (adverse < mae) { mae = adverse; maeTimestamp = bar.time; }
       evaluated += 1;
     }
-    while (eventIndex < executions.length && timestamp(executions[eventIndex].date, executions[eventIndex].time) === bar.time) {
+    while (eventIndex < executions.length && timestamp(executions[eventIndex].date, executions[eventIndex].time) === barTimestamp) {
       apply(executions[eventIndex]);
       eventIndex += 1;
     }
@@ -242,10 +234,10 @@ export function calculateTradeExcursion(
 
   const risk = finite(trade.risk);
   return {
-    status: instrument.mode === "FUTURES_PROXY" ? "ESTIMATED_PROXY" : "AVAILABLE",
-    reason: instrument.mode === "FUTURES_PROXY"
-      ? "Calculated from a futures proxy scaled to the broker entry; basis and spread differences can affect the result."
-      : "Calculated from the stored execution lifecycle and intraday bars.",
+    status: instrument.mode === "ETF_PROXY" ? "ESTIMATED_PROXY" : "AVAILABLE",
+    reason: instrument.mode === "ETF_PROXY"
+      ? "Estimated from an ETF proxy scaled to the broker entry, during regular US hours only; CFD spread, leverage, and overnight prices can differ."
+      : "Calculated from the stored execution lifecycle and regular-session intraday bars. Bar intervals approximate prices around executions.",
     algorithmVersion: TRADE_EXCURSION_VERSION, inputHash: tradeExcursionInputHash(trade, asOf), provider,
     providerSymbol: instrument.providerSymbol, instrumentMode: instrument.mode, instrumentLabel: instrument.label,
     interval, asOf, isOpen: trade.status === "OPEN", mfeDollars: round(mfe, 2), maeDollars: round(mae, 2),
@@ -256,5 +248,5 @@ export function calculateTradeExcursion(
 
 export function unavailableTradeExcursion(trade: TradeLogEntry, reason: string, options: { provider?: string; interval?: string; asOf?: string } = {}) {
   const asOf = options.asOf || trade.exitDate || new Date().toISOString().slice(0, 10);
-  return unavailable(trade, excursionInstrument(trade.symbol), reason, options.provider || "fmp", options.interval || "5min", asOf);
+  return unavailable(trade, excursionInstrument(trade.symbol), reason, options.provider || "alpaca", options.interval || "5min", asOf);
 }

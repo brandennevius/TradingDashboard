@@ -36,19 +36,23 @@ Change these before sharing the app.
 APP_SECRET="a-long-random-secret"
 TRADER_USERS="branden:password,cam:password"
 DATABASE_URL="postgres://..."
-FMP_API_KEY="..."
+ALPACA_API_KEY="..."
+ALPACA_API_SECRET="..."
 ```
 
-Trade-detail MAE/MFE uses execution-aware intraday bars from FMP. Optional configuration:
+Trade-detail MAE/MFE uses Alpaca consolidated SIP historical bars. The Basic account can retrieve historical data outside the most recent 15 minutes; requests leave a 16-minute margin. Credentials are server-only headers sent exclusively to `data.alpaca.markets`, never trading endpoints. Configure both values as sensitive Vercel variables before deploying.
+
+Optional configuration:
 
 ```bash
-FMP_TRADE_EXCURSION_INTERVAL="5min"
-FMP_US500_FUTURES_SYMBOL="ESUSD"
-FMP_US100_FUTURES_SYMBOL="NQUSD"
-FMP_US30_FUTURES_SYMBOL="YMUSD"
+TRADE_EXCURSION_INTERVAL="5min"
 ```
 
-Listed securities and spot FX use their compatible provider symbols. The `.US500`, `.US100`, and `.US30` broker CFDs use scaled ES, NQ, and YM futures proxies and are explicitly labeled estimates because CFD spread and futures basis can differ. Missing or incompatible bars remain unavailable rather than being recorded as zero.
+MAE/MFE uses regular US sessions (09:30–16:00 America/New_York), raw prices, and execution-aware quantities, FIFO trims and commissions. Fractional execution seconds are preserved. Results remain bar-based approximations around executions and do not cover overnight risk. A versioned cache automatically recalculates results after the provider/timestamp change; risk and interval changes also invalidate cached values.
+
+US stocks and ETFs use Alpaca directly. The `.US500`, `.US100`, and `.US30` broker CFDs use scaled SPY, QQQ, and DIA ETF proxies respectively, explicitly labelled estimates. These do not replicate broker CFD prices, leverage, spreads, or overnight sessions. Spot FX and unsupported intraday instruments remain unavailable rather than receiving synthetic zero results.
+
+Daily charts, valuations, Market Gauge, benchmark and exit-analysis consumers share the Alpaca daily loader, retaining Stooq/Yahoo fallbacks when Alpaca cannot supply a symbol. Exact-session exports still reject missing/stale prices. Other chart intervals continue to use Yahoo as before. No paid fundamental-data provider is required by this app.
 
 If `DATABASE_URL` is empty, local submissions are stored in `data/monthly-reports.json`.
 

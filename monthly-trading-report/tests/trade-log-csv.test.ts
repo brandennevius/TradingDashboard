@@ -37,7 +37,7 @@ test("exports lifecycle, selected-period, review, screenshot, excursion, and exe
     grade: "B",
     reviewStatus: "Complete",
     excursion: {
-      status: "AVAILABLE", reason: "Exact intraday bars available.", algorithmVersion: "v1", inputHash: "hash", provider: "FMP",
+      status: "AVAILABLE", reason: "Exact intraday bars available.", algorithmVersion: "v1", inputHash: "hash", provider: "alpaca",
       providerSymbol: "FRO", instrumentMode: "EXACT", instrumentLabel: "Listed security", interval: "5min",
       asOf: "2026-09-03", isOpen: false, mfeDollars: 120, maeDollars: -35, mfeR: 0.65, maeR: -0.19,
       mfeTimestamp: "2026-09-02 10:00", maeTimestamp: "2026-09-01 10:00", priceScale: 1, barsEvaluated: 50

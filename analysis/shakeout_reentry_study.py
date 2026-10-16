@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trade-by-trade shakeout and re-entry study using FMP daily OHLCV data."""
+"""Trade-by-trade shakeout and re-entry study using Alpaca daily OHLCV data."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ START = "2025-08-01"
 TRADE_START = "2026-06-01"
 SOURCE_CSV = Path("/Users/brandennevius/.codex/attachments/c17d8ace-9254-4254-b0b0-440f20000ba3/branden-trade-log-2026-08-11.csv")
 OUTPUT_DIR = Path("/Users/brandennevius/Desktop/TradingDashboard/analysis/shakeout_reentry_2026-08-11")
-CACHE_DIR = OUTPUT_DIR / "fmp_daily"
+CACHE_DIR = OUTPUT_DIR / "alpaca_daily"
 
 # Exact exits shown in the journal table; the CSV export omits this column.
 # Keyed by (symbol, open_date, entry rounded to 4 decimals).
@@ -80,13 +80,28 @@ def fetch_symbol(symbol, api_key):
     cache = CACHE_DIR / f"{safe}.json"
     if cache.exists():
         return json.loads(cache.read_text())
-    params = urllib.parse.urlencode({"symbol": symbol, "from": START, "to": AS_OF, "apikey": api_key})
-    url = f"https://financialmodelingprep.com/stable/historical-price-eod/full?{params}"
-    req = urllib.request.Request(url, headers={"User-Agent": "trade-shakeout-study/1.0"})
-    with urllib.request.urlopen(req, timeout=30) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    if not isinstance(payload, list):
-        raise RuntimeError(f"Unexpected FMP response for {symbol}: {payload}")
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    end = (datetime.fromisoformat(AS_OF) + timedelta(days=1)).strftime("%Y-%m-%d")
+    params = {"symbols": symbol, "start": START, "end": end, "timeframe": "1Day", "feed": "sip", "adjustment": "raw", "limit": "10000"}
+    payload = []
+    seen_tokens = set()
+    while True:
+        url = "https://data.alpaca.markets/v2/stocks/bars?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(url, headers={"APCA-API-KEY-ID": api_key[0], "APCA-API-SECRET-KEY": api_key[1]})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            page = json.load(response)
+        for row in page.get("bars", {}).get(symbol, []):
+            day = datetime.fromisoformat(row["t"].replace("Z", "+00:00")).astimezone(ZoneInfo("America/New_York")).date().isoformat()
+            if START <= day <= AS_OF:
+                payload.append({"date": day, "open": row["o"], "high": row["h"], "low": row["l"], "close": row["c"], "volume": row["v"]})
+        token = page.get("next_page_token")
+        if not token:
+            break
+        if token in seen_tokens:
+            raise RuntimeError("Alpaca history pagination did not complete")
+        seen_tokens.add(token)
+        params["page_token"] = token
     cache.write_text(json.dumps(payload, indent=2))
     time.sleep(0.06)
     return payload
@@ -269,7 +284,7 @@ def analyze_trade(trade, bars):
         "inferred_planned_stop_atr": None if planned_stop_distance is None else planned_stop_distance / atr,
         "inferred_planned_stop_pct": None if planned_stop_distance is None else -planned_stop_distance / entry,
         "grade": trade["grade"], "atr14_entry": atr, "atr_pct": atr / entry,
-        "entry_price_matches_fmp": market_match,
+        "entry_price_matches_market": market_match,
         "available_sessions_after_exit": available_after_exit,
         "available_sessions_from_entry": max(0, len(bars) - entry_i - 1),
         "post_20d_max_gain_from_entry": None if max_post_high is None else max_post_high / entry - 1,
@@ -348,9 +363,9 @@ def reentry_summary(rows, rule):
 
 
 def main():
-    api_key = os.environ.get("FMP_API_KEY")
-    if not api_key:
-        raise SystemExit("FMP_API_KEY is required")
+    api_key = (os.environ.get("ALPACA_API_KEY"), os.environ.get("ALPACA_API_SECRET"))
+    if not all(api_key):
+        raise SystemExit("ALPACA_API_KEY and ALPACA_API_SECRET are required")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     with SOURCE_CSV.open(newline="") as f:
         trades = list(csv.DictReader(f))
@@ -374,7 +389,7 @@ def main():
             rows.append(result)
         else:
             skipped.append({"symbol": trade["symbol"], "reason": error})
-    valid = [r for r in rows if r["entry_price_matches_fmp"]]
+    valid = [r for r in rows if r["entry_price_matches_market"]]
     mature = [r for r in valid if r["available_sessions_after_exit"] >= 10]
     canslim_mature = [r for r in mature if r["setup"] == "CANSLIM"]
     canslim_20d = [r for r in valid if r["setup"] == "CANSLIM" and r["available_sessions_from_entry"] >= 20]
@@ -396,7 +411,7 @@ def main():
         "analyzed": len(rows), "market_matched": len(valid), "mature_10_sessions": len(mature),
         "mature_canslim": len(canslim_mature), "mature_canslim_loss_or_breakeven": len(losers_be),
         "canslim_with_20_sessions_from_entry": len(canslim_20d),
-        "unmatched_entry_prices": [r["symbol"] + " " + r["open_date"] for r in rows if not r["entry_price_matches_fmp"]],
+        "unmatched_entry_prices": [r["symbol"] + " " + r["open_date"] for r in rows if not r["entry_price_matches_market"]],
         "skipped": skipped, "fetch_errors": errors,
         "post_exit": {
             "2atr_worked_count": sum(r["reached_2atr_after_exit"] is True for r in losers_be),

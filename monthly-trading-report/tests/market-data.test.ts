@@ -3,143 +3,78 @@ import test from "node:test";
 import { GET as marketDataRoute } from "../app/api/market-data/[symbol]/route";
 import { getExactMarketSessionPrice, getMarketCandlesWithProvider, marketProviderSymbols } from "../lib/market-data";
 
-test("slash-form FX pairs map to provider-specific symbols", () => {
-  assert.deepEqual(marketProviderSymbols("#usd/cad"), {
-    symbol: "USD/CAD",
-    fmp: "USDCAD",
-    stooq: "usdcad",
-    yahoo: "USDCAD=X"
-  });
-  assert.deepEqual(marketProviderSymbols("AAPL"), {
-    symbol: "AAPL",
-    fmp: "AAPL",
-    stooq: "aapl.us",
-    yahoo: "AAPL"
-  });
-});
-
-test("FMP is the primary bounded daily provider and keeps the key out of the URL", async (context) => {
-  const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
-  const requests: Array<{ url: string; headers: Headers }> = [];
+function credentials(context: { after: (fn: () => void) => void }) {
+  const key = process.env.ALPACA_API_KEY, secret = process.env.ALPACA_API_SECRET;
+  const fetch = globalThis.fetch;
+  process.env.ALPACA_API_KEY = "test-key";
+  process.env.ALPACA_API_SECRET = "test-secret";
   context.after(() => {
-    globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
+    globalThis.fetch = fetch;
+    if (key === undefined) delete process.env.ALPACA_API_KEY; else process.env.ALPACA_API_KEY = key;
+    if (secret === undefined) delete process.env.ALPACA_API_SECRET; else process.env.ALPACA_API_SECRET = secret;
   });
-  process.env.FMP_API_KEY = "test-key";
-  globalThis.fetch = async (input, init) => {
-    requests.push({ url: String(input), headers: new Headers(init?.headers) });
-    return Response.json([
-      { date: "2026-08-21", open: 100, high: 104, low: 99, close: 103, volume: 123456 },
-      { date: "2026-08-20", open: 98, high: 101, low: 97, close: 100, volume: 100000 }
-    ]);
-  };
+}
 
-  const result = await getMarketCandlesWithProvider("AAPL", "1d");
-
-  assert.equal(result.provider, "fmp");
-  assert.deepEqual(result.candles.map((candle) => candle.time), ["2026-08-20", "2026-08-21"]);
-  assert.equal(requests.length, 1);
-  assert.match(requests[0].url, /historical-price-eod\/full/);
-  assert.match(requests[0].url, /[?&]symbol=AAPL(?:&|$)/);
-  assert.match(requests[0].url, /[?&]from=\d{4}-\d{2}-\d{2}(?:&|$)/);
-  assert.match(requests[0].url, /[?&]to=\d{4}-\d{2}-\d{2}(?:&|$)/);
-  assert.doesNotMatch(requests[0].url, /apikey/i);
-  assert.equal(requests[0].headers.get("apikey"), "test-key");
+test("FX stays with daily fallback providers; listed symbols map to Alpaca", () => {
+  assert.deepEqual(marketProviderSymbols("#usd/cad"), { symbol: "USD/CAD", alpaca: null, stooq: "usdcad", yahoo: "USDCAD=X" });
+  assert.deepEqual(marketProviderSymbols("AAPL"), { symbol: "AAPL", alpaca: "AAPL", stooq: "aapl.us", yahoo: "AAPL" });
 });
 
-test("market-data API route reuses the shared FMP-backed market data loader", async (context) => {
-  const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
-  const requestedUrls: string[] = [];
-  context.after(() => {
-    globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
-  });
-  process.env.FMP_API_KEY = "test-key";
-  globalThis.fetch = async (input, init) => {
-    requestedUrls.push(String(input));
-    assert.equal(new Headers(init?.headers).get("apikey"), "test-key");
-    return Response.json([
-      { date: "2026-08-28", open: 86.2, high: 88.5, low: 85.9, close: 87.93, volume: 1234567 },
-      { date: "2026-08-27", open: 88.1, high: 88.8, low: 86.5, close: 87.54, volume: 1111111 }
-    ]);
-  };
-
-  const response = await marketDataRoute(
-    new Request("https://example.test/api/market-data/GM?timeframe=1d"),
-    { params: Promise.resolve({ symbol: "GM" }) }
-  );
-  const payload = await response.json();
-
-  assert.equal(response.status, 200);
-  assert.equal(payload.symbol, "GM");
-  assert.equal(payload.provider, "fmp");
-  assert.deepEqual(payload.candles.map((candle: { time: string }) => candle.time), ["2026-08-27", "2026-08-28"]);
-  assert.match(requestedUrls[0], /financialmodelingprep\.com\/stable\/historical-price-eod\/full/);
-});
-
-test("FMP exact-session lookup uses the requested session and normalizes FX symbols", async (context) => {
-  const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
+test("Alpaca is the primary daily provider and credentials stay in headers", async (context) => {
+  credentials(context);
   let requestedUrl = "";
-  context.after(() => {
-    globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
-  });
-  process.env.FMP_API_KEY = "test-key";
   globalThis.fetch = async (input, init) => {
     requestedUrl = String(input);
-    assert.equal(new Headers(init?.headers).get("apikey"), "test-key");
-    return Response.json([
-      { date: "2026-08-21", open: 1.38, high: 1.39, low: 1.37, close: 1.385, volume: 0 },
-      { date: "2026-08-20", open: 1.38, high: 1.37, low: 1.36, close: 1.365, volume: 0 }
-    ]);
+    assert.equal(new Headers(init?.headers).get("APCA-API-KEY-ID"), "test-key");
+    assert.equal(new Headers(init?.headers).get("APCA-API-SECRET-KEY"), "test-secret");
+    return Response.json({bars:{ AAPL:[
+      {t:"2026-08-20T04:00:00Z",o:98,h:101,l:97,c:100,v:100000},
+      {t:"2026-08-21T04:00:00Z",o:100,h:104,l:99,c:103,v:123456}
+    ]},next_page_token:null});
   };
-
-  const result = await getExactMarketSessionPrice("USD/CAD", "2026-08-21");
-
-  assert.equal(result.provider, "fmp");
-  assert.equal(result.price, 1.385);
-  assert.match(requestedUrl, /[?&]symbol=USDCAD(?:&|$)/);
-  assert.match(requestedUrl, /[?&]from=2026-08-21(?:&|$)/);
-  assert.match(requestedUrl, /[?&]to=2026-08-21(?:&|$)/);
-  assert.doesNotMatch(requestedUrl, /apikey/i);
+  const result=await getMarketCandlesWithProvider("AAPL","1d");
+  assert.equal(result.provider,"alpaca");
+  assert.deepEqual(result.candles.map(x=>x.time),["2026-08-20","2026-08-21"]);
+  const url=new URL(requestedUrl);
+  assert.equal(url.hostname,"data.alpaca.markets");
+  assert.equal(url.searchParams.get("feed"),"sip");
+  assert.equal(url.searchParams.get("timeframe"),"1Day");
+  assert.doesNotMatch(requestedUrl,/test-key|test-secret/);
 });
 
-test("FMP rejects malformed OHLC rows", async (context) => {
-  const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
-  context.after(() => {
-    globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
-  });
-  process.env.FMP_API_KEY = "test-key";
-  globalThis.fetch = async () => Response.json([
-    { date: "2026-08-21", open: 1.38, high: 1.37, low: 1.36, close: 1.365, volume: 0 },
-    { date: "2026-08-20", open: 1.38, high: 1.39, low: 1.37, close: 1.385, volume: 0 }
-  ]);
+test("market-data route uses the shared Alpaca loader",async(context)=>{
+  credentials(context);
+  globalThis.fetch=async()=>Response.json({bars:{GM:[{t:"2026-08-28T04:00:00Z",o:86.2,h:88.5,l:85.9,c:87.93,v:1234567}]}});
+  const response=await marketDataRoute(new Request("https://example.test/api/market-data/GM?timeframe=1d"),{params:Promise.resolve({symbol:"GM"})});
+  const payload=await response.json();
+  assert.equal(response.status,200);
+  assert.equal(payload.provider,"alpaca");
+  assert.equal(payload.candles[0].time,"2026-08-28");
+});
 
-  const result = await getMarketCandlesWithProvider("USD/CAD", "1d");
-
-  assert.equal(result.provider, "fmp");
-  assert.deepEqual(result.candles.map((candle) => candle.time), ["2026-08-20"]);
+test("Alpaca exact-session valuation excludes malformed and stale rows",async(context)=>{
+  credentials(context);
+  globalThis.fetch=async()=>Response.json({bars:{AAPL:[
+    {t:"2026-08-20T04:00:00Z",o:100,h:104,l:99,c:103},
+    {t:"2026-08-21T04:00:00Z",o:100,h:99,l:98,c:103},
+    {t:"2026-08-21T04:00:00Z",o:100,h:104,l:99,c:102}
+  ]}});
+  const result=await getExactMarketSessionPrice("AAPL","2026-08-21");
+  assert.equal(result.provider,"alpaca");
+  assert.equal(result.sessionDate,"2026-08-21");
+  assert.equal(result.price,102);
 });
 
 test("FX daily prices use the Stooq currency pair instead of an equity suffix", async (context) => {
   const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
+  const originalKey = process.env.ALPACA_API_KEY;
   const requestedUrls: string[] = [];
   context.after(() => {
     globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
+    if (originalKey === undefined) delete process.env.ALPACA_API_KEY;
+    else process.env.ALPACA_API_KEY = originalKey;
   });
-  delete process.env.FMP_API_KEY;
+  delete process.env.ALPACA_API_KEY;
   globalThis.fetch = async (input) => {
     requestedUrls.push(String(input));
     return new Response("Date,Open,High,Low,Close,Volume\n2026-08-10,1.371,1.375,1.369,1.372,0\n");
@@ -156,14 +91,14 @@ test("FX daily prices use the Stooq currency pair instead of an equity suffix", 
 
 test("FX prices fall back to Yahoo's currency-pair symbol", async (context) => {
   const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
+  const originalKey = process.env.ALPACA_API_KEY;
   const requestedUrls: string[] = [];
   context.after(() => {
     globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
+    if (originalKey === undefined) delete process.env.ALPACA_API_KEY;
+    else process.env.ALPACA_API_KEY = originalKey;
   });
-  delete process.env.FMP_API_KEY;
+  delete process.env.ALPACA_API_KEY;
   globalThis.fetch = async (input) => {
     const url = String(input);
     requestedUrls.push(url);
@@ -201,14 +136,14 @@ test("FX prices fall back to Yahoo's currency-pair symbol", async (context) => {
 
 test("exact-session prices use a date-bounded Stooq request", async (context) => {
   const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
+  const originalKey = process.env.ALPACA_API_KEY;
   const requestedUrls: string[] = [];
   context.after(() => {
     globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
+    if (originalKey === undefined) delete process.env.ALPACA_API_KEY;
+    else process.env.ALPACA_API_KEY = originalKey;
   });
-  delete process.env.FMP_API_KEY;
+  delete process.env.ALPACA_API_KEY;
   globalThis.fetch = async (input) => {
     requestedUrls.push(String(input));
     return new Response("Date,Open,High,Low,Close,Volume\n2026-08-17,31.34,32.15,31.28,31.88,19657409\n");
@@ -232,14 +167,14 @@ test("exact-session prices use a date-bounded Stooq request", async (context) =>
 
 test("stale primary history falls through to an exact Yahoo daily close", async (context) => {
   const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
+  const originalKey = process.env.ALPACA_API_KEY;
   const requestedUrls: string[] = [];
   context.after(() => {
     globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
+    if (originalKey === undefined) delete process.env.ALPACA_API_KEY;
+    else process.env.ALPACA_API_KEY = originalKey;
   });
-  delete process.env.FMP_API_KEY;
+  delete process.env.ALPACA_API_KEY;
   globalThis.fetch = async (input) => {
     const url = String(input);
     requestedUrls.push(url);
@@ -269,13 +204,13 @@ test("stale primary history falls through to an exact Yahoo daily close", async 
 
 test("an unfinished Yahoo daily row may use last trade only when its timestamp is the requested session", async (context) => {
   const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
+  const originalKey = process.env.ALPACA_API_KEY;
   context.after(() => {
     globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
+    if (originalKey === undefined) delete process.env.ALPACA_API_KEY;
+    else process.env.ALPACA_API_KEY = originalKey;
   });
-  delete process.env.FMP_API_KEY;
+  delete process.env.ALPACA_API_KEY;
   globalThis.fetch = async (input) => {
     if (String(input).includes("stooq.com")) {
       return new Response("Date,Open,High,Low,Close,Volume\n2026-08-17,31.34,32.15,31.28,0,19657409\n");
@@ -306,13 +241,13 @@ test("an unfinished Yahoo daily row may use last trade only when its timestamp i
 
 test("historical exact-session lookup never substitutes a stale close or a newer live quote", async (context) => {
   const originalFetch = globalThis.fetch;
-  const originalKey = process.env.FMP_API_KEY;
+  const originalKey = process.env.ALPACA_API_KEY;
   context.after(() => {
     globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
+    if (originalKey === undefined) delete process.env.ALPACA_API_KEY;
+    else process.env.ALPACA_API_KEY = originalKey;
   });
-  delete process.env.FMP_API_KEY;
+  delete process.env.ALPACA_API_KEY;
   globalThis.fetch = async (input) => {
     if (String(input).includes("stooq.com")) {
       return new Response("Date,Open,High,Low,Close,Volume\n2026-08-14,31,32,30,31.25,1000\n");

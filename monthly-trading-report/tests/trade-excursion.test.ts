@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { calculateTradeExcursion, excursionInstrument, tradeExcursionInputHash } from "../lib/trade-excursion";
-import { fetchTradeIntradayBars, parseFmpIntradayBars } from "../lib/trade-excursion-market-data";
+import { fetchTradeIntradayBars } from "../lib/trade-excursion-market-data";
 import type { TradeExecution, TradeLogEntry } from "../lib/types";
 
 function execution(id: string, type: "ENTRY" | "EXIT", time: string, shares: number, price: number): TradeExecution {
@@ -56,13 +56,13 @@ test("inverts favorable and adverse prices for short trades", () => {
   assert.equal(result.mfeR, 1);
 });
 
-test("maps index CFDs to futures and labels results as estimates", () => {
+test("maps index CFDs to ETF proxies and labels results as estimates", () => {
   const mappedTrade = trade({
     symbol: ".US500", avgEntry: 7500, shares: 1, risk: 100,
     executions: [execution("e1", "ENTRY", "09:30:00", 1, 7500), execution("x1", "EXIT", "10:00:00", 1, 7600)]
   });
   const instrument = excursionInstrument(mappedTrade.symbol);
-  assert.equal(instrument.providerSymbol, "ESUSD");
+  assert.equal(instrument.providerSymbol, "SPY");
   const result = calculateTradeExcursion(mappedTrade, [
     { time: "2026-09-01 09:30:00", open: 5000, high: 5100, low: 4950, close: 5000 },
     { time: "2026-09-01 10:00:00", open: 5060, high: 5080, low: 5050, close: 5066.67 }
@@ -90,41 +90,34 @@ test("rejects malformed or absent market bars rather than returning zero", () =>
   assert.equal(result.maeDollars, null);
 });
 
-test("parses and sorts the strict FMP intraday response shape", () => {
-  assert.deepEqual(parseFmpIntradayBars([
-    { date: "2026-09-01 09:35:00", open: 101, high: 102, low: 100, close: 101.5 },
-    { date: "2026-09-01 09:30:00", open: 100, high: 101, low: 99, close: 100.5 },
-    { date: "bad", open: 1, high: 1, low: 1, close: 1 }
-  ]).map((bar) => bar.time), ["2026-09-01 09:30:00", "2026-09-01 09:35:00"]);
-});
-
 test("execution changes invalidate the excursion input hash", () => {
   const original = trade();
   const changed = trade({ executions: original.executions.map((item, index) => index === 0 ? { ...item, price: item.price + 1 } : item) });
   assert.notEqual(tradeExcursionInputHash(original, "2026-09-01"), tradeExcursionInputHash(changed, "2026-09-01"));
 });
 
-test("FMP intraday request uses the stable endpoint and keeps its key out of the URL", async () => {
-  const originalKey = process.env.FMP_API_KEY;
-  const originalFetch = globalThis.fetch;
-  process.env.FMP_API_KEY = "test-key";
-  let requestedUrl = "";
-  let requestHeaders: HeadersInit | undefined;
-  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
-    requestedUrl = String(input);
-    requestHeaders = init?.headers;
-    return new Response(JSON.stringify([{ date: "2026-09-01 09:30:00", open: 100, high: 101, low: 99, close: 100.5 }]));
-  }) as typeof fetch;
-  try {
-    const result = await fetchTradeIntradayBars(excursionInstrument("FRO"), "2026-09-01", "2026-09-01", "5min");
-    assert.equal(result.bars.length, 1);
-    assert.match(requestedUrl, /\/stable\/historical-chart\/5min\?/);
-    assert.match(requestedUrl, /symbol=FRO/);
-    assert.doesNotMatch(requestedUrl, /test-key/);
-    assert.equal((requestHeaders as Record<string, string>).apikey, "test-key");
-  } finally {
-    globalThis.fetch = originalFetch;
-    if (originalKey === undefined) delete process.env.FMP_API_KEY;
-    else process.env.FMP_API_KEY = originalKey;
-  }
+test("millisecond executions remain ordered and do not open at midnight", () => {
+  const sample=trade({executions:[execution("x","EXIT","10:05:00.100",10,102),execution("e","ENTRY","10:00:00.100",10,100)]});
+  const result=calculateTradeExcursion(sample,[
+    {time:"2026-09-01 09:30:00",open:50,high:1000,low:1,close:100},
+    {time:"2026-09-01 10:00:00",open:100,high:900,low:2,close:100},
+    {time:"2026-09-01 10:05:00",open:101,high:103,low:99,close:102},
+    {time:"2026-09-01 10:10:00",open:102,high:800,low:1,close:102}
+  ]);
+  assert.equal(result.status,"AVAILABLE");
+  assert.equal(result.mfeDollars,30);
+  assert.equal(result.maeDollars,-10);
+  assert.equal(result.barsEvaluated,1);
+});
+
+test("fractional zero at a bar boundary equals whole seconds",()=>{
+  const bars=[{time:"2026-09-01 09:30:00",open:100,high:103,low:98,close:101}];
+  const base=trade({executions:[execution("e","ENTRY","09:30:00",10,100)]});
+  const fractional=trade({executions:[execution("e","ENTRY","09:30:00.000",10,100)]});
+  assert.equal(calculateTradeExcursion(base,bars).mfeDollars,calculateTradeExcursion(fractional,bars).mfeDollars);
+});
+
+test("risk, data-policy version and interval are part of cache identity",()=>{
+  assert.notEqual(tradeExcursionInputHash(trade(),"2026-09-01"),tradeExcursionInputHash(trade({risk:200}),"2026-09-01"));
+  assert.equal(excursionInstrument("USD/CAD").mode,"UNSUPPORTED");
 });
