@@ -744,9 +744,11 @@ function monthlyTradeCountBars(list) {
 function setupGradeAvgRBars(list) {
   const groups = new Map();
   list.forEach(t => {
+    const r = validRValue(t);
+    if (r === null) return;
     const g = String(t.grade || 'Ungraded').trim() || 'Ungraded';
     if (!groups.has(g)) groups.set(g, []);
-    groups.get(g).push(Number(getRMultiple(t) || 0));
+    groups.get(g).push(r);
   });
   const order = GRADE_ORDER;
   return Array.from(groups.entries())
@@ -1512,9 +1514,10 @@ function refreshPortfolioOptions() {
 function setupComparisonStats(list) {
   const closed = list.filter(t => (t.status || 'Closed') === 'Closed');
   const wins = closed.filter(t => getWinLoss(t) === 'Win');
+  const definedRs = list.map(validRValue).filter(v => v !== null);
   const totalPL = list.reduce((sum,t)=>sum+Number(t.pl||0),0);
-  const totalR = list.reduce((sum,t)=>sum+Number(getRMultiple(t)||0),0);
-  const avgR = average(list.map(getRMultiple));
+  const totalR = definedRs.reduce((sum,r)=>sum+r,0);
+  const avgR = average(definedRs);
   const winPct = closed.length ? wins.length / closed.length * 100 : 0;
   return { trades:list.length, totalPL, totalR, avgR, winPct };
 }
@@ -1580,10 +1583,14 @@ function compareFilteredTrades(setupName, grades, versionFilter) {
 }
 function compareLineSeries(list, mode) {
   const sorted = sortedClosedTradesForCharts(list);
-  let pl=0, r=0, wins=0, count=0;
+  let pl=0, r=0, wins=0, count=0, rCount=0;
   return sorted.map((t,i) => {
-    count += 1; pl += Number(t.pl || 0); r += Number(getRMultiple(t)||0); if (getWinLoss(t)==='Win') wins += 1;
-    const value = mode === 'pl' ? pl : mode === 'r' ? r : mode === 'avgR' ? r/count : (wins/count*100);
+    count += 1;
+    pl += Number(t.pl || 0);
+    const definedR = validRValue(t);
+    if (definedR !== null) { r += definedR; rCount += 1; }
+    if (getWinLoss(t)==='Win') wins += 1;
+    const value = mode === 'pl' ? pl : mode === 'r' ? r : mode === 'avgR' ? (rCount ? r/rCount : 0) : (wins/count*100);
     return { value, label:`Trade ${i+1}`, detail:`${t.ticker || ''} ${formatDisplayDate(t.exitDate || t.date)}` };
   });
 }
@@ -1692,9 +1699,10 @@ function currentMonthKey() {
 function groupStats(list) {
   const closed = list.filter(t => (t.status || 'Closed') === 'Closed');
   const wins = closed.filter(t => getWinLoss(t) === 'Win');
+  const definedRs = list.map(validRValue).filter(v => v !== null);
   const totalPL = list.reduce((sum,t)=>sum+Number(t.pl||0),0);
-  const totalR = list.reduce((sum,t)=>sum+Number(getRMultiple(t)||0),0);
-  return { trades:list.length, totalPL, totalR, avgR: average(list.map(getRMultiple)), avgPL: average(list.map(t=>Number(t.pl||0))), winPct: closed.length ? wins.length/closed.length*100 : 0 };
+  const totalR = definedRs.reduce((sum,r)=>sum+r,0);
+  return { trades:list.length, totalPL, totalR, avgR: average(definedRs), avgPL: average(list.map(t=>Number(t.pl||0))), winPct: closed.length ? wins.length/closed.length*100 : 0 };
 }
 function setupNameForTrade(t) { return String(t.setup || 'Other').trim() || 'Other'; }
 function versionLabelForTrade(t) {
@@ -2030,6 +2038,7 @@ function renderAll() {
   renderPortfolios();
   renderTags();
   renderSetupComparison();
+  renderSetupAnalytics();
   renderMonthlyReview();
   renderPlaybook();
   renderWatchlist();
@@ -2105,6 +2114,13 @@ function openTradeDialog(id) {
     if (field === 'notes' && String(value).startsWith('Imported from broker statement.')) value = '';
     $(inputId).value = value;
   });
+  if ($('editDirectionConfirmed')) $('editDirectionConfirmed').value = trade.analytics?.directionConfirmed || '';
+  if ($('editSetupOutcome')) $('editSetupOutcome').value = trade.analytics?.setupOutcome || '';
+  if ($('editEntryQuality')) $('editEntryQuality').value = trade.analytics?.entryQuality || '';
+  if ($('editSetupFollowed')) $('editSetupFollowed').value = trade.analytics?.setupFollowed || '';
+  if ($('editMfe')) $('editMfe').value = trade.analytics?.mfe ?? '';
+  if ($('editMae')) $('editMae').value = trade.analytics?.mae ?? '';
+  renderTradeCustomAnalytics(trade);
   updateAtrStats();
   renderScreenshotGallery(trade);
   renderExecutionTable(trade);
@@ -2255,6 +2271,7 @@ $('editForm').addEventListener('submit', (event) => {
     mistakeTag: $('editMistakeTag')?.value || '',
     checklist: $('editChecklist').value,
     notes: $('editNotes').value,
+    analytics: readTradeAnalytics(existing),
     screenshots: existing.screenshots || []
   };
   tradeDialogSaved = true;
@@ -2655,7 +2672,8 @@ function setupSnapshot(setup, versionNumber) {
     gradeRules: deepClone(setup?.gradeRules || defaultGradeRules()),
     screenshots: deepClone(setup?.screenshots || []),
     enableEtf: setup?.enableEtf !== false,
-    criteria: deepClone(setup?.criteria || { stf: [], mtf: [], etf: [] })
+    criteria: deepClone(setup?.criteria || { stf: [], mtf: [], etf: [] }),
+    analyticsFields: deepClone(setup?.analyticsFields || [])
   };
 }
 function normalizeSetupVersions(setup) {
@@ -2683,7 +2701,7 @@ function normalizeSetupVersions(setup) {
 }
 function normalizeAllSetupVersions() { setups = (setups || []).map(normalizeSetupVersions); }
 function setupCoreChanged(oldSetup, newSetup) {
-  const pick = (s) => JSON.stringify({ criteria: s?.criteria || {}, gradeRules: normalizeGradeRules(s?.gradeRules), enableEtf: s?.enableEtf !== false });
+  const pick = (s) => JSON.stringify({ criteria: s?.criteria || {}, gradeRules: normalizeGradeRules(s?.gradeRules), enableEtf: s?.enableEtf !== false, analyticsFields: s?.analyticsFields || [] });
   return pick(oldSetup) !== pick(newSetup);
 }
 function currentVersionForSetup(setup) { normalizeSetupVersions(setup); return Number(setup?.currentVersion || 1); }
@@ -2839,7 +2857,7 @@ function readCriteriaRows(section) {
 function readSetupDraft() {
   const id = $('setupId')?.value || crypto.randomUUID();
   const existing = setups.find(s => s.id === id);
-  return { id, name: $('setupName')?.value.trim() || '', description: $('setupDescription')?.value || '', gradeRules: readGradeRules(), screenshots: currentSetupScreenshots || [], enableEtf: $('enableEtf')?.checked ?? true, criteria: { stf: readCriteriaRows('stf'), mtf: readCriteriaRows('mtf'), etf: readCriteriaRows('etf') }, versions: existing?.versions || [], currentVersion: existing?.currentVersion || 1 };
+  return { id, name: $('setupName')?.value.trim() || '', description: $('setupDescription')?.value || '', gradeRules: readGradeRules(), screenshots: currentSetupScreenshots || [], enableEtf: $('enableEtf')?.checked ?? true, criteria: { stf: readCriteriaRows('stf'), mtf: readCriteriaRows('mtf'), etf: readCriteriaRows('etf') }, analyticsFields: readAnalyticsFieldRows(), versions: existing?.versions || [], currentVersion: existing?.currentVersion || 1 };
 }
 function fillSetupForm(setup, mode = 'edit') {
   if (!$('setupForm')) return;
@@ -2854,6 +2872,7 @@ function fillSetupForm(setup, mode = 'edit') {
   renderCriteriaRows('stf', JSON.parse(JSON.stringify(setup.criteria?.stf || [])));
   renderCriteriaRows('mtf', JSON.parse(JSON.stringify(setup.criteria?.mtf || [])));
   renderCriteriaRows('etf', JSON.parse(JSON.stringify(setup.criteria?.etf || [])));
+  renderAnalyticsFieldRows(deepClone(setup.analyticsFields || []));
   const submitButton = document.querySelector('#setupForm button[type="submit"]');
   if (submitButton) {
     submitButton.textContent = mode === 'newVersion'
@@ -2960,15 +2979,18 @@ function renderFeedbackThreadView() {
   renderFeedbackReplyScreenshotGallery();
 }
 async function loadFeedbackTickets(nextSelectedId) {
+  // A refresh updates the list; only an explicit action may leave the new-thread draft.
+  const selectedAtStart = activeFeedbackTicketId;
   try {
     const response = await fetch('/api/tickets');
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not load support threads.');
     feedbackTickets = Array.isArray(data.tickets) ? data.tickets : [];
-    if (nextSelectedId) activeFeedbackTicketId = nextSelectedId;
-    if (!activeFeedbackTicketId && feedbackTickets.length) activeFeedbackTicketId = feedbackTickets[0].id;
+    if (nextSelectedId && activeFeedbackTicketId === selectedAtStart) {
+      activeFeedbackTicketId = nextSelectedId;
+    }
     if (activeFeedbackTicketId && !feedbackTickets.some(ticket => ticket.id === activeFeedbackTicketId)) {
-      activeFeedbackTicketId = feedbackTickets[0]?.id || '';
+      activeFeedbackTicketId = '';
     }
     renderFeedbackThreadList();
     renderFeedbackThreadView();
@@ -2978,7 +3000,7 @@ async function loadFeedbackTickets(nextSelectedId) {
     if (list) list.innerHTML = '<p class="small">Could not load support threads.</p>';
   }
 }
-function newSetupDraft() { return { id: '', name: '', description: '', gradeRules: defaultGradeRules(), screenshots: [], enableEtf: true, criteria: { stf: defaultCriteria('stf'), mtf: defaultCriteria('mtf'), etf: [] } }; }
+function newSetupDraft() { return { id: '', name: '', description: '', gradeRules: defaultGradeRules(), screenshots: [], enableEtf: true, criteria: { stf: defaultCriteria('stf'), mtf: defaultCriteria('mtf'), etf: [] }, analyticsFields: [] }; }
 function startNewSetupVersion(setup) {
   fillSetupForm(deepClone(setup), 'newVersion');
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -2986,6 +3008,22 @@ function startNewSetupVersion(setup) {
 function cancelSetupEdit() {
   fillSetupForm(newSetupDraft(), 'edit');
   if ($('setupScreenshotInput')) $('setupScreenshotInput').value = '';
+}
+function openSavedSetupScreenshots(setup) {
+  const shots = Array.isArray(setup?.screenshots) ? setup.screenshots : [];
+  if (!shots.length) return;
+  let index = 0;
+  const show = () => {
+    const shot = shots[index];
+    const large = $('largeScreenshot');
+    if (!large || !shot) return;
+    large.src = screenshotSrc(shot);
+    large.alt = `${setup.name || 'Setup'} screenshot ${index + 1}`;
+    large.dataset.setupGallery = setup.id || '';
+    large.dataset.setupGalleryIndex = String(index);
+    $('imageDialog').showModal();
+  };
+  show();
 }
 function renderSetups() {
   const list = $('setupList'); if (!list) return;
@@ -2995,7 +3033,8 @@ function renderSetups() {
     const max = getSetupMax(setup);
     const div = document.createElement('div');
     div.className = 'setup-card';
-    div.innerHTML = `<div><h3>${setup.name}</h3><p>${setup.description || ''}</p><span class="small">${setupVersionLabel(currentVersionForSetup(setup))} · Max score: ${max} points · ETF ${setup.enableEtf === false ? 'hidden' : 'shown'} · Screenshots: ${(setup.screenshots||[]).length}</span></div><div><button type="button" class="editSetupBtn">Edit Current</button><button type="button" class="newVersionBtn">Create New Version</button><button type="button" class="viewVersionsBtn">View Versions</button><button type="button" class="deleteSetupBtn danger">Delete</button></div>`;
+    div.innerHTML = `<div><h3>${setup.name}</h3><p>${setup.description || ''}</p><span class="small">${setupVersionLabel(currentVersionForSetup(setup))} · Max score: ${max} points · ETF ${setup.enableEtf === false ? 'hidden' : 'shown'} · Screenshots: ${(setup.screenshots||[]).length}</span></div><div><button type="button" class="viewSetupShotsBtn" ${(setup.screenshots||[]).length ? '' : 'disabled'}>View Screenshots</button><button type="button" class="editSetupBtn">Edit Current</button><button type="button" class="newVersionBtn">Create New Version</button><button type="button" class="viewVersionsBtn">View Versions</button><button type="button" class="deleteSetupBtn danger">Delete</button></div>`;
+    div.querySelector('.viewSetupShotsBtn').addEventListener('click', () => openSavedSetupScreenshots(setup));
     div.querySelector('.editSetupBtn').addEventListener('click', () => fillSetupForm(setup, 'edit'));
     div.querySelector('.newVersionBtn').addEventListener('click', () => startNewSetupVersion(setup));
     div.querySelector('.viewVersionsBtn').addEventListener('click', () => viewSetupVersions(setup));
@@ -3159,19 +3198,18 @@ if ($('feedbackLauncher')) $('feedbackLauncher').addEventListener('click', () =>
   renderFeedbackReplyScreenshotGallery();
   $('feedbackDialog').showModal();
   clearInterval(feedbackPollTimer);
-  feedbackPollTimer = setInterval(() => loadFeedbackTickets(activeFeedbackTicketId), 15000);
+  feedbackPollTimer = setInterval(() => loadFeedbackTickets(), 15000);
 });
+if ($('feedbackDialog')) $('feedbackDialog').addEventListener('close', () => { clearInterval(feedbackPollTimer); feedbackPollTimer = null; });
 if ($('closeFeedbackDialog')) $('closeFeedbackDialog').addEventListener('click', () => { clearInterval(feedbackPollTimer); $('feedbackDialog').close(); });
 if ($('cancelFeedbackBtn')) $('cancelFeedbackBtn').addEventListener('click', () => { clearInterval(feedbackPollTimer); $('feedbackDialog').close(); });
 if ($('newFeedbackThreadBtn')) $('newFeedbackThreadBtn').addEventListener('click', () => {
   activeFeedbackTicketId = '';
-  resetFeedbackForm();
   renderFeedbackThreadView();
   renderFeedbackThreadList();
 });
 if ($('backToFeedbackNewBtn')) $('backToFeedbackNewBtn').addEventListener('click', () => {
   activeFeedbackTicketId = '';
-  resetFeedbackForm();
   renderFeedbackThreadView();
   renderFeedbackThreadList();
 });
@@ -3404,6 +3442,187 @@ if ($('watchlistForm')) $('watchlistForm').addEventListener('submit', event => {
   renderWatchlist();
 });
 
+// ===== Version 71: reusable Setup Analytics =====
+function analyticsFieldId() { return `af_${Date.now()}_${Math.random().toString(36).slice(2,8)}`; }
+function renderAnalyticsFieldRows(rows) {
+  const box = $('analyticsFieldsBuilder'); if (!box) return;
+  box.innerHTML = '';
+  (rows || []).forEach((field, index) => {
+    const div = document.createElement('div'); div.className = 'analytics-field-row'; div.dataset.id = field.id || analyticsFieldId();
+    div.innerHTML = `<input class="analyticsFieldLabel" value="${escapeHtml(field.label || '')}" placeholder="Field name (example: 15M First Candle Range)" />
+      <select class="analyticsFieldType"><option value="yesno">Yes / No</option><option value="dropdown">Dropdown</option><option value="number">Number</option><option value="text">Short Text</option></select>
+      <input class="analyticsFieldOptions" value="${escapeHtml((field.options || []).join(', '))}" placeholder="Dropdown options, comma separated" />
+      <button type="button" class="danger removeAnalyticsField">Remove</button>`;
+    div.querySelector('.analyticsFieldType').value = field.type || 'yesno';
+    const toggle = () => { div.querySelector('.analyticsFieldOptions').style.display = div.querySelector('.analyticsFieldType').value === 'dropdown' ? '' : 'none'; };
+    div.querySelector('.analyticsFieldType').addEventListener('change', toggle); toggle();
+    div.querySelector('.removeAnalyticsField').addEventListener('click', () => { div.remove(); });
+    if (journalReadOnly) div.querySelectorAll('input,select,button').forEach(control => control.disabled = true);
+    box.appendChild(div);
+  });
+}
+function readAnalyticsFieldRows() {
+  return Array.from(document.querySelectorAll('#analyticsFieldsBuilder .analytics-field-row')).map(row => ({
+    id: row.dataset.id || analyticsFieldId(), label: row.querySelector('.analyticsFieldLabel').value.trim(), type: row.querySelector('.analyticsFieldType').value,
+    options: row.querySelector('.analyticsFieldType').value === 'dropdown' ? row.querySelector('.analyticsFieldOptions').value.split(',').map(x=>x.trim()).filter(Boolean) : []
+  })).filter(x => x.label);
+}
+function analyticsFieldsForTrade(trade) {
+  // An empty snapshot is still a historical snapshot; do not inherit later questions.
+  if (Array.isArray(trade?.analytics?.fieldsSnapshot)) return trade.analytics.fieldsSnapshot;
+  const setup = setups.find(s => s.id === trade?.setupId) || getSetupByName(trade?.setup || '');
+  if (!setup) return [];
+  const version = Number(trade?.analytics?.setupVersion || trade?.setupScore?.setupVersion || setup.currentVersion || 1);
+  const snapshot = (setup.versions || []).find(v => Number(v.version) === version);
+  // Old versions without analytics predate the feature and have no questions.
+  return deepClone(snapshot ? (snapshot.analyticsFields || []) : (setup.analyticsFields || []));
+}
+function renderTradeCustomAnalytics(trade) {
+  const box = $('tradeCustomAnalytics'); if (!box) return;
+  const fields = analyticsFieldsForTrade(trade); const values = trade?.analytics?.custom || {};
+  if (!fields.length) { box.innerHTML = '<p class="small">No custom analytics fields are defined for this setup. Add them in Setup Builder.</p>'; return; }
+  box.innerHTML = '<div class="trade-edit-grid">' + fields.map(f => {
+    const val = values[f.id] ?? '';
+    if (f.type === 'yesno') return `<label>${escapeHtml(f.label)}<select class="customAnalyticsInput" data-field-id="${escapeHtml(f.id)}"><option value="">Not reviewed</option><option value="yes" ${val==='yes'?'selected':''}>Yes</option><option value="no" ${val==='no'?'selected':''}>No</option></select></label>`;
+    if (f.type === 'dropdown') return `<label>${escapeHtml(f.label)}<select class="customAnalyticsInput" data-field-id="${escapeHtml(f.id)}"><option value="">Not reviewed</option>${(f.options||[]).map(o=>`<option ${String(val)===String(o)?'selected':''}>${escapeHtml(o)}</option>`).join('')}</select></label>`;
+    if (f.type === 'number') return `<label>${escapeHtml(f.label)}<input type="number" step="0.01" class="customAnalyticsInput" data-field-id="${escapeHtml(f.id)}" value="${escapeHtml(val)}" /></label>`;
+    return `<label>${escapeHtml(f.label)}<input type="text" class="customAnalyticsInput" data-field-id="${escapeHtml(f.id)}" value="${escapeHtml(val)}" /></label>`;
+  }).join('') + '</div>';
+  if (journalReadOnly) box.querySelectorAll('input,select').forEach(control => control.disabled = true);
+}
+function readTradeAnalytics(existing) {
+  const selectedSetup = $('editSetup')?.value || existing.setup;
+  const setup = getSetupByName(selectedSetup);
+  const sameSetup = String(selectedSetup || '').toLowerCase() === String(existing.setup || '').toLowerCase();
+  const draft = sameSetup ? existing : { setup: selectedSetup, setupId: setup?.id };
+  const fields = analyticsFieldsForTrade(draft);
+  const custom = {};
+  document.querySelectorAll('#tradeCustomAnalytics .customAnalyticsInput').forEach(el => {
+    if (fields.some(field => field.id === el.dataset.fieldId)) custom[el.dataset.fieldId] = el.value;
+  });
+  const previous = sameSetup ? (existing.analytics || {}) : {};
+  return {
+    ...previous,
+    directionConfirmed: $('editDirectionConfirmed')?.value || '',
+    setupOutcome: $('editSetupOutcome')?.value || '',
+    entryQuality: $('editEntryQuality')?.value || '',
+    setupFollowed: $('editSetupFollowed')?.value || '',
+    mfe: analyticsNumber($('editMfe')?.value) ?? '',
+    mae: analyticsNumber($('editMae')?.value) ?? '',
+    custom,
+    fieldsSnapshot: deepClone(fields),
+    setupVersion: Number(previous.setupVersion || (sameSetup && existing.setupScore?.setupVersion) || setup?.currentVersion || 1),
+    reviewedAt: new Date().toISOString()
+  };
+}
+function analyticsTradeVersion(t) { return Number(t?.analytics?.setupVersion || t?.setupScore?.setupVersion || 1); }
+function analyticsFilteredTrades() {
+  const setup=$('analyticsSetup')?.value||'', version=$('analyticsVersion')?.value||'all', grade=$('analyticsGrade')?.value||'', direction=$('analyticsDirection')?.value||'';
+  return trades.filter(t => (!setup || String(t.setup||'').toLowerCase()===setup.toLowerCase()) && (version==='all' || analyticsTradeVersion(t)===Number(version)) && (!grade || (t.grade||'Ungraded')===grade) && (!direction || String(t.direction||'').toLowerCase()===direction.toLowerCase()));
+}
+function pct(n,d){ return d ? `${(100*n/d).toFixed(1)}%` : '—'; }
+function renderSetupAnalyticsOptions(){
+  const sel=$('analyticsSetup'); if(!sel) return; const cur=sel.value; const names=uniqueSorted(setups.map(s=>s.name)); sel.innerHTML='<option value="">Select setup</option>'+names.map(n=>`<option ${n===cur?'selected':''}>${escapeHtml(n)}</option>`).join('');
+  const setup=getSetupByName(sel.value); const vs=$('analyticsVersion'); if(vs){const vcur=vs.value||'all'; vs.innerHTML='<option value="all">All Versions</option>'+((setup?.versions||[]).map(v=>`<option value="${Number(v.version)}">${setupVersionLabel(v.version)}</option>`).join('')); if([...vs.options].some(o=>o.value===vcur))vs.value=vcur;}
+  const gs=$('analyticsGrade'); if(gs){const gcur=gs.value; gs.innerHTML='<option value="">All grades</option>'+['A+','A','A-','B+','B','B-','C+','C','Ungraded'].map(g=>`<option ${g===gcur?'selected':''}>${g}</option>`).join('');}
+}
+function analyticsNumber(value) {
+  if (value === null || value === undefined || String(value).trim() === '') return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+function analyticsSummary(list) {
+  const closed = list.filter(t => String(t.status || 'Closed').toLowerCase() === 'closed');
+  const reviewed = closed.filter(t => t.analytics);
+  const rs = closed.map(validRValue).filter(value => value !== null);
+  const mfes = reviewed.map(t => analyticsNumber(t.analytics.mfe)).filter(value => value !== null);
+  const maes = reviewed.map(t => analyticsNumber(t.analytics.mae)).filter(value => value !== null);
+  const directionReviewed = reviewed.filter(t => ['yes', 'no'].includes(t.analytics.directionConfirmed));
+  const outcomes = reviewed.filter(t => t.analytics.setupOutcome);
+  const worked = outcomes.filter(t => String(t.analytics.setupOutcome).startsWith('Worked'));
+  return {
+    trades: list.length,
+    closed: closed.length,
+    wins: closed.filter(t => getWinLoss(t) === 'Win').length,
+    rCount: rs.length,
+    totalR: rs.reduce((sum, r) => sum + r, 0),
+    avgR: rs.length ? average(rs) : null,
+    avgMfe: mfes.length ? average(mfes) : null,
+    avgMae: maes.length ? average(maes) : null,
+    directionReviewed: directionReviewed.length,
+    directionConfirmed: directionReviewed.filter(t => t.analytics.directionConfirmed === 'yes').length,
+    outcomeReviewed: outcomes.length,
+    worked: worked.length,
+    captured: worked.filter(t => t.analytics.setupOutcome === 'Worked - Captured').length
+  };
+}
+function analyticsR(value) { return value === null ? '—' : `${value.toFixed(2)}R`; }
+function analyticsStat(label,value){ return `<div class="stat"><span>${escapeHtml(label)}</span><strong>${value}</strong></div>`; }
+function renderSetupAnalytics() {
+  if (!$('setupAnalyticsView')) return;
+  renderSetupAnalyticsOptions();
+  const setupName = $('analyticsSetup')?.value || '';
+  const list = analyticsFilteredTrades();
+  if (!setupName) {
+    $('analyticsHealth').innerHTML = '<p class="empty">Choose a setup to analyze.</p>';
+    ['analyticsOutcome', 'analyticsBreakdowns', 'analyticsMistakeBody', 'analyticsMissedBody'].forEach(id => $(id).innerHTML = '');
+    return;
+  }
+  const stats = analyticsSummary(list);
+  $('analyticsHealth').innerHTML = [
+    analyticsStat('Trades', stats.trades),
+    analyticsStat('Win Rate', pct(stats.wins, stats.closed)),
+    analyticsStat('Direction Confirmed', pct(stats.directionConfirmed, stats.directionReviewed)),
+    analyticsStat('Setup Worked', pct(stats.worked, stats.outcomeReviewed)),
+    analyticsStat('Capture Rate', pct(stats.captured, stats.worked)),
+    analyticsStat('Avg R', analyticsR(stats.avgR)),
+    analyticsStat('Avg MFE', analyticsR(stats.avgMfe)),
+    analyticsStat('Avg MAE', analyticsR(stats.avgMae))
+  ].join('');
+  const reviewed = list.filter(t => String(t.status || 'Closed').toLowerCase() === 'closed' && t.analytics);
+  const outcomes = ['Worked - Captured', 'Worked - Missed', 'Failed - Managed', 'Failed - Execution Error'];
+  $('analyticsOutcome').innerHTML = outcomes.map(outcome => `<div class="analytics-outcome-card"><span>${outcome}</span><strong>${reviewed.filter(t => t.analytics.setupOutcome === outcome).length}</strong></div>`).join('');
+  const setup = getSetupByName(setupName);
+  const fieldMap = new Map();
+  (setup?.versions || []).forEach(version => (version.analyticsFields || []).forEach(field => fieldMap.set(field.id, field)));
+  (setup?.analyticsFields || []).forEach(field => fieldMap.set(field.id, field));
+  reviewed.forEach(trade => (trade.analytics.fieldsSnapshot || []).forEach(field => fieldMap.set(field.id, field)));
+  $('analyticsBreakdowns').innerHTML = [...fieldMap.values()].map(field => renderAnalyticsFieldBreakdown(field, list)).join('') || '<p class="empty">No custom analytics fields yet. Add them in Setup Builder.</p>';
+  const mistakes = new Map();
+  list.filter(t => t.mistakeTag).forEach(trade => {
+    if (!mistakes.has(trade.mistakeTag)) mistakes.set(trade.mistakeTag, []);
+    mistakes.get(trade.mistakeTag).push(trade);
+  });
+  $('analyticsMistakeBody').innerHTML = [...mistakes.entries()].map(([mistake, group]) => {
+    const summary = analyticsSummary(group);
+    return `<tr><td>${escapeHtml(mistake)}</td><td>${group.length}</td><td>${analyticsR(summary.avgR)}</td><td>${analyticsR(summary.rCount ? summary.totalR : null)}</td><td>${pct(summary.directionConfirmed, summary.directionReviewed)}</td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="empty">No mistake-tagged trades in this filter.</td></tr>';
+  const missed = reviewed.filter(t => ['Loss', 'BE'].includes(getWinLoss(t)) && t.analytics.directionConfirmed === 'yes');
+  $('analyticsMissedBody').innerHTML = missed.map(trade => `<tr><td>${escapeHtml(formatDisplayDate(trade.date))}</td><td>${escapeHtml(trade.ticker || '')}</td><td>${analyticsR(validRValue(trade))}</td><td>${escapeHtml(trade.grade || 'Ungraded')}</td><td>${escapeHtml(trade.analytics.entryQuality || '—')}</td><td>${escapeHtml(trade.mistakeTag || '—')}</td><td>${analyticsR(analyticsNumber(trade.analytics.mfe))}</td><td><button type="button" class="openAnalyticsTrade" data-id="${escapeHtml(trade.id)}">Open</button></td></tr>`).join('') || '<tr><td colspan="8" class="empty">No missed winners in this filter.</td></tr>';
+  document.querySelectorAll('.openAnalyticsTrade').forEach(button => button.addEventListener('click', () => openTradeDialog(button.dataset.id)));
+}
+function renderAnalyticsFieldBreakdown(field, list) {
+  const groups = new Map();
+  list.forEach(trade => {
+    const value = trade.analytics?.custom?.[field.id];
+    if (value === undefined || value === null || value === '') return;
+    const key = String(value);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(trade);
+  });
+  if (!groups.size) return '';
+  const rows = [...groups.entries()].map(([value, group]) => {
+    const stats = analyticsSummary(group);
+    return `<tr><td>${escapeHtml(value)}</td><td>${group.length}</td><td>${pct(stats.wins, stats.closed)}</td><td>${pct(stats.directionConfirmed, stats.directionReviewed)}</td><td>${analyticsR(stats.avgR)}</td><td>${analyticsR(stats.rCount ? stats.totalR : null)}</td></tr>`;
+  }).join('');
+  return `<div class="analytics-breakdown-block"><h3>${escapeHtml(field.label)}</h3><div class="grade-table-wrap"><table class="trade-table"><thead><tr><th>Value</th><th>Trades</th><th>Win %</th><th>Direction Confirmed</th><th>Avg R</th><th>Total R</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+if($('addAnalyticsFieldBtn')) $('addAnalyticsFieldBtn').addEventListener('click',()=>{const draft=readSetupDraft();draft.analyticsFields=draft.analyticsFields||[];draft.analyticsFields.push({id:analyticsFieldId(),label:'',type:'yesno',options:[]});fillSetupForm(draft,$('setupSaveMode')?.value||'edit');});
+['analyticsSetup','analyticsVersion','analyticsGrade','analyticsDirection'].forEach(id=>{if($(id))$(id).addEventListener('change',()=>{if(id==='analyticsSetup'&&$('analyticsVersion'))$('analyticsVersion').value='all';renderSetupAnalytics();});});
+if($('resetAnalyticsFilters'))$('resetAnalyticsFilters').addEventListener('click',()=>{if($('analyticsVersion'))$('analyticsVersion').value='all';if($('analyticsGrade'))$('analyticsGrade').value='';if($('analyticsDirection'))$('analyticsDirection').value='';renderSetupAnalytics();});
+if($('editSetup')) $('editSetup').addEventListener('change',()=>{const t=trades.find(x=>x.id===$('editId').value)||{};renderTradeCustomAnalytics(String(t.setup || '').toLowerCase() === String($('editSetup').value).toLowerCase() ? t : {setup:$('editSetup').value});});
+
+
 bootJournal();
 document.querySelectorAll('.datePickerBtn').forEach(btn => btn.addEventListener('click', (event) => { event.stopPropagation(); openDatePicker(btn); }));
 ['compareSetupA','compareSetupB','compareVersionA','compareVersionB','compareGradeA','compareGradeB','breakdownSetupFilter'].forEach(id => { if ($(id)) $(id).addEventListener('change', () => { refreshComparisonOptions(); renderSetupComparison(); }); });
@@ -3455,3 +3674,31 @@ function renderDailyQuote(){
   el.textContent = `“${quote}”`;
 }
 renderDailyQuote();
+
+// v75: saved Setup Builder screenshot viewer navigation.
+(function initSavedSetupScreenshotNavigation(){
+  const dialog = $('imageDialog'), large = $('largeScreenshot'), nav = $('setupScreenshotNav');
+  if (!dialog || !large || !nav) return;
+  function activeGallery(){
+    const setup = setups.find(s => String(s.id||'') === String(large.dataset.setupGallery||''));
+    return setup && Array.isArray(setup.screenshots) ? setup.screenshots : [];
+  }
+  function sync(){
+    const shots = activeGallery();
+    nav.hidden = shots.length < 2;
+    const idx = Math.max(0, Math.min(shots.length-1, Number(large.dataset.setupGalleryIndex||0)));
+    if ($('setupScreenshotCounter')) $('setupScreenshotCounter').textContent = shots.length ? `${idx+1} / ${shots.length}` : '';
+  }
+  function move(delta){
+    const shots = activeGallery(); if (!shots.length) return;
+    let idx = Number(large.dataset.setupGalleryIndex||0);
+    idx = (idx + delta + shots.length) % shots.length;
+    large.dataset.setupGalleryIndex = String(idx);
+    large.src = screenshotSrc(shots[idx]);
+    sync();
+  }
+  $('prevSetupScreenshot')?.addEventListener('click', ()=>move(-1));
+  $('nextSetupScreenshot')?.addEventListener('click', ()=>move(1));
+  dialog.addEventListener('close', ()=>{ delete large.dataset.setupGallery; delete large.dataset.setupGalleryIndex; nav.hidden=true; });
+  const observer = new MutationObserver(sync); observer.observe(large,{attributes:true,attributeFilter:['src']});
+})();

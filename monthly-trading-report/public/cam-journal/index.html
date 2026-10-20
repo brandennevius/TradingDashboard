@@ -22,6 +22,7 @@
       <button class="navBtn" data-view="watchlistView">Watchlist</button>
       <button class="navBtn" data-view="setupBuilderView">Setup Builder</button>
       <button class="navBtn" data-view="setupComparisonView">Setup Comparison</button>
+      <button class="navBtn" data-view="setupAnalyticsView">Setup Analytics</button>
       <button class="navBtn" data-view="monthlyReviewView">Monthly Review</button>
       <button class="navBtn" data-view="playbookView">Playbook</button>
       <button class="navBtn" data-view="dataHealthView">Data Health</button>
@@ -243,6 +244,12 @@
           </div>
           <p class="small">Use ⭐ for must-have criteria. Starred criteria automatically receive 2 max points. Normal criteria receive 1 max point.</p>
 
+          <section class="setup-section analytics-builder-section">
+            <div class="section-head"><div><h3>Analytics Fields</h3><p class="tight">Create setup-specific questions to analyze later. These are separate from grading criteria.</p></div><button type="button" id="addAnalyticsFieldBtn">+ Add Analytics Field</button></div>
+            <div id="analyticsFieldsBuilder" class="analytics-fields-builder"></div>
+            <p class="small">Field types: Yes / No, Dropdown, Number, or Short Text. Dropdown options should be separated with commas.</p>
+          </section>
+
           <section class="screenshot-section">
             <div class="section-head">
               <div><h3>Setup Example Screenshots</h3><p class="tight">Upload example charts for this setup. Click a thumbnail to view it larger.</p></div>
@@ -367,6 +374,24 @@
           </table>
         </div>
       </section>
+    </section>
+
+    <section id="setupAnalyticsView" class="view">
+      <header class="page-head"><div><h2>Setup Analytics</h2><p>Separate Setup Edge From Execution Quality And Discover Which Criteria Actually Matter.</p></div></header>
+      <section class="card report-filters-card">
+        <div class="section-head"><h2>Analytics Filters</h2><button type="button" id="resetAnalyticsFilters">Reset</button></div>
+        <div class="grid compare-filter-grid">
+          <label>Setup<select id="analyticsSetup"><option value="">Select setup</option></select></label>
+          <label>Version<select id="analyticsVersion"><option value="all">All Versions</option></select></label>
+          <label>Grade<select id="analyticsGrade"><option value="">All grades</option></select></label>
+          <label>Direction<select id="analyticsDirection"><option value="">All directions</option><option>Long</option><option>Short</option></select></label>
+        </div>
+      </section>
+      <section class="card"><div class="section-head"><div><h2>Strategy Health</h2><p class="tight">Direction Confirmed and Setup Worked use reviewed trades. Capture Rate is the share of worked setups marked Captured. Win Rate uses closed trades; averages exclude missing values.</p></div></div><div id="analyticsHealth" class="comparison-stats analytics-health"></div></section>
+      <section class="card" style="margin-top:18px"><div class="section-head"><div><h2>Setup Outcome</h2><p class="tight">Worked - Captured vs Worked - Missed separates strategy quality from execution.</p></div></div><div id="analyticsOutcome" class="analytics-outcome-grid"></div></section>
+      <section class="card" style="margin-top:18px"><div class="section-head"><div><h2>Analytics Breakdown</h2><p class="tight">Every custom analytics field is automatically compared against performance.</p></div></div><div id="analyticsBreakdowns"></div></section>
+      <section class="card" style="margin-top:18px"><div class="section-head"><div><h2>Mistake Impact</h2><p class="tight">See which mistakes cost R even when direction was ultimately confirmed.</p></div></div><div class="grade-table-wrap"><table class="trade-table"><thead><tr><th>Mistake</th><th>Trades</th><th>Avg R</th><th>Total R</th><th>Direction Confirmed</th></tr></thead><tbody id="analyticsMistakeBody"></tbody></table></div></section>
+      <section class="card" style="margin-top:18px"><div class="section-head"><div><h2>Missed Winners</h2><p class="tight">Losses or breakeven trades where the original direction was later confirmed.</p></div></div><div class="grade-table-wrap"><table class="trade-table"><thead><tr><th>Date</th><th>Ticker</th><th>R</th><th>Grade</th><th>Entry Quality</th><th>Mistake</th><th>MFE</th><th></th></tr></thead><tbody id="analyticsMissedBody"></tbody></table></div></section>
     </section>
 
     <section id="watchlistView" class="view">
@@ -557,6 +582,19 @@
         <label>Mistake Tag<select id="editMistakeTag"><option value="">No mistake tag</option></select></label>
       </div>
       <label>Checklist / Trade Quality<textarea id="editChecklist"></textarea></label>
+      <section class="card trade-analytics-card">
+        <div class="section-head"><div><h3>Setup Analytics</h3><p class="tight">Fill these in after the trade or during end-of-day review. MFE / MAE are entered in R.</p></div></div>
+        <div class="trade-edit-grid">
+          <label>Direction Confirmed?<select id="editDirectionConfirmed"><option value="">Not reviewed</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+          <label>Setup Outcome<select id="editSetupOutcome"><option value="">Not reviewed</option><option>Worked - Captured</option><option>Worked - Missed</option><option>Failed - Managed</option><option>Failed - Execution Error</option></select></label>
+          <label>Entry Quality<select id="editEntryQuality"><option value="">Not reviewed</option><option>Early</option><option>Ideal</option><option>Late</option></select></label>
+          <label>Setup Followed?<select id="editSetupFollowed"><option value="">Not reviewed</option><option value="yes">Yes</option><option value="no">No</option></select></label>
+          <label>MFE (R)<input id="editMfe" type="number" step="0.01" placeholder="Example: 2.40" /></label>
+          <label>MAE (R)<input id="editMae" type="number" step="0.01" placeholder="Example: -0.65" /></label>
+        </div>
+        <div id="tradeCustomAnalytics" class="trade-custom-analytics"></div>
+        <p class="small">Direction Confirmed should follow the objective confirmation rule you define for the setup, not whether price eventually drifted your way.</p>
+      </section>
       <section class="execution-section card">
         <div class="section-head">
           <div>
@@ -599,7 +637,7 @@
 
   <dialog id="imageDialog" class="image-dialog">
     <button type="button" id="closeImageDialog" class="image-close">×</button>
-    <img id="largeScreenshot" alt="Trade screenshot enlarged" />
+    <img id="largeScreenshot" alt="Screenshot enlarged" /><div id="setupScreenshotNav" class="image-nav" hidden><button type="button" id="prevSetupScreenshot">← Previous</button><span id="setupScreenshotCounter"></span><button type="button" id="nextSetupScreenshot">Next →</button></div>
   </dialog>
 
 

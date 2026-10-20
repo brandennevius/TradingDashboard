@@ -1171,3 +1171,83 @@ body.readonly-journal .feedback-launcher { opacity: 1; pointer-events: auto; }
   }
   .feedback-kind-toggle { width: 100%; }
 }
+
+/* Version 71 Setup Analytics */
+.analytics-builder-section{margin-top:18px;border-top:1px solid #d9e0e7;padding-top:14px}.analytics-fields-builder{display:grid;gap:8px}.analytics-field-row{display:grid;grid-template-columns:minmax(240px,2fr) 150px minmax(200px,1.4fr) auto;gap:8px;align-items:end}.analytics-field-row input,.analytics-field-row select{width:100%}.trade-analytics-card{margin:16px 0;background:#fbfcfe}.trade-custom-analytics{margin-top:10px}.analytics-health{grid-template-columns:repeat(auto-fit,minmax(130px,1fr))}.analytics-outcome-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.analytics-outcome-card{border:1px solid #d8dee6;border-radius:10px;padding:14px;background:#f8fafc;display:flex;justify-content:space-between;align-items:center}.analytics-outcome-card strong{font-size:24px}.analytics-breakdown-block{margin:0 0 22px}.analytics-breakdown-block h3{margin-bottom:8px}@media(max-width:850px){.analytics-field-row{grid-template-columns:1fr}.analytics-outcome-grid{grid-template-columns:1fr 1fr}}
+
+/* Version 74: Setup Analytics dark-theme polish */
+.analytics-builder-section{
+  border-top-color:var(--line);
+}
+.trade-analytics-card{
+  margin:16px 0;
+  background:linear-gradient(145deg,rgba(17,24,39,.96),rgba(15,23,42,.94));
+  border:1px solid var(--line);
+  box-shadow:0 12px 30px rgba(0,0,0,.22);
+}
+.trade-analytics-card h3,
+.trade-analytics-card h2{
+  color:var(--text);
+}
+.trade-analytics-card p,
+.trade-analytics-card .small{
+  color:#9fb3c8;
+}
+.trade-analytics-card input,
+.trade-analytics-card select,
+.trade-analytics-card textarea{
+  background:#020617;
+  color:var(--text);
+  border-color:#334b6b;
+}
+.trade-custom-analytics{
+  margin-top:12px;
+}
+.analytics-outcome-grid{
+  gap:12px;
+}
+.analytics-outcome-card{
+  border:1px solid #334b6b;
+  border-radius:12px;
+  padding:14px;
+  background:linear-gradient(145deg,rgba(15,23,42,.98),rgba(17,24,39,.95));
+  color:var(--text);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.025);
+}
+.analytics-outcome-card span{
+  color:#9fb3c8;
+}
+.analytics-outcome-card strong{
+  color:#bfdbfe;
+}
+.analytics-breakdown-block{
+  border:1px solid var(--line);
+  border-radius:14px;
+  padding:14px;
+  background:rgba(2,6,23,.28);
+}
+.analytics-breakdown-block h3{
+  color:var(--text);
+}
+/* Keep all analytics-area cards consistent with the journal instead of light/white panels. */
+#setupAnalyticsView .card,
+#analyticsView .card,
+[data-view="setupAnalytics"] .card{
+  background:linear-gradient(145deg,rgba(17,24,39,.96),rgba(15,23,42,.94));
+  border-color:var(--line);
+  color:var(--text);
+}
+#setupAnalyticsView .stat,
+#analyticsView .stat,
+[data-view="setupAnalytics"] .stat{
+  background:rgba(15,23,42,.78);
+  border:1px solid #334b6b;
+  border-radius:14px;
+  padding:14px;
+}
+#setupAnalyticsView .stat strong,
+#analyticsView .stat strong,
+[data-view="setupAnalytics"] .stat strong{
+  color:#e5edff;
+}
+.image-nav{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px}.image-nav[hidden]{display:none}.image-nav button{min-width:110px}
