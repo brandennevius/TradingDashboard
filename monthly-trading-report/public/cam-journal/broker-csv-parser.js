@@ -339,7 +339,8 @@
     "notes",
     "screenshots",
     "playbookScreenshotIndex",
-    "customTags"
+    "customTags",
+    "analytics"
   ];
 
   function cleanBrokerImportNoteText(text) {
