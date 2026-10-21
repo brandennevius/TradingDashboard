@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { after, NextResponse } from "next/server";
+import { refreshMarketArchive } from "@/lib/market-context-service";
 import crypto from "node:crypto";
 import { getSessionUser } from "@/lib/auth";
 import { buildCfTradesFromExecutionHistory, parseCfStatementText } from "@/lib/cf-statement";
@@ -127,6 +128,11 @@ export async function POST(request: Request) {
     const openTrades = rebuiltTrades.filter((trade) => trade.status === "OPEN").length;
     const closedTrades = rebuiltTrades.length - openTrades;
     const needsReview = rebuiltTrades.filter((trade) => trade.customTags.includes("Needs review")).length;
+
+    if (user.id === "branden") after(async () => {
+      try { await refreshMarketArchive(); }
+      catch (error) { console.error("Post-import market history refresh failed", error instanceof Error ? error.message : "unknown"); }
+    });
 
     return NextResponse.json({
       imported: rebuiltTrades.length,

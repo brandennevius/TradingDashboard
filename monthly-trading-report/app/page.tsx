@@ -1,6 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
+import TradeMarketContext from "@/app/components/TradeMarketContext";
 import { CSSProperties, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
@@ -5353,6 +5354,8 @@ export default function Home() {
                   </div>
                 </article>
               ) : null}
+
+              {selectedTrade.userId === "branden" ? <TradeMarketContext key={selectedTrade.id} tradeId={selectedTrade.id} updatedAt={selectedTrade.updatedAt} /> : null}
 
               <article className="trade-detail-section">
                 <div className="trade-section-heading-row">

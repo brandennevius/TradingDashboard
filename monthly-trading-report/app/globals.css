@@ -9203,3 +9203,19 @@ th {
 .trade-merge-dialog h2 { margin-top: 0; }
 .trade-merge-dialog p { line-height: 1.5; }
 .trade-merge-dialog-actions { display: flex; justify-content: flex-end; gap: 12px; margin-top: 24px; }
+
+/* Market history stays compact; daily rows render only on expansion. */
+.market-context-table-wrap { overflow-x: auto; }
+.market-context-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.market-context-table th, .market-context-table td { padding: .45rem .65rem; text-align: left; border-bottom: 1px solid rgba(120,145,105,.22); }
+.market-context-table th { font-weight: 650; }
+.market-context-table small, .market-context-cell small { display: block; font-size: .72rem; font-weight: 400; opacity: .8; margin-top: .15rem; }
+.market-context-note { font-size: .78rem; color: #5a6556; }
+.market-context-panel details { margin-top: .6rem; }
+.market-context-panel summary { cursor: pointer; font-size: .82rem; }
+.market-context-history { max-height: 18rem; overflow: auto; margin-top: .6rem; }
+.market-context-cell { display: inline-block; white-space: nowrap; font-size: .82rem; }
+.market-context-filters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .7rem; margin: .6rem 0 1rem; }
+.market-context-filters label { display: grid; gap: .25rem; font-size: .8rem; }
+.market-context-filters select { max-width: 14rem; padding: .4rem; border: 1px solid #b9c9ad; border-radius: .35rem; background: #fffdf6; color: #2f352d; }
+.market-context-filters > small { font-size: .75rem; color: #5a6556; padding-bottom: .45rem; }

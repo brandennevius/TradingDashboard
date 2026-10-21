@@ -7,6 +7,7 @@ import type { SetupChecklistTemplate, TradeLogEntry, TraderUser } from "@/lib/ty
 import type { TradeExcursionResult } from "@/lib/trade-excursion";
 import { buildTradeLogCsv, tradeLogCsvFilename } from "@/lib/trade-log-csv";
 import { tradeChecklistScore as checklistScore, tradeNeedsReview, tradeReviewMissingFields } from "@/lib/trade-review";
+import type { MarketSummary } from "@/lib/trade-market-context";
 import type { WeeklyFocus } from "@/lib/weekly-focus";
 
 type PortfolioSettingsResponse = {
@@ -14,7 +15,7 @@ type PortfolioSettingsResponse = {
   defaultPortfolio?: string;
 };
 
-type TradeFilterKey = "status" | "side" | "symbol" | "setup" | "grade" | "review";
+type TradeFilterKey = "status" | "side" | "symbol" | "setup" | "grade" | "review" | "marketEntry" | "marketEndpoint" | "marketTransition";
 type SortDirection = "asc" | "desc";
 type TradeColumnKey =
   | "status"
@@ -38,7 +39,8 @@ type TradeColumnKey =
   | "mistake"
   | "custom"
   | "grade"
-  | "review";
+  | "review"
+  | "market";
 type ColumnPreference = {
   key: TradeColumnKey;
   visible: boolean;
@@ -64,7 +66,7 @@ type ReviewCompletionIssue = {
   missing: string[];
 };
 
-const filterKeys: TradeFilterKey[] = ["status", "side", "symbol", "setup", "grade", "review"];
+const filterKeys: TradeFilterKey[] = ["status", "side", "symbol", "setup", "grade", "review", "marketEntry", "marketEndpoint", "marketTransition"];
 const tradeColumnKeys = [
   "status",
   "side",
@@ -87,7 +89,8 @@ const tradeColumnKeys = [
   "mistake",
   "custom",
   "grade",
-  "review"
+  "review",
+  "market"
 ] as const satisfies TradeColumnKey[];
 
 const defaultColumns: ColumnPreference[] = [
@@ -112,7 +115,8 @@ const defaultColumns: ColumnPreference[] = [
   { key: "mistake", visible: false },
   { key: "custom", visible: true },
   { key: "grade", visible: true },
-  { key: "review", visible: true }
+  { key: "review", visible: true },
+  { key: "market", visible: true }
 ];
 
 function sortedUnique(values: string[]) {
@@ -284,7 +288,7 @@ function initialTradeLogState() {
       symbol: null,
       setup: null,
       grade: null,
-      review: null
+      review: null, marketEntry: null, marketEndpoint: null, marketTransition: null
     } as Record<TradeFilterKey, string[] | null>,
     startDate: monthStartDate(),
     endDate: localDate(),
@@ -339,7 +343,8 @@ function columnLabel(key: TradeColumnKey) {
     mistake: "Mistake",
     custom: "Custom tags",
     grade: "Grade",
-    review: "Review"
+    review: "Review",
+    market: "Market"
   };
   return labels[key];
 }
@@ -414,6 +419,19 @@ export default function BrandenTradeLogPage() {
   }
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
+  const [marketContexts, setMarketContexts] = useState<Record<string, MarketSummary>>({});
+  const [marketWarning, setMarketWarning] = useState("");
+  const [marketLoading, setMarketLoading] = useState(true);
+  useEffect(() => {
+    const controller = new AbortController();
+    setMarketLoading(true);
+    fetch("/api/journal/branden/market-context", { cache: "no-store", signal: controller.signal })
+      .then(async (r) => { const data = await r.json(); if (!r.ok) throw new Error(data.error || "Market history unavailable."); return data; })
+      .then((data) => { setMarketContexts(data.contexts || {}); setMarketWarning(data.warning || ""); })
+      .catch((e) => { if (!controller.signal.aborted) setMarketWarning(e.message); })
+      .finally(() => { if (!controller.signal.aborted) setMarketLoading(false); });
+    return () => controller.abort();
+  }, [trades]);
   const [setupTemplates, setSetupTemplates] = useState<SetupChecklistTemplate[]>([]);
   const [activePortfolio, setActivePortfolio] = useState(initialStateRef.current.portfolio);
   const [filters, setFilters] = useState<Record<TradeFilterKey, string[] | null>>(initialStateRef.current.filters);
@@ -550,9 +568,12 @@ export default function BrandenTradeLogPage() {
       symbol: sortedUnique(rangeTrades.map((trade) => trade.symbol)),
       setup: sortedUnique(rangeTrades.map(primarySetup)),
       grade: sortedUnique(rangeTrades.map((trade) => checklistScore(trade, setupTemplates).grade)),
-      review: ["Needs Review", "Complete"]
+      review: ["Needs Review", "Complete"],
+      marketEntry: ["Grow", "Neutral", "Protect", "Unavailable"],
+      marketEndpoint: ["Grow", "Neutral", "Protect", "Unavailable"],
+      marketTransition: sortedUnique(rangeTrades.map((t) => marketContexts[t.id]?.transition || "Unavailable → Unavailable"))
     }),
-    [rangeTrades, setupTemplates]
+    [rangeTrades, setupTemplates, marketContexts]
   );
   const filteredTrades = useMemo(
     () => {
@@ -561,6 +582,9 @@ export default function BrandenTradeLogPage() {
         .filter((trade) => filters.status === null || filters.status.includes(normalizedTradeStatus(trade)))
         .filter((trade) => filters.side === null || filters.side.includes(trade.side))
         .filter((trade) => filters.symbol === null || filters.symbol.includes(trade.symbol))
+        .filter((trade) => filters.marketEntry === null || filters.marketEntry.includes(marketContexts[trade.id]?.entryState || "Unavailable"))
+        .filter((trade) => filters.marketEndpoint === null || filters.marketEndpoint.includes(marketContexts[trade.id]?.endpointState || "Unavailable"))
+        .filter((trade) => filters.marketTransition === null || filters.marketTransition.includes(marketContexts[trade.id]?.transition || "Unavailable → Unavailable"))
         .filter((trade) => !tickerSearch || trade.symbol.toUpperCase().includes(tickerSearch))
         .filter((trade) => filters.setup === null || filters.setup.includes(primarySetup(trade)))
         .filter((trade) => filters.grade === null || filters.grade.includes(checklistScore(trade, setupTemplates).grade))
@@ -572,12 +596,12 @@ export default function BrandenTradeLogPage() {
 
       return [...visible].sort((a, b) => {
         const comparison = sort
-          ? tradeSortComparison(sort.key, a, b, setupTemplates) * (sort.direction === "asc" ? 1 : -1)
+          ? (sort.key === "market" ? compareText(marketContexts[a.id]?.transition || "Unavailable", marketContexts[b.id]?.transition || "Unavailable") : tradeSortComparison(sort.key, a, b, setupTemplates)) * (sort.direction === "asc" ? 1 : -1)
           : (b.entryDate || "").localeCompare(a.entryDate || "");
         return comparison || a.symbol.localeCompare(b.symbol) || a.id.localeCompare(b.id);
       });
     },
-    [filters, rangeTrades, setupTemplates, sort, symbolSearch]
+    [filters, rangeTrades, setupTemplates, sort, symbolSearch, marketContexts]
   );
   const selectedVisibleTrades = useMemo(
     () => filteredTrades.filter((trade) => selectedTradeIds.includes(trade.id)),
@@ -785,6 +809,12 @@ export default function BrandenTradeLogPage() {
 
   function renderTradeCell(key: TradeColumnKey, trade: TradeLogEntry, grade: string, review: string) {
     switch (key) {
+      case "market": {
+        const context = marketContexts[trade.id];
+        return <span className="market-context-cell" title={context ? `Entry: ${context.entrySession || "unavailable"} close; ${context.endpointLabel.toLowerCase()}: ${context.endpointSession || "unavailable"} close` : "Market history unavailable"}>
+          {context?.transition || (marketLoading ? "Loading…" : "Unavailable")}<small>{context?.endpointLabel || (trade.status === "OPEN" ? "Current" : "At exit")}</small>
+        </span>;
+      }
       case "status":
         const status = normalizedTradeStatus(trade);
         return <span className={`trade-badge ${status.toLowerCase()}`}>{status}</span>;
@@ -1260,6 +1290,15 @@ export default function BrandenTradeLogPage() {
           {user ? <span>Signed in as {user.name}</span> : null}
         </section>
 
+        <section className="market-context-filters" aria-label="Market context filters">
+          {([["marketEntry", "Market at entry"], ["marketEndpoint", "Market current / at exit"], ["marketTransition", "Market transition"]] as const).map(([key, label]) => <label key={key}>{label}
+            <select value={filters[key]?.[0] || ""} disabled={marketLoading} onChange={(e) => setFilters((current) => ({ ...current, [key]: e.target.value ? [e.target.value] : null }))}>
+              <option value="">All</option>{filterOptions[key].map((option) => <option key={option} value={option}>{option}</option>)}
+            </select>
+          </label>)}
+          <small>Session-close context. Filtered stats update with the selection.</small>
+        </section>
+        {marketWarning ? <p className="market-context-note" role="status">{marketWarning}</p> : null}
         {status ? <p className="status trade-log-status">{status}</p> : null}
         {error ? <p className="status error">{error}</p> : null}
         {reviewCompletionIssues.length ? (

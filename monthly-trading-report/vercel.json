@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/market-context",
+      "schedule": "30 22 * * 1-5"
+    },
+    {
       "path": "/api/cron/cam-journal-backup",
       "schedule": "15 5 * * *"
     }
