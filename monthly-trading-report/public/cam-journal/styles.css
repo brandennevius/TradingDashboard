@@ -1251,3 +1251,4 @@ body.readonly-journal .feedback-launcher { opacity: 1; pointer-events: auto; }
   color:#e5edff;
 }
 .image-nav{display:flex;align-items:center;justify-content:center;gap:12px;margin-top:12px}.image-nav[hidden]{display:none}.image-nav button{min-width:110px}
+.analytics-r-preview{margin-top:6px;min-height:34px;padding:7px 10px;font-size:13px}

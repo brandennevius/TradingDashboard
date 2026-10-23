@@ -2118,8 +2118,8 @@ function openTradeDialog(id) {
   if ($('editSetupOutcome')) $('editSetupOutcome').value = trade.analytics?.setupOutcome || '';
   if ($('editEntryQuality')) $('editEntryQuality').value = trade.analytics?.entryQuality || '';
   if ($('editSetupFollowed')) $('editSetupFollowed').value = trade.analytics?.setupFollowed || '';
-  if ($('editMfe')) $('editMfe').value = trade.analytics?.mfe ?? '';
-  if ($('editMae')) $('editMae').value = trade.analytics?.mae ?? '';
+  loadExcursionPriceInputs(trade);
+  updateExcursionRPreview();
   renderTradeCustomAnalytics(trade);
   updateAtrStats();
   renderScreenshotGallery(trade);
@@ -3490,6 +3490,58 @@ function renderTradeCustomAnalytics(trade) {
   }).join('') + '</div>';
   if (journalReadOnly) box.querySelectorAll('input,select').forEach(control => control.disabled = true);
 }
+function excursionTradeInputs(trade) {
+  return {
+    entry: $('editEntry')?.value || trade?.entry,
+    size: trade?.size,
+    risk: $('editRisk')?.value || trade?.risk,
+    direction: trade?.direction
+  };
+}
+function excursionRFromPrice(price, trade) {
+  return globalThis.CamTradeExcursion.rFromPrice(price, excursionTradeInputs(trade));
+}
+function excursionPriceFromR(rValue, trade) {
+  return globalThis.CamTradeExcursion.priceFromR(rValue, {
+    entry: trade?.entry,
+    size: trade?.size,
+    risk: trade?.risk,
+    direction: trade?.direction
+  });
+}
+function loadExcursionPriceInput(inputId, priceKey, rKey, trade) {
+  const input = $(inputId);
+  if (!input) return;
+  const savedPrice = analyticsNumber(trade.analytics?.[priceKey]);
+  const savedR = analyticsNumber(trade.analytics?.[rKey]);
+  const migratedPrice = savedPrice ?? excursionPriceFromR(savedR, trade);
+  input.value = migratedPrice === null ? '' : Number(migratedPrice).toFixed(4);
+  input.dataset.preserveLegacyR = migratedPrice === null && savedR !== null ? 'true' : '';
+  input.dataset.legacyR = savedR === null ? '' : String(savedR);
+}
+function loadExcursionPriceInputs(trade) {
+  loadExcursionPriceInput('editMfePrice', 'mfePrice', 'mfe', trade);
+  loadExcursionPriceInput('editMaePrice', 'maePrice', 'mae', trade);
+}
+function updateExcursionPreview(inputId, outputId, label, trade) {
+  const input = $(inputId);
+  const output = $(outputId);
+  if (!input || !output) return;
+  const calculated = excursionRFromPrice(input.value, trade);
+  if (calculated !== null) {
+    output.textContent = `Calculated ${label}: ${calculated >= 0 ? '+' : ''}${calculated.toFixed(2)}R`;
+    return;
+  }
+  const legacyR = input.dataset.preserveLegacyR === 'true' ? analyticsNumber(input.dataset.legacyR) : null;
+  output.textContent = legacyR === null
+    ? `Calculated ${label}: —`
+    : `Saved ${label}: ${legacyR >= 0 ? '+' : ''}${legacyR.toFixed(2)}R`;
+}
+function updateExcursionRPreview() {
+  const trade = trades.find(candidate => candidate.id === $('editId')?.value) || {};
+  updateExcursionPreview('editMfePrice', 'editMfeCalculated', 'MFE', trade);
+  updateExcursionPreview('editMaePrice', 'editMaeCalculated', 'MAE', trade);
+}
 function readTradeAnalytics(existing) {
   const selectedSetup = $('editSetup')?.value || existing.setup;
   const setup = getSetupByName(selectedSetup);
@@ -3501,14 +3553,22 @@ function readTradeAnalytics(existing) {
     if (fields.some(field => field.id === el.dataset.fieldId)) custom[el.dataset.fieldId] = el.value;
   });
   const previous = sameSetup ? (existing.analytics || {}) : {};
+  const mfePrice = analyticsNumber($('editMfePrice')?.value);
+  const maePrice = analyticsNumber($('editMaePrice')?.value);
+  const calculatedMfe = mfePrice === null ? null : excursionRFromPrice(mfePrice, existing);
+  const calculatedMae = maePrice === null ? null : excursionRFromPrice(maePrice, existing);
+  const preserveMfe = $('editMfePrice')?.dataset?.preserveLegacyR === 'true';
+  const preserveMae = $('editMaePrice')?.dataset?.preserveLegacyR === 'true';
   return {
     ...previous,
     directionConfirmed: $('editDirectionConfirmed')?.value || '',
     setupOutcome: $('editSetupOutcome')?.value || '',
     entryQuality: $('editEntryQuality')?.value || '',
     setupFollowed: $('editSetupFollowed')?.value || '',
-    mfe: analyticsNumber($('editMfe')?.value) ?? '',
-    mae: analyticsNumber($('editMae')?.value) ?? '',
+    mfePrice: mfePrice ?? '',
+    maePrice: maePrice ?? '',
+    mfe: calculatedMfe ?? (preserveMfe ? previous.mfe : ''),
+    mae: calculatedMae ?? (preserveMae ? previous.mae : ''),
     custom,
     fieldsSnapshot: deepClone(fields),
     setupVersion: Number(previous.setupVersion || (sameSetup && existing.setupScore?.setupVersion) || setup?.currentVersion || 1),
@@ -3621,6 +3681,14 @@ if($('addAnalyticsFieldBtn')) $('addAnalyticsFieldBtn').addEventListener('click'
 ['analyticsSetup','analyticsVersion','analyticsGrade','analyticsDirection'].forEach(id=>{if($(id))$(id).addEventListener('change',()=>{if(id==='analyticsSetup'&&$('analyticsVersion'))$('analyticsVersion').value='all';renderSetupAnalytics();});});
 if($('resetAnalyticsFilters'))$('resetAnalyticsFilters').addEventListener('click',()=>{if($('analyticsVersion'))$('analyticsVersion').value='all';if($('analyticsGrade'))$('analyticsGrade').value='';if($('analyticsDirection'))$('analyticsDirection').value='';renderSetupAnalytics();});
 if($('editSetup')) $('editSetup').addEventListener('change',()=>{const t=trades.find(x=>x.id===$('editId').value)||{};renderTradeCustomAnalytics(String(t.setup || '').toLowerCase() === String($('editSetup').value).toLowerCase() ? t : {setup:$('editSetup').value});});
+['editMfePrice','editMaePrice','editRisk','editEntry'].forEach(id => {
+  const input = $(id);
+  if (!input) return;
+  input.addEventListener('input', () => {
+    if (id === 'editMfePrice' || id === 'editMaePrice') input.dataset.preserveLegacyR = '';
+    updateExcursionRPreview();
+  });
+});
 
 
 bootJournal();
