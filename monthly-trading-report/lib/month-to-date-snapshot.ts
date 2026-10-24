@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { buildDailyPortfolioSnapshot, newYorkTimestamp, type SnapshotPrice } from "./daily-portfolio-snapshot";
 import { resolvedTradeReviewSections } from "./trade-review";
 import type { TradeChecklistItem, TradeExecution, TradeLogEntry } from "./types";
-import { normalizeWeeklyFocus, type WeeklyFocus } from "./weekly-focus";
 
 export const MONTH_TO_DATE_SNAPSHOT_SCHEMA_VERSION = "month-to-date-trading-snapshot-v1";
 import { ACCOUNT_LOSS_THRESHOLD_DOLLARS } from "./portfolio-exposure";
@@ -75,7 +74,6 @@ export type MonthToDateSnapshotInput = {
   trades: TradeLogEntry[];
   portfolioMeta?: PortfolioMeta;
   prices: Map<string, SnapshotPrice>;
-  weeklyFocus?: WeeklyFocus;
   sourceEnvironment: string;
   applicationVersion: string;
 };
@@ -282,7 +280,6 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
     prices: projectionPrices,
     sourceEnvironment: input.sourceEnvironment,
     applicationVersion: input.applicationVersion,
-    weeklyFocus: input.weeklyFocus
   });
   const projectedPositions = new Map(dailyProjection.open_positions.map((position) => [position.trade_id, position]));
 
@@ -474,7 +471,6 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
   diagnostics.push(diagnostic("STARTING_EQUITY_UNAVAILABLE", "Beginning-of-month authoritative equity is not persisted.", "warning", undefined, "account_summary.starting_equity"));
   diagnostics.push(diagnostic("DAILY_EQUITY_HISTORY_UNAVAILABLE", "Daily equity history is not persisted; daily equity and maximum drawdown are unavailable.", "warning", undefined, "daily_equity"));
   diagnostics.push(diagnostic("CASH_MOVEMENT_LEDGER_UNAVAILABLE", "Deposits, withdrawals, and account adjustments are not persisted in a dedicated ledger.", "warning", undefined, "account_summary"));
-  diagnostics.push(diagnostic("WEEKLY_FOCUS_HISTORY_UNAVAILABLE", "Only the current weekly focus is stored; historical focus changes are unavailable.", "info", undefined, "weekly_focus_history"));
   diagnostics.push(diagnostic("FUNDAMENTAL_CLASSIFICATION_UNAVAILABLE", "Sector, industry group, catalyst, and earnings-date fields are not stored on Trade Detail records.", "info"));
   diagnostics.push(diagnostic("USER_AUTHORED_CHANGE_HISTORY_UNAVAILABLE", "User-authored field-change history is not persisted independently; generic import updated_at timestamps are excluded from MTD activity.", "info"));
 
@@ -657,8 +653,6 @@ export function buildMonthToDateSnapshot(input: MonthToDateSnapshotInput) {
       trades_with_adds_pct: trades.length ? round(trades.filter((trade) => trade.executions.filter((item) => item.fill_type === "ADD").length).length / trades.length * 100) : null,
       trades_with_partial_exits_pct: trades.length ? round(trades.filter((trade) => trade.executions.some((item) => item.fill_type === "PARTIAL_EXIT")).length / trades.length * 100) : null
     },
-    weekly_focus: normalizeWeeklyFocus(input.weeklyFocus),
-    weekly_focus_history: [],
     daily_equity: [],
     daily_performance: dailyPerformance,
     open_positions: openTrades,
@@ -766,10 +760,6 @@ export function renderMonthToDateSnapshotMarkdown(snapshot: ReturnType<typeof bu
   if (!snapshot.open_positions.length) lines.push("| — | — | — | — | — | — |");
   lines.push("", "## Closed Trade Index", "", "| Symbol | Status | Entry | Exit | MTD P&L | Lifecycle P&L | Manual grade | Criteria grade | Setup | Risk | MTD R |", "|---|---|---|---|---:|---:|---|---|---|---:|---:|");
   snapshot.trades.filter((trade) => trade.financials.realized_mtd_pnl !== 0).forEach((trade) => lines.push(`| ${trade.symbol} | ${trade.status} | ${trade.opened_at || "—"} | ${trade.closed_at || "—"} | ${money(trade.financials.realized_mtd_pnl)} | ${money(trade.financials.total_trade_pnl)} | ${trade.classification.user_assigned_grade || "—"} | ${trade.criteria_evaluation.derived_grade || "—"} | ${trade.classification.setup || "—"} | ${money(trade.financials.planned_risk)} | ${metric(trade.financials.realized_mtd_r, "R")} |`));
-  lines.push("", "## Weekly Process Focus", "");
-  if (snapshot.weekly_focus.status === "AVAILABLE") {
-    lines.push(`- Week start: ${snapshot.weekly_focus.week_start || "—"}`, `- Summary: ${snapshot.weekly_focus.summary || "—"}`, ...snapshot.weekly_focus.focus_items.map((item) => `- ${item}`));
-  } else lines.push(`- Status: ${snapshot.weekly_focus.status}`);
   lines.push("", "## Data-Quality Warnings", "");
   const diagnosticGroups = aggregateMtdDiagnostics(snapshot.diagnostics);
   lines.push("### Counts by code", "");

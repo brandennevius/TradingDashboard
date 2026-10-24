@@ -4,14 +4,12 @@ import packageJson from "../package.json";
 import { latestCompletedMarketSession, marketSessionCloseTimestamp, type SnapshotPrice } from "./daily-portfolio-snapshot";
 import { getMarketCandlesWithProvider } from "./market-data";
 import { buildMonthToDateSnapshot, renderMonthToDateSnapshotMarkdown, resolveMtdPeriod, summarizeMtdDiagnostics, validateMonthToDateSnapshot } from "./month-to-date-snapshot";
-import { getBrandenPortfolioSettings, getWeeklyProcessFocus, listBrandenVisibleTrades } from "./store";
+import { getBrandenPortfolioSettings, listBrandenVisibleTrades } from "./store";
 import type { TradeLogEntry } from "./types";
-import type { WeeklyFocus } from "./weekly-focus";
 
 type Dependencies = {
   loadTrades: () => Promise<TradeLogEntry[]>;
   loadPortfolioSettings: typeof getBrandenPortfolioSettings;
-  loadWeeklyFocus: () => Promise<WeeklyFocus>;
   loadPrice: (symbol: string, asOfDate: string) => Promise<SnapshotPrice>;
   now: () => Date;
 };
@@ -85,7 +83,6 @@ export async function generateMonthToDateSnapshot(options: GenerateMonthToDateSn
   const dependencies: Dependencies = {
     loadTrades: listBrandenVisibleTrades,
     loadPortfolioSettings: getBrandenPortfolioSettings,
-    loadWeeklyFocus: () => getWeeklyProcessFocus("branden"),
     loadPrice,
     now: () => new Date(),
     ...options.dependencies
@@ -95,8 +92,8 @@ export async function generateMonthToDateSnapshot(options: GenerateMonthToDateSn
   if (period.asOfDate > nyDate(now)) {
     throw new MonthToDateSnapshotValidationError("AS_OF_DATE_IN_FUTURE", "The selected as-of date is in the future.", { selectedAsOfDate: period.asOfDate, currentNewYorkDate: nyDate(now) });
   }
-  const [allTrades, settings, weeklyFocus] = await Promise.all([
-    dependencies.loadTrades(), dependencies.loadPortfolioSettings(), dependencies.loadWeeklyFocus()
+  const [allTrades, settings] = await Promise.all([
+    dependencies.loadTrades(), dependencies.loadPortfolioSettings()
   ]);
   const portfolioName = String(options.portfolioName || settings.defaultPortfolio || "").trim();
   if (!portfolioName || (settings.portfolios.length && !settings.portfolios.includes(portfolioName))) {
@@ -121,7 +118,6 @@ export async function generateMonthToDateSnapshot(options: GenerateMonthToDateSn
       current_unrealized_pnl: null,
       current_planned_downside_risk: null,
       execution_based_report_available_through: coverage || null,
-      weekly_focus: weeklyFocus
     });
   }
   const requiredMarketStateDate = latestCompletedMarketSession(new Date(period.end));
@@ -176,7 +172,6 @@ export async function generateMonthToDateSnapshot(options: GenerateMonthToDateSn
     trades,
     portfolioMeta,
     prices,
-    weeklyFocus,
     sourceEnvironment: process.env.NODE_ENV || "development",
     applicationVersion: packageJson.version
   });

@@ -11,14 +11,12 @@ import {
   type SnapshotWarning
 } from "./daily-portfolio-snapshot";
 import { getExactMarketSessionPrice } from "./market-data";
-import { getBrandenPortfolioSettings, getWeeklyProcessFocus, listBrandenVisibleTrades } from "./store";
+import { getBrandenPortfolioSettings, listBrandenVisibleTrades } from "./store";
 import type { TradeLogEntry } from "./types";
-import type { WeeklyFocus } from "./weekly-focus";
 
 type SnapshotDependencies = {
   loadTrades: () => Promise<TradeLogEntry[]>;
   loadPortfolioSettings: typeof getBrandenPortfolioSettings;
-  loadWeeklyFocus: () => Promise<WeeklyFocus>;
   loadPrice: (symbol: string, session: string) => Promise<SnapshotPrice>;
   now: () => Date;
 };
@@ -247,7 +245,6 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
   const dependencies: SnapshotDependencies = {
     loadTrades: listBrandenVisibleTrades,
     loadPortfolioSettings: getBrandenPortfolioSettings,
-    loadWeeklyFocus: () => getWeeklyProcessFocus("branden"),
     loadPrice: loadSessionPrice,
     now: () => new Date(),
     ...options.dependencies
@@ -269,10 +266,9 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
       diagnostic
     );
   }
-  const [trades, portfolioSettings, weeklyFocus] = await Promise.all([
+  const [trades, portfolioSettings] = await Promise.all([
     dependencies.loadTrades(),
     dependencies.loadPortfolioSettings(),
-    dependencies.loadWeeklyFocus()
   ]);
   const accountName = String(options.accountName || portfolioSettings.defaultPortfolio || "").trim();
   if (!accountName) throw new SnapshotValidationError("PORTFOLIO_UNRESOLVED", "No portfolio is selected and no default portfolio is configured.");
@@ -321,7 +317,6 @@ export async function generateDailyPortfolioSnapshot(options: GenerateDailyPortf
     prices,
     sourceEnvironment: process.env.NODE_ENV || "development",
     applicationVersion: packageJson.version,
-    weeklyFocus
   });
   const unrelatedNeedsReview = brokerDiagnostic?.needsReviewRows.filter((row) => !row.affectsRequestedSnapshot) || [];
   if (unrelatedNeedsReview.length) {

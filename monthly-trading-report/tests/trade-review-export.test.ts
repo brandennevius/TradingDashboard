@@ -214,22 +214,16 @@ test("price preflight blocks an over-budget generation request", async () => {
 
 test("Word report is a concise period review and keeps strategy material private", async () => {
   const data = evidence(); data.images["trade-1"] = [{ label: "Actual trade chart", dataUrl: chart() }, { label: "Comparison example chart", dataUrl: chart() }];
-  const focus = { status: "AVAILABLE" as const, week_start: "2026-09-07", updated_at: "2026-09-07T09:00:00-04:00", source: "USER_DEFINED_WEEKLY_REVIEW" as const, summary: "Take only planned swing setups and follow the written exit rule.", focus_items: [] };
-  const document = await buildDocument([trade()], templates, "2026-09-01", "2026-09-07", data, review(), focus);
+  const document = await buildDocument([trade()], templates, "2026-09-01", "2026-09-07", data, review());
   const buffer = await Packer.toBuffer(document);
   const zip = await JSZip.loadAsync(buffer); const xml = await zip.file("word/document.xml")!.async("string");
   for (const text of ["Period Overview", "What Went Well", "Key Mistakes", "Exposure and Correlation", "Trade Snapshot", "What to Work On", "Rule going forward", "Track:", "Bottom Line"]) assert(xml.includes(text), text);
   for (const excluded of ["Strategy Context", "Charts and Model Examples", "Breakout rules", "Enter near the pivot", "General review", "MAE and MFE", "No bars available", "Legacy notes"]) assert(!xml.includes(excluded), excluded);
   assert.equal((xml.match(/<w:drawing>/g) || []).length, 0);
   assert(xml.includes('w:val="Title"'));
-  assert(xml.includes("headerReference"));
+  assert(!xml.includes("headerReference"));
   const headerNames = Object.keys(zip.files).filter((name) => /^word\/header\d+\.xml$/.test(name));
-  assert.equal(headerNames.length, 3);
-  for (const headerName of headerNames) {
-    const headerXml = await zip.file(headerName)!.async("string");
-    assert(headerXml.includes("WEEKLY FOCUS"));
-    assert(headerXml.includes("Take only planned swing setups"));
-  }
+  assert.equal(headerNames.length, 0);
   if (process.env.REVIEW_QA_PATH) {
     const qaTrades = Array.from({ length: 20 }, (_, index) => trade({
       id: `trade-${index + 1}`,

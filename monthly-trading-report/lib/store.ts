@@ -14,7 +14,6 @@ import type { CfStatementReplacementTrade } from "./cf-import-reconciliation";
 import { runAtomicCfImport, type CfWorkingOrderMetadata } from "./cf-import-idempotency";
 import { normalizeTradeReviewSections } from "./trade-review";
 import { displayTradeReturnPercent } from "./trade-return";
-import { createUserDefinedWeeklyFocus, normalizeWeeklyFocus, type WeeklyFocus } from "./weekly-focus";
 import type {
   ChecklistGradeBand,
   ChecklistInputType,
@@ -1715,43 +1714,6 @@ export async function saveMarketCycleEntry(input: MarketCycleEntryInput) {
   );
 
   return normalizeMarketCycleEntries(result.rows[0]?.value, input.userId);
-}
-
-export async function getWeeklyProcessFocus(userId: string): Promise<WeeklyFocus> {
-  const key = `weekly_process_focus_${userId}`;
-  const db = getPool();
-  if (!db) {
-    const settings = await readLocalSettings();
-    return normalizeWeeklyFocus(settings[key]);
-  }
-  await ensureSettingsTable();
-  const result = await db.query("select value from app_settings where key = $1", [key]);
-  return normalizeWeeklyFocus(result.rows[0]?.value);
-}
-
-export async function saveWeeklyProcessFocus(
-  userId: string,
-  input: { summary?: unknown; focusItems?: unknown },
-  now = new Date()
-): Promise<WeeklyFocus> {
-  const key = `weekly_process_focus_${userId}`;
-  const focus = createUserDefinedWeeklyFocus(input, now);
-  const db = getPool();
-  if (!db) {
-    if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required in production before weekly focus can be saved.");
-    const settings = await readLocalSettings();
-    settings[key] = focus;
-    await writeLocalSettings(settings);
-    return focus;
-  }
-  await ensureSettingsTable();
-  const result = await db.query(
-    `insert into app_settings (key, value) values ($1, $2::jsonb)
-     on conflict (key) do update set value = excluded.value, updated_at = now()
-     returning value`,
-    [key, JSON.stringify(focus)]
-  );
-  return normalizeWeeklyFocus(result.rows[0]?.value);
 }
 
 function normalizeFeedbackMessages(value: unknown): FeedbackTicketMessage[] {
@@ -4065,6 +4027,7 @@ const BRANDEN_BACKUP_SETTING_KEYS = [
   "setup_checklist_templates",
   "market_cycle_entries_branden",
   "weekly_watchlists_branden",
+  // Preserve retired focus data when round-tripping existing journal backups.
   "weekly_process_focus_branden"
 ] as const;
 

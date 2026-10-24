@@ -2000,72 +2000,6 @@ th {
   padding: 8px 10px;
 }
 
-.trade-log-weekly-focus {
-  align-items: start;
-  display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(220px, 0.7fr) minmax(320px, 1.3fr);
-}
-
-.trade-log-weekly-focus-copy h2 {
-  font-size: 1.25rem;
-  margin: 2px 0 7px;
-}
-
-.trade-log-weekly-focus-copy > p:not(.eyebrow) {
-  color: #6f7469;
-  line-height: 1.45;
-  margin: 0 0 8px;
-}
-
-.trade-log-weekly-focus-copy > span,
-.trade-log-weekly-focus-controls > span {
-  color: #6f7469;
-  font-size: 0.78rem;
-  font-weight: 850;
-}
-
-.trade-log-weekly-focus-editor {
-  display: grid;
-  gap: 8px;
-}
-
-.trade-log-weekly-focus-editor label {
-  color: #4c5549;
-  font-size: 0.8rem;
-  font-weight: 900;
-}
-
-.trade-log-weekly-focus-editor textarea {
-  background: rgba(255, 250, 240, 0.86);
-  border: 1px solid rgba(185, 214, 168, 0.9);
-  border-radius: 8px;
-  color: #2f352d;
-  font: inherit;
-  line-height: 1.45;
-  min-height: 88px;
-  padding: 10px 12px;
-  resize: vertical;
-  width: 100%;
-}
-
-.trade-log-weekly-focus-controls {
-  align-items: center;
-  display: flex;
-  gap: 12px;
-  justify-content: space-between;
-}
-
-.trade-log-weekly-focus-controls button {
-  min-height: 38px;
-}
-
-@media (max-width: 760px) {
-  .trade-log-weekly-focus {
-    grid-template-columns: 1fr;
-  }
-}
-
 .trade-date-quick-filters {
   align-items: center;
   display: flex;
@@ -2168,35 +2102,6 @@ th {
   padding: 18px;
 }
 
-.daily-weekly-focus {
-  padding: 15px 18px;
-}
-
-.daily-weekly-focus-heading {
-  align-items: flex-start;
-  margin-bottom: 8px;
-}
-
-.daily-weekly-focus-heading > div:first-child {
-  min-width: 0;
-}
-
-.daily-weekly-focus-summary {
-  color: #303a2d;
-  font-size: 0.96rem;
-  font-weight: 800;
-  line-height: 1.45;
-  margin: 7px 0 0;
-}
-
-.daily-weekly-focus-actions {
-  align-items: center;
-  display: flex;
-  flex: 0 0 auto;
-  gap: 8px;
-}
-
-.daily-weekly-focus-actions > span,
 .daily-review-provenance > strong {
   background: rgba(215, 240, 208, 0.62);
   border-radius: 999px;
@@ -2207,12 +2112,6 @@ th {
   padding: 6px 9px;
 }
 
-.daily-weekly-focus-actions button {
-  min-height: 32px;
-  padding: 5px 11px;
-}
-
-.daily-weekly-focus-meta,
 .daily-review-provenance {
   align-items: center;
   color: #6f7469;
@@ -2221,21 +2120,6 @@ th {
   font-size: 0.76rem;
   font-weight: 800;
   gap: 6px 14px;
-}
-
-.daily-weekly-focus-editor {
-  border-top: 1px solid rgba(185, 214, 168, 0.6);
-  display: grid;
-  gap: 12px;
-  margin-top: 14px;
-  padding-top: 14px;
-}
-
-.daily-weekly-focus-editor > p {
-  color: #6f7469;
-  font-size: 0.8rem;
-  font-weight: 750;
-  margin: 0;
 }
 
 .daily-review-provenance {
@@ -2377,15 +2261,6 @@ th {
 }
 
 @media (max-width: 680px) {
-  .daily-weekly-focus-heading {
-    align-items: stretch;
-    display: grid;
-  }
-
-  .daily-weekly-focus-actions {
-    justify-content: space-between;
-  }
-
   .daily-review-provenance {
     align-items: flex-start;
     display: grid;

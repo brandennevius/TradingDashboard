@@ -15,7 +15,6 @@ import { sendMonthToDateSnapshotEmail } from "../lib/month-to-date-snapshot-emai
 import { generateMonthToDateSnapshot, MonthToDateSnapshotValidationError } from "../lib/month-to-date-snapshot-server";
 import { generateDailyPortfolioSnapshot } from "../lib/daily-portfolio-snapshot-server";
 import type { TradeExecution, TradeLogEntry } from "../lib/types";
-import { createUserDefinedWeeklyFocus } from "../lib/weekly-focus";
 
 function execution(overrides: Partial<TradeExecution> = {}): TradeExecution {
   return {
@@ -43,7 +42,6 @@ function snapshotInput(trades: TradeLogEntry[], overrides: Record<string, unknow
     portfolioName: "Branden Log", trades,
     portfolioMeta: { currentEquity: 700_000, equityStatementDate: "2026-07-17", equityUpdatedAt: "2026-07-17T20:05:00-04:00", equitySource: "CF_STATEMENT" },
     prices: new Map([["TEST", { symbol: "TEST", price: 110, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "test", priceType: "official_close" as const }]]),
-    weeklyFocus: createUserDefinedWeeklyFocus({ summary: "Structure first.", focusItems: ["Follow the plan"] }, new Date("2026-07-12T16:00:00Z")),
     sourceEnvironment: "test", applicationVersion: "test", ...overrides
   };
 }
@@ -137,7 +135,7 @@ test("drawdown cushion is current equity minus threshold exactly once", () => {
   assert.equal(snapshot.account_summary.realized_mtd_pnl, -102);
 });
 
-test("manual grade, saved criteria, notes, tags, custom fields, images, and weekly focus are preserved", () => {
+test("manual grade, saved criteria, notes, tags, custom fields, and images are preserved", () => {
   const value = trade();
   const before = structuredClone(value);
   const snapshot = buildMonthToDateSnapshot(snapshotInput([value]));
@@ -151,7 +149,6 @@ test("manual grade, saved criteria, notes, tags, custom fields, images, and week
   assert.deepEqual(result.classification.mistake_tags, ["System"]);
   assert.equal(result.custom_fields.emotion, "Calm");
   assert.equal(snapshot.image_manifest[0].durable, true);
-  assert.equal(snapshot.weekly_focus.summary, "Structure first.");
   assert.deepEqual(value, before);
 });
 
@@ -180,7 +177,7 @@ test("Markdown is materially sourced from JSON and validation catches missing eq
   assert.match(markdown, /# Trading Dashboard Month-to-Date Snapshot/);
   assert.match(markdown, /Branden Log/);
   assert.match(markdown, /\$12,000\.00/);
-  assert.match(markdown, /Structure first\./);
+  assert.doesNotMatch(markdown, /Weekly Process Focus/);
   assert.deepEqual(validateMonthToDateSnapshot(snapshot), []);
   const missing = buildMonthToDateSnapshot(snapshotInput([trade()], { portfolioMeta: { equityStatementDate: "2026-07-17" } }));
   assert.equal(missing.status, "BLOCKED");
@@ -192,7 +189,6 @@ test("server writes only immutable exports and refuses missing core inputs befor
   const dependencies = {
     loadTrades: async () => [trade()],
     loadPortfolioSettings: async () => ({ portfolios: ["Branden Log"], defaultPortfolio: "Branden Log", portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: "2026-07-17", equitySource: "CF_STATEMENT" } } }),
-    loadWeeklyFocus: async () => createUserDefinedWeeklyFocus({ summary: "Focus", focusItems: [] }, new Date("2026-07-12T16:00:00Z")),
     loadPrice: async (symbol: string) => ({ symbol, price: 110, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "test", priceType: "official_close" as const }),
     now: () => new Date("2026-07-18T01:00:00Z")
   };
@@ -213,7 +209,6 @@ test("server writes only immutable exports and refuses missing core inputs befor
 
 test("server blocks relevant needs-review rows, missing executions, and insufficient coverage", async () => {
   const baseDependencies = {
-    loadWeeklyFocus: async () => createUserDefinedWeeklyFocus({}, new Date("2026-07-12T16:00:00Z")),
     loadPrice: async (symbol: string) => ({ symbol, price: 110, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "test" }),
     now: () => new Date("2026-07-18T01:00:00Z")
   };
@@ -231,7 +226,6 @@ test("server blocks relevant needs-review rows, missing executions, and insuffic
     assert.equal(error.diagnostic?.current_equity, null);
     assert.equal(error.diagnostic?.current_gross_exposure, null);
     assert.equal(error.diagnostic?.current_unrealized_pnl, null);
-    assert.equal((error.diagnostic?.weekly_focus as { status: string }).status, "CLEARED");
     return true;
   });
 });
@@ -249,7 +243,6 @@ test("current-session MTD generation with current broker coverage requests the l
         defaultPortfolio: "Branden Log",
         portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: "2026-07-20", equitySource: "CF_STATEMENT" } }
       }),
-      loadWeeklyFocus: async () => createUserDefinedWeeklyFocus({}, new Date("2026-07-19T16:00:00Z")),
       loadPrice: async (symbol: string, session: string) => {
         requestedPriceSessions.push(session);
         return { symbol, price: 110, sessionDate: session, timestamp: `${session}T16:00:00-04:00`, provider: "test", priceType: "official_close" as const };
@@ -278,7 +271,6 @@ test("final validation exposes safe trade-level blocking diagnostics", async () 
           defaultPortfolio: "Branden Log",
           portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: "2026-07-17" } }
         }),
-        loadWeeklyFocus: async () => createUserDefinedWeeklyFocus({}, new Date("2026-07-12T16:00:00Z")),
         loadPrice: async (symbol: string, session: string) => ({ symbol, price: 110, sessionDate: session, timestamp: `${session}T16:00:00-04:00`, provider: "test" }),
         now: () => new Date("2026-07-18T01:00:00Z")
       }
@@ -360,12 +352,10 @@ test("Markdown aggregates repetitive nonblocking diagnostics by code", () => {
   assert.equal((markdown.match(/CHART_LINKS_UNAVAILABLE/g) || []).length, 1);
 });
 
-test("Daily and MTD server workflows return the same persisted weekly focus object", async () => {
-  const focus = createUserDefinedWeeklyFocus({ summary: "Same source", focusItems: ["One process"] }, new Date("2026-07-12T16:00:00Z"));
+test("Daily and MTD server exports omit retired weekly focus", async () => {
   const shared = {
     loadTrades: async () => [trade()],
     loadPortfolioSettings: async () => ({ portfolios: ["Branden Log"], defaultPortfolio: "Branden Log", portfolioMeta: { "Branden Log": { currentEquity: 700_000, equityStatementDate: "2026-07-17" } } }),
-    loadWeeklyFocus: async () => focus,
     loadPrice: async (symbol: string) => ({ symbol, price: 110, sessionDate: "2026-07-17", timestamp: "2026-07-17T16:00:00-04:00", provider: "test" }),
     now: () => new Date("2026-07-18T01:00:00Z")
   };
@@ -373,8 +363,11 @@ test("Daily and MTD server workflows return the same persisted weekly focus obje
     generateDailyPortfolioSnapshot({ session: "2026-07-17", accountName: "Branden Log", writeExports: false, dependencies: shared }),
     generateMonthToDateSnapshot({ month: "2026-07", asOfDate: "2026-07-17", writeExports: false, dependencies: shared })
   ]);
-  assert.deepEqual(daily.snapshot.weekly_focus, focus);
-  assert.deepEqual(mtd.snapshot.weekly_focus, daily.snapshot.weekly_focus);
+  assert.equal("weekly_focus" in daily.snapshot, false);
+  assert.equal("weekly_focus" in mtd.snapshot, false);
+  assert.equal("weekly_focus_history" in mtd.snapshot, false);
+  assert.doesNotMatch(daily.markdown, /Weekly Process Focus/);
+  assert.doesNotMatch(mtd.markdown, /Weekly Process Focus|WEEKLY_FOCUS_HISTORY_UNAVAILABLE/);
 });
 
 test("email attaches JSON and Markdown with the selected period and does not send blocked output", async () => {

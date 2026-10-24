@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import type { SetupChecklistTemplate, TradeChecklistItem, TradeExecution, TradeLogEntry } from "./types";
 import { hasTradeReviewContent, resolvedTradeReviewSections } from "./trade-review";
-import { normalizeWeeklyFocus, type WeeklyFocus } from "./weekly-focus";
 
 export const DAILY_PORTFOLIO_SNAPSHOT_SCHEMA_VERSION = "daily-portfolio-snapshot-v1";
 
@@ -88,7 +87,6 @@ type SnapshotInput = {
   prices: Map<string, SnapshotPrice>;
   sourceEnvironment: string;
   applicationVersion: string;
-  weeklyFocus?: WeeklyFocus;
 };
 
 function round(value: number | null, digits = 2) {
@@ -459,7 +457,6 @@ export function buildDailyPortfolioSnapshot(input: SnapshotInput) {
       broker_import_complete: broker.complete, account_name: input.accountName || null, account_value: accountValue,
       source_environment: input.sourceEnvironment, application_version: input.applicationVersion
     },
-    weekly_focus: normalizeWeeklyFocus(input.weeklyFocus),
     snapshot_status: snapshotStatusFromWarnings(allWarnings),
     portfolio_summary: summary, open_positions: openPositions, trades_closed_during_session: closedTrades,
     warnings: allWarnings, critical_warning_count: allWarnings.filter((item) => item.severity === "critical").length
@@ -468,10 +465,6 @@ export function buildDailyPortfolioSnapshot(input: SnapshotInput) {
 
 function formatMoney(value: number | null) { return value === null ? "—" : new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value); }
 function formatPercent(value: number | null) { return value === null ? "—" : `${value.toFixed(2)}%`; }
-function formatWeekStart(value: string) {
-  return new Intl.DateTimeFormat("en-US", { month: "long", day: "numeric", year: "numeric", timeZone: "UTC" }).format(new Date(`${value}T12:00:00Z`));
-}
-
 export function renderDailyPortfolioSnapshotMarkdown(snapshot: ReturnType<typeof buildDailyPortfolioSnapshot>) {
   const lines = [
     `# Daily Portfolio Snapshot — ${snapshot.metadata.requested_session}`, "",
@@ -491,17 +484,8 @@ export function renderDailyPortfolioSnapshotMarkdown(snapshot: ReturnType<typeof
     `- Net exposure: ${formatMoney(snapshot.portfolio_summary.net_exposure_dollars)} (${formatPercent(snapshot.portfolio_summary.net_exposure_pct)})`,
     `- Open P&L: ${formatMoney(snapshot.portfolio_summary.total_open_pnl)}`,
     `- Remaining risk to stops: ${formatMoney(snapshot.portfolio_summary.total_remaining_risk_to_stops)} (${formatPercent(snapshot.portfolio_summary.total_remaining_risk_pct)})`,
-    `- Open positions: ${snapshot.portfolio_summary.open_position_count}`, "", "## Weekly Process Focus", ""
+    `- Open positions: ${snapshot.portfolio_summary.open_position_count}`
   ];
-  if (snapshot.weekly_focus.status === "AVAILABLE") {
-    lines.push(`**Week of:** ${formatWeekStart(snapshot.weekly_focus.week_start!)}`, "**Source:** User-defined weekend review", "");
-    if (snapshot.weekly_focus.summary) lines.push(snapshot.weekly_focus.summary, "");
-    snapshot.weekly_focus.focus_items.forEach((item) => lines.push(`- ${item}`));
-  } else if (snapshot.weekly_focus.status === "CLEARED") {
-    lines.push("The user-defined weekly focus has been cleared.");
-  } else {
-    lines.push("No user-defined weekly focus is currently available.");
-  }
   lines.push("", "## Open positions", "",
     "| Ticker | Side | Shares | Entry | Current | Market value | P&L | R | Stop | Weight |", "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|"
   );
