@@ -2304,7 +2304,7 @@ export default function Home() {
 
   const primaryChartHeight = isPhoneViewport ? 260 : 380;
   const secondaryChartHeight = isPhoneViewport ? 230 : 320;
-  const responsiveChartMargin = isPhoneViewport ? { top: 12, right: 4, bottom: 0, left: -28 } : chartMargin;
+  const responsiveChartMargin = isPhoneViewport ? { top: 12, right: 4, bottom: 0, left: 0 } : chartMargin;
   const xAxisInterval = isPhoneViewport ? "preserveStartEnd" : 0;
 
   async function loadReports() {
@@ -4576,7 +4576,7 @@ export default function Home() {
     : 0;
 
   return (
-    <main className="app-shell">
+    <main className={`app-shell${!isBrandenJournalMode ? " journal-hub-shell report-workspace" : ""}`}>
       {busyProgress ? (
         <div className="busy-overlay" role="status" aria-live="polite">
           <section className="busy-panel">
@@ -4643,6 +4643,17 @@ export default function Home() {
       {reportsError ? <div className="app-alert">{reportsError}</div> : null}
       {tradesError ? <div className="app-alert">{tradesError}</div> : null}
 
+      {!isBrandenJournalMode && activeTab !== "trades" ? (
+        <div className="report-page-intro">
+          <div>
+            <p className="eyebrow">{activeTab === "entry" ? "THE MONTHLY CHECK-IN" : activeTab === "dashboard" ? "PERFORMANCE, IN PERSPECTIVE" : "YOUR TRACK RECORD"}</p>
+            <h2>{activeTab === "entry" ? "Make every month count." : activeTab === "dashboard" ? "Progress you can see." : "Keep the details right."}</h2>
+            <p>{activeTab === "entry" ? "Capture the numbers. Reflect on the process. Build a clearer picture of your trading." : activeTab === "dashboard" ? "Follow your results, compare your execution, and find the patterns worth repeating." : "Revisit your monthly reports and keep your performance history up to date."}</p>
+          </div>
+          <span className="report-page-index">{activeTab === "entry" ? "01 / REFLECT" : activeTab === "dashboard" ? "02 / REVIEW" : "03 / REFINE"}</span>
+        </div>
+      ) : null}
+
       {activeTab === "entry" ? (
         <section className="entry-layout">
           <form className="report-form" onSubmit={saveReport}>
@@ -4661,9 +4672,9 @@ export default function Home() {
               </label>
             </div>
 
-            {fieldGroups.map((group) => (
+            {fieldGroups.map((group, groupIndex) => (
               <fieldset key={group.title}>
-                <legend>{group.title}</legend>
+                <legend><span className="report-field-number" aria-hidden="true">{String(groupIndex + 1).padStart(2, "0")}</span>{group.title}</legend>
                 <div className="field-grid">
                   {group.fields.map(([key, label, suffix]) => (
                     <label key={key}>
@@ -4708,7 +4719,8 @@ export default function Home() {
           <aside className="entry-side-panel">
             <div>
               <p className="eyebrow">Calculated preview</p>
-              <h2>Auto-calculated stats</h2>
+              <h2>Your month, at a glance.</h2>
+              <p className="report-preview-note">Updates as you enter your numbers.</p>
             </div>
             <dl className="derived-preview-grid">
               <div>
@@ -6388,29 +6400,29 @@ export default function Home() {
           </div>
         </section>
       ) : (
-        <section className="trade-journal-launcher">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Trade logging</p>
-              <h2>Open the journal you need</h2>
-            </div>
+        <section className="trade-journal-launcher" aria-labelledby="journal-hub-title">
+          <div className="journal-hub-heading">
+            <p className="eyebrow">THE TRADING WORKSPACE</p>
+            <h2 id="journal-hub-title">Your process.<br /><span>Your edge.</span></h2>
+            <p>Two journals. One commitment to better trading.<br />Choose your workspace and get back to the details that matter.</p>
           </div>
           <div className="journal-launcher-grid">
-            <article className="journal-launch-card">
-              <p className="eyebrow">Branden</p>
-              <h3>Trade journal</h3>
-              <a className="journal-launch-button" href="/branden-journal">
-                Open Branden journal
+            {[
+              { name: "Branden", theme: "branden", title: "See the bigger picture.", description: "Connect your trades, portfolio exposure, and daily review in one focused workspace.", tags: ["Portfolio dashboard", "Trade review", "Daily journal"], href: "/branden-journal" },
+              { name: "Cam", theme: "cam", title: "Refine every execution.", description: "Keep your setups, trade screenshots, and execution reviews close to every decision.", tags: ["Setup playbook", "Trade screenshots", "Execution review"], href: "/cam-journal/index.html" }
+            ].map((journal, index) => (
+              <a className={`journal-studio-card ${journal.theme}`} href={journal.href} key={journal.theme} aria-label={`Open ${journal.name} journal`}>
+                <div className="journal-studio-topline"><span><i aria-hidden="true">{journal.name[0]}</i>{journal.name}&apos;s journal</span><span className="journal-studio-number">0{index + 1} / WORKSPACE</span></div>
+                <div className="journal-studio-copy"><h3>{journal.title}</h3><p>{journal.description}</p></div>
+                <div className="journal-preview-stage">
+                  <div className="journal-preview-chrome"><span aria-hidden="true">● ● ●</span><span>{journal.name.toLowerCase()} / dashboard</span><span>UI PREVIEW · EMPTY STATE</span></div>
+                  <img src={`/journal-previews/${journal.theme}.png`} alt={`${journal.name}'s journal interface with no account data`} width={1440} height={1000} />
+                </div>
+                <div className="journal-studio-footer"><div className="journal-studio-tags">{journal.tags.map(tag => <span key={tag}>{tag}</span>)}</div><span className="journal-studio-cta">Open journal <span aria-hidden="true">↗</span></span></div>
               </a>
-            </article>
-            <article className="journal-launch-card cam">
-              <p className="eyebrow">Cam</p>
-              <h3>Cam&apos;s exact journal app</h3>
-              <a className="journal-launch-button" href="/cam-journal/index.html">
-                Open Cam journal
-              </a>
-            </article>
+            ))}
           </div>
+          <div className="journal-hub-footnote"><span>PLAN WITH INTENTION. REVIEW WITH HONESTY.</span><span>The next great trade starts with the last lesson.</span></div>
         </section>
       )}
       {fullscreenScreenshot ? (
