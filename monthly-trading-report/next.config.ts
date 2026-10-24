@@ -7,11 +7,6 @@ const nextConfig: NextConfig = {
       "./node_modules/@napi-rs/canvas/**/*",
       "./node_modules/pdf-parse/**/*",
       "./node_modules/pdfjs-dist/**/*"
-    ],
-    "/api/journal/branden/market-review": [
-      "./node_modules/@napi-rs/canvas/**/*",
-      "./node_modules/pdf-parse/**/*",
-      "./node_modules/pdfjs-dist/**/*"
     ]
   }
 };

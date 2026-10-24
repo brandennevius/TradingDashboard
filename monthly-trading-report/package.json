@@ -13,13 +13,12 @@
     "test:daily-snapshot": "tsx --test tests/daily-portfolio-snapshot.test.ts",
     "test:mtd-snapshot": "tsx --test tests/month-to-date-snapshot.test.ts",
     "test:cf-import": "tsx --test tests/cf-statement-import.test.ts",
-    "test:market-review": "tsx --test tests/market-review.test.ts tests/market-gauge.test.ts",
+    "test:market-gauge": "tsx --test tests/market-gauge.test.ts",
     "test:market-context": "node --import tsx --test tests/trade-market-context.test.ts tests/market-context-ui.test.ts tests/market-gauge.test.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.0",
     "@types/pg": "^8.11.10",
-    "@vercel/blob": "^2.8.0",
     "docx": "^9.7.1",
     "jszip": "^3.10.1",
     "lightweight-charts": "^5.2.0",

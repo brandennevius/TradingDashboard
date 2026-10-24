@@ -296,7 +296,7 @@ body:has(.branden-route-shell) { background: #faf9f2; }
 }
 
 
-.branden-route-shell > :is(.branden-journal-main, .market-review-page) {
+.branden-route-shell > .branden-journal-main {
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -333,8 +333,7 @@ body:has(.branden-route-shell) { background: #faf9f2; }
 .branden-route-shell :is(
   .trade-chart-panel, .daily-review-card, .branden-settings-card,
   .portfolio-card, .setup-template-card, .watchlist-detail,
-  .watchlist-ticker-list, .market-review-start-card,
-  .market-review-run-list, .market-review-run-detail,
+  .watchlist-ticker-list,
   .exit-lab-results, .exit-lab-method, .exit-lab-exclusions,
   .rprp-controls, .rprp-new-stock-card
 ) {
@@ -348,7 +347,7 @@ body:has(.branden-route-shell) { background: #faf9f2; }
 }
 
 /* A single heading and divider establish each tool's hierarchy. */
-.branden-route-shell :is(.market-review-hero, .rprp-hero) {
+.branden-route-shell .rprp-hero {
   background: transparent;
   border: 0;
   border-bottom: 1px solid var(--workspace-rule);
@@ -400,8 +399,7 @@ body:has(.branden-route-shell) { background: #faf9f2; }
 .branden-route-shell :is(
   .setup-group-card, .setup-knowledge-card, .setup-example-card,
   .watchlist-notes-card, .watchlist-screenshots, .bottom-bull-card,
-  .bottom-bull-side-card, .benchmark-card, .market-review-ocr,
-  .market-review-results, .market-review-results > div,
+  .bottom-bull-side-card, .benchmark-card,
   .trade-detail-section, .trade-detail-card, .trade-checklist-group,
   .daily-activity-row
 ) {
@@ -429,18 +427,11 @@ body:has(.branden-route-shell) { background: #faf9f2; }
 .branden-route-shell .branden-settings-grid { gap: 24px; }
 .branden-route-shell .portfolio-card-grid { gap: 20px; }
 .branden-route-shell .daily-review-hero { gap: 20px; }
-.branden-route-shell .market-review-workspace { gap: 24px; }
-.branden-route-shell .market-review-run-list {
-  border-top: 0;
-  border-right: 1px solid var(--workspace-rule);
-  padding-right: 16px;
-}
-.branden-route-shell .market-review-run-list > button { box-shadow: none; border-radius: 6px; }
 .branden-route-shell .watchlist-ticker-list { border-top: 0; border-right: 1px solid var(--workspace-rule); padding-right: 16px; }
 
 @media (max-width: 760px) {
-  .branden-route-shell > :is(.branden-journal-main, .market-review-page) { padding: 20px 16px; }
-  .branden-route-shell :is(.market-review-run-list, .watchlist-ticker-list) {
+  .branden-route-shell > .branden-journal-main { padding: 20px 16px; }
+  .branden-route-shell .watchlist-ticker-list {
     border-right: 0;
     border-bottom: 1px solid var(--workspace-rule);
     padding-right: 0;
