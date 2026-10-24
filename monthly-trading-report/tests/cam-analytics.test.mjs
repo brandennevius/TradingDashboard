@@ -6,6 +6,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const parser = require('../public/cam-journal/broker-csv-parser.js');
 const source = fs.readFileSync(new URL('../public/cam-journal/app.js', import.meta.url), 'utf8');
+const html = fs.readFileSync(new URL('../public/cam-journal/index.html', import.meta.url), 'utf8');
 function functionSource(name) {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, `Missing ${name}`);
@@ -46,10 +47,8 @@ test('analytics excludes missing excursions/R and open trades, while retaining r
   assert.equal(stats.avgR, 1);
   assert.equal(stats.avgMfe, 1);
   assert.equal(stats.avgMae, -0.5);
-  assert.equal(stats.directionReviewed, 2);
-  assert.equal(stats.directionConfirmed, 1);
-  assert.equal(stats.worked, 1);
-  assert.equal(stats.captured, 1);
+  assert.equal('directionReviewed' in stats, false);
+  assert.equal('outcomeReviewed' in stats, false);
 });
 
 test('analytics with no measurements shows missing values rather than zero', () => {
@@ -80,6 +79,25 @@ test('saved analytics fields and versions remain frozen after the setup is edite
   assert.equal(c.analyticsFieldsForTrade({setup: 'BBC', analytics: {setupVersion: 1}})[0].id, 'v1');
 });
 
+test('saving a review removes the retired hard-coded analytics fields', () => {
+  const c = harness();
+  c.setups = [{id: 's', name: 'BBC', currentVersion: 1, analyticsFields: []}];
+  c.$('editSetup').value = 'BBC';
+  const saved = c.readTradeAnalytics({
+    setup: 'BBC',
+    analytics: {
+      directionConfirmed: 'yes',
+      setupOutcome: 'Worked - Captured',
+      entryQuality: 'Ideal',
+      setupFollowed: 'yes'
+    }
+  });
+  assert.equal(saved.directionConfirmed, undefined);
+  assert.equal(saved.setupOutcome, undefined);
+  assert.equal(saved.entryQuality, undefined);
+  assert.equal(saved.setupFollowed, undefined);
+});
+
 test('switching setups saves the destination fields and version', () => {
   const c = harness();
   c.setups = [{id: 'dest', name: 'New Setup', currentVersion: 3, versions: [{version: 3, analyticsFields: [{id: 'dest-field'}]}]}];
@@ -98,6 +116,11 @@ test('CSV reconciliation retains analytics alongside screenshots and grading', (
   assert.equal(saved.pl, 20);
 });
 
+test('CSV reconciliation retains the manual risk-distance reference', () => {
+  const saved = parser.preserveManualFields({id: 'manual', riskDistance: '1.375'}, {id: 'import', riskDistance: ''});
+  assert.equal(saved.riskDistance, '1.375');
+});
+
 test('setup snapshots deep-copy analytics without altering grading criteria', () => {
   const c = harness();
   const setup = {criteria: {stf: [{text: 'Original', max: 2}]}, gradeRules: [], analyticsFields: [{id: 'f', label: 'Original'}]};
@@ -114,4 +137,11 @@ test('analytics filters distinguish frozen review versions and direction', () =>
   assert.equal(c.analyticsFilteredTrades().length, 1);
   c.$('analyticsGrade').value = 'B';
   assert.equal(c.analyticsFilteredTrades().length, 0);
+});
+
+test('Version 79 UI uses custom analytics questions and shared Data Health filters', () => {
+  assert.doesNotMatch(html, /id="edit(?:DirectionConfirmed|SetupOutcome|EntryQuality|SetupFollowed)"/);
+  assert.match(html, /id="editRiskDistance"/);
+  assert.match(source, /class="analyticsDragHandle"/);
+  assert.match(functionSource('renderDataHealth'), /getReportFilteredTrades\(\)/);
 });

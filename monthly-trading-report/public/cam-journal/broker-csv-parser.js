@@ -329,6 +329,7 @@
     "stop",
     "target",
     "risk",
+    "riskDistance",
     "stfAtr",
     "rMultiple",
     "portfolioTag",

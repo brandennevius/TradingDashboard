@@ -387,11 +387,9 @@
           <label>Direction<select id="analyticsDirection"><option value="">All directions</option><option>Long</option><option>Short</option></select></label>
         </div>
       </section>
-      <section class="card"><div class="section-head"><div><h2>Strategy Health</h2><p class="tight">Direction Confirmed and Setup Worked use reviewed trades. Capture Rate is the share of worked setups marked Captured. Win Rate uses closed trades; averages exclude missing values.</p></div></div><div id="analyticsHealth" class="comparison-stats analytics-health"></div></section>
-      <section class="card" style="margin-top:18px"><div class="section-head"><div><h2>Setup Outcome</h2><p class="tight">Worked - Captured vs Worked - Missed separates strategy quality from execution.</p></div></div><div id="analyticsOutcome" class="analytics-outcome-grid"></div></section>
+      <section class="card"><div class="section-head"><div><h2>Strategy Health</h2><p class="tight">Core performance and excursion metrics for the selected setup. Add any process or outcome questions you want to track in Setup Builder.</p></div></div><div id="analyticsHealth" class="comparison-stats analytics-health"></div></section>
       <section class="card" style="margin-top:18px"><div class="section-head"><div><h2>Analytics Breakdown</h2><p class="tight">Every custom analytics field is automatically compared against performance.</p></div></div><div id="analyticsBreakdowns"></div></section>
-      <section class="card" style="margin-top:18px"><div class="section-head"><div><h2>Mistake Impact</h2><p class="tight">See which mistakes cost R even when direction was ultimately confirmed.</p></div></div><div class="grade-table-wrap"><table class="trade-table"><thead><tr><th>Mistake</th><th>Trades</th><th>Avg R</th><th>Total R</th><th>Direction Confirmed</th></tr></thead><tbody id="analyticsMistakeBody"></tbody></table></div></section>
-      <section class="card" style="margin-top:18px"><div class="section-head"><div><h2>Missed Winners</h2><p class="tight">Losses or breakeven trades where the original direction was later confirmed.</p></div></div><div class="grade-table-wrap"><table class="trade-table"><thead><tr><th>Date</th><th>Ticker</th><th>R</th><th>Grade</th><th>Entry Quality</th><th>Mistake</th><th>MFE</th><th></th></tr></thead><tbody id="analyticsMissedBody"></tbody></table></div></section>
+      <section class="card" style="margin-top:18px"><div class="section-head"><div><h2>Mistake Impact</h2><p class="tight">See which mistake tags are associated with weaker or stronger R results.</p></div></div><div class="grade-table-wrap"><table class="trade-table"><thead><tr><th>Mistake</th><th>Trades</th><th>Avg R</th><th>Total R</th></tr></thead><tbody id="analyticsMistakeBody"></tbody></table></div></section>
     </section>
 
     <section id="watchlistView" class="view">
@@ -537,7 +535,7 @@
   </main>
 
   <dialog id="tradeDialog" class="trade-dialog">
-    <form id="editForm" method="dialog">
+    <form id="editForm" method="dialog" novalidate>
       <div class="dialog-head">
         <div>
           <h2 id="editTitle">Edit Trade</h2>
@@ -568,13 +566,14 @@
       <div class="trade-edit-grid">
         <label>Entry<input type="number" step="0.0001" id="editEntry" readonly /></label>
         <label>Exit<input type="number" step="0.0001" id="editExit" readonly /></label>
-        <label>Stop<input type="number" step="0.0001" id="editStop" /></label>
-        <label>Target<input type="number" step="0.0001" id="editTarget" placeholder="Planned target" /></label>
-        <label>$ Risk<input type="number" step="0.01" id="editRisk" /></label>
-        <label>STF ATR at Entry<input type="number" step="0.0001" id="editStfAtr" placeholder="Example: 2.35" /></label>
+        <label>Stop<input type="number" step="0.01" id="editStop" /></label>
+        <label>Target<input type="number" step="0.01" id="editTarget" placeholder="Planned target" /></label>
+        <label>$ Risk / Max Loss<input type="number" step="1" id="editRisk" /></label>
+        <label>Distance to Risk / Max Loss<input type="number" step="0.01" id="editRiskDistance" placeholder="Auto from first fills" /><div class="readonly-mini" id="riskReferencePreview">First-entry reference: —</div></label>
+        <label>STF ATR at Entry<input type="number" step="0.01" id="editStfAtr" placeholder="Example: 2.35" /></label>
         <label>Stop Distance vs ATR<div class="readonly-mini" id="atrStopPct">—</div></label>
         <label>Target Distance vs ATR<div class="readonly-mini" id="atrTargetPct">—</div></label>
-        <label>Calculate Stop<button type="button" id="calcStopBtn">Calculate Stop From Risk</button></label>
+        <label>Calculate Risk Distance / Stop<button type="button" id="calcStopBtn">Recalculate From First Entry</button></label>
         <label>Portfolio<select id="editPortfolioTag"><option value="">No portfolio</option></select></label>
         <label>Grade<select id="editGrade"><option value="">Ungraded</option><option>A+</option><option>A</option><option>A-</option><option>B+</option><option>B</option><option>B-</option><option>C+</option><option>C</option></select></label>
         <label>Emotion<select id="editEmotion"><option value="">Not entered</option><option>Calm</option><option>FOMO</option><option>Fearful</option><option>Greedy</option><option>Revenge</option><option>Patient</option></select></label>
@@ -583,17 +582,12 @@
       </div>
       <label>Checklist / Trade Quality<textarea id="editChecklist"></textarea></label>
       <section class="card trade-analytics-card">
-        <div class="section-head"><div><h3>Setup Analytics</h3><p class="tight">Enter the highest favorable and worst adverse prices reached. The journal calculates R from entry price, position size, direction, and $ risk.</p></div></div>
+        <div class="section-head"><div><h3>Setup Analytics</h3><p class="tight">Fill these in after the trade or during end-of-day review. MFE / MAE use your first-entry reference and risk distance, so later scale-ins do not distort the excursion R.</p></div></div>
         <div class="trade-edit-grid">
-          <label>Direction Confirmed?<select id="editDirectionConfirmed"><option value="">Not reviewed</option><option value="yes">Yes</option><option value="no">No</option></select></label>
-          <label>Setup Outcome<select id="editSetupOutcome"><option value="">Not reviewed</option><option>Worked - Captured</option><option>Worked - Missed</option><option>Failed - Managed</option><option>Failed - Execution Error</option></select></label>
-          <label>Entry Quality<select id="editEntryQuality"><option value="">Not reviewed</option><option>Early</option><option>Ideal</option><option>Late</option></select></label>
-          <label>Setup Followed?<select id="editSetupFollowed"><option value="">Not reviewed</option><option value="yes">Yes</option><option value="no">No</option></select></label>
-          <label>MFE Price<input id="editMfePrice" type="number" min="0" step="0.0001" placeholder="Highest favorable price" /><div class="readonly-mini analytics-r-preview" id="editMfeCalculated">Calculated MFE: —</div></label>
-          <label>MAE Price<input id="editMaePrice" type="number" min="0" step="0.0001" placeholder="Worst adverse price" /><div class="readonly-mini analytics-r-preview" id="editMaeCalculated">Calculated MAE: —</div></label>
+          <label>MFE Price<input id="editMfePrice" type="number" step="0.0001" placeholder="Highest favorable price" /><div class="readonly-mini analytics-r-preview" id="editMfeCalculated">Calculated MFE: —</div></label>
+          <label>MAE Price<input id="editMaePrice" type="number" step="0.0001" placeholder="Worst adverse price" /><div class="readonly-mini analytics-r-preview" id="editMaeCalculated">Calculated MAE: —</div></label>
         </div>
         <div id="tradeCustomAnalytics" class="trade-custom-analytics"></div>
-        <p class="small">Direction Confirmed should follow the objective confirmation rule you define for the setup, not whether price eventually drifted your way.</p>
       </section>
       <section class="execution-section card">
         <div class="section-head">

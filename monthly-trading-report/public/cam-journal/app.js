@@ -1922,7 +1922,7 @@ function healthIssuesForTrade(t) {
 }
 function renderDataHealth() {
   if (!$('healthIssueBody')) return;
-  const all = trades.map(t => ({ trade:t, issues:healthIssuesForTrade(t) })).filter(x=>x.issues.length);
+  const all = getReportFilteredTrades().map(t => ({ trade:t, issues:healthIssuesForTrade(t) })).filter(x=>x.issues.length);
   const count = name => all.filter(x=>x.issues.includes(name)).length;
   if ($('healthMissingRisk')) $('healthMissingRisk').textContent = count('Missing Risk');
   if ($('healthMissingSetup')) $('healthMissingSetup').textContent = count('Missing Setup');
@@ -2105,19 +2105,21 @@ function openTradeDialog(id) {
   };
   Object.entries(viewMap).forEach(([id, value]) => { if ($(id)) $(id).textContent = value; });
   const map = {
-    editSetup:'setup', editEntry:'entry', editExit:'exit', editStop:'stop', editTarget:'target', editRisk:'risk', editStfAtr:'stfAtr',
+    editSetup:'setup', editEntry:'entry', editExit:'exit', editStop:'stop', editTarget:'target', editRisk:'risk', editRiskDistance:'riskDistance', editStfAtr:'stfAtr',
     editPortfolioTag:'portfolioTag', editGrade:'grade', editEmotion:'emotion', editSecondaryTag:'secondaryTag', editMistakeTag:'mistakeTag', editChecklist:'checklist', editNotes:'notes'
   };
   Object.entries(map).forEach(([inputId, field]) => {
     let value = trade[field] ?? '';
     if (field === 'entry' || field === 'exit' || field === 'stop' || field === 'target' || field === 'stfAtr') value = price4(value);
-    if (field === 'notes' && String(value).startsWith('Imported from broker statement.')) value = '';
+    if (field === 'notes') { value = cleanBrokerImportNoteText(value); if (String(value).startsWith('Imported from broker statement.')) value = ''; }
     $(inputId).value = value;
   });
-  if ($('editDirectionConfirmed')) $('editDirectionConfirmed').value = trade.analytics?.directionConfirmed || '';
-  if ($('editSetupOutcome')) $('editSetupOutcome').value = trade.analytics?.setupOutcome || '';
-  if ($('editEntryQuality')) $('editEntryQuality').value = trade.analytics?.entryQuality || '';
-  if ($('editSetupFollowed')) $('editSetupFollowed').value = trade.analytics?.setupFollowed || '';
+  if ($('editRiskDistance') && !$('editRiskDistance').value) {
+    const reference = firstEntryFillStats(trade);
+    const risk = Math.abs(cleanNumber(trade.risk));
+    if (reference?.size > 0 && risk > 0) $('editRiskDistance').value = (risk / reference.size).toFixed(3);
+  }
+  updateRiskReferencePreview();
   loadExcursionPriceInputs(trade);
   updateExcursionRPreview();
   renderTradeCustomAnalytics(trade);
@@ -2214,19 +2216,62 @@ function renderScreenshotGallery(trade) {
   });
 }
 
-function calculateStopFromRisk() {
+function firstEntryFillStats(trade) {
+  const executions = dedupeExecutions(syntheticExecutionsFromTrade(trade));
+  return globalThis.CamTradeExcursion.initialEntry(executions, trade);
+}
+
+function riskReferenceInfo(trade) {
+  const reference = firstEntryFillStats(trade);
+  const risk = Math.abs(cleanNumber($('editRisk')?.value || trade?.risk));
+  let distance = Math.abs(cleanNumber($('editRiskDistance')?.value || trade?.riskDistance));
+  if (!(distance > 0) && reference?.size > 0 && risk > 0) distance = risk / reference.size;
+  return { ...(reference || {}), risk, distance };
+}
+
+function updateRiskReferencePreview() {
+  const trade = trades.find(t => t.id === $('editId')?.value) || {};
+  const reference = riskReferenceInfo(trade);
+  if (!$('riskReferencePreview')) return;
+  $('riskReferencePreview').textContent = reference.entry > 0
+    ? `First-entry reference: ${price4(reference.entry)} · ${Number(reference.size || 0).toLocaleString()} shares · ${reference.source}`
+    : 'First-entry reference: —';
+}
+
+function initialRiskDistanceFromRisk(trade) {
+  const reference = firstEntryFillStats(trade);
+  const risk = Math.abs(Number($('editRisk')?.value || trade?.risk));
+  if (!reference || !(reference.entry > 0) || !(reference.size > 0) || !(risk > 0)) return null;
+  return { reference, risk, distance: risk / reference.size };
+}
+
+function calculateRiskDistanceFromRisk(silent = false) {
   const trade = trades.find(t => t.id === $('editId').value) || {};
-  const entry = Number($('editEntry').value || trade.entry);
-  const size = Math.abs(Number(trade.size));
-  const risk = Math.abs(Number($('editRisk').value));
-  const direction = trade.direction || 'Long';
-  if (!Number.isFinite(entry) || entry <= 0 || !Number.isFinite(size) || size <= 0 || !Number.isFinite(risk) || risk <= 0) {
-    alert('Enter a valid entry, shares/contracts, and $ risk first.');
+  const calculation = initialRiskDistanceFromRisk(trade);
+  if (!calculation) {
+    if (!silent) alert('A valid first entry execution and $ risk are required first.');
     return;
   }
-  const riskPerShare = risk / size;
-  const stop = direction === 'Short' ? entry + riskPerShare : entry - riskPerShare;
-  $('editStop').value = stop.toFixed(4);
+  $('editRiskDistance').value = calculation.distance.toFixed(3);
+  updateRiskReferencePreview();
+  updateExcursionRPreview();
+}
+
+function calculateStopFromRisk(silent = false) {
+  const trade = trades.find(t => t.id === $('editId').value) || {};
+  const calculation = initialRiskDistanceFromRisk(trade);
+  if (!calculation) {
+    if (!silent) alert('A valid first entry execution and $ risk are required first.');
+    return;
+  }
+  const isShort = String(trade.direction || 'Long').toLowerCase() === 'short';
+  const stop = isShort
+    ? calculation.reference.entry + calculation.distance
+    : calculation.reference.entry - calculation.distance;
+  $('editStop').value = stop.toFixed(3);
+  updateRiskReferencePreview();
+  updateAtrStats();
+  updateExcursionRPreview();
 }
 
 $('closeDialog').addEventListener('click', () => $('tradeDialog').close());
@@ -2262,6 +2307,7 @@ $('editForm').addEventListener('submit', (event) => {
     stop: $('editStop').value,
     target: $('editTarget').value,
     risk: $('editRisk').value,
+    riskDistance: $('editRiskDistance')?.value || '',
     rMultiple: '',
     stfAtr: $('editStfAtr').value,
     portfolioTag: $('editPortfolioTag').value.trim(),
@@ -2293,8 +2339,33 @@ $('deleteFromDialog').addEventListener('click', deleteCurrentTradeFromDialog);
 if ($('deleteFromDialogTop')) $('deleteFromDialogTop').addEventListener('click', deleteCurrentTradeFromDialog);
 
 
-$('calcStopBtn').addEventListener('click', calculateStopFromRisk);
+$('calcStopBtn').addEventListener('click', () => {
+  calculateRiskDistanceFromRisk(true);
+  calculateStopFromRisk(false);
+});
 ['editEntry','editStop','editTarget','editStfAtr'].forEach(id => { const el = $(id); if (el) el.addEventListener('input', updateAtrStats); });
+if ($('editRisk')) $('editRisk').addEventListener('input', () => {
+  calculateRiskDistanceFromRisk(true);
+  calculateStopFromRisk(true);
+});
+if ($('editRiskDistance')) $('editRiskDistance').addEventListener('input', () => {
+  updateRiskReferencePreview();
+  updateExcursionRPreview();
+});
+function normalizeThreeDecimalInput(input) {
+  if (!input || input.value === '') return;
+  const number = Number(input.value);
+  if (Number.isFinite(number)) input.value = String(Number(number.toFixed(3)));
+}
+['editStop','editRiskDistance','editStfAtr'].forEach(id => {
+  const input = $(id);
+  if (!input) return;
+  input.addEventListener('blur', () => {
+    normalizeThreeDecimalInput(input);
+    updateAtrStats();
+    updateExcursionRPreview();
+  });
+});
 $('screenshotInput').addEventListener('change', async (event) => {
   const id = $('editId').value;
   const trade = trades.find(t => t.id === id);
@@ -2323,6 +2394,7 @@ if ($('setupFilter')) $('setupFilter').addEventListener('change', renderTrades);
 function refreshReportsAndTradeLog() {
   renderDashboardReports();
   renderTrades();
+  renderDataHealth();
 }
 ['reportStartDate','reportEndDate','reportTicker','reportSetup','reportPortfolio','reportDirection','reportResult','reportGrade','reportSecondaryTag','reportMistakeTag','logReportStartDate','logReportEndDate','logReportTicker','logReportSetup','logReportPortfolio','logReportDirection','logReportResult','logReportGrade','logReportSecondaryTag','logReportMistakeTag'].forEach(id => {
   const el = $(id);
@@ -3447,25 +3519,58 @@ function analyticsFieldId() { return `af_${Date.now()}_${Math.random().toString(
 function renderAnalyticsFieldRows(rows) {
   const box = $('analyticsFieldsBuilder'); if (!box) return;
   box.innerHTML = '';
-  (rows || []).forEach((field, index) => {
-    const div = document.createElement('div'); div.className = 'analytics-field-row'; div.dataset.id = field.id || analyticsFieldId();
-    div.innerHTML = `<input class="analyticsFieldLabel" value="${escapeHtml(field.label || '')}" placeholder="Field name (example: 15M First Candle Range)" />
+  (rows || []).forEach((field) => {
+    const div = document.createElement('div');
+    div.className = 'analytics-field-row';
+    div.dataset.id = field.id || analyticsFieldId();
+    div.draggable = !journalReadOnly;
+    div.innerHTML = `<button type="button" class="analyticsDragHandle" title="Grab and drag to reorder" aria-label="Drag ${escapeHtml(field.label || 'analytics field')} to reorder">⋮⋮</button>
+      <input class="analyticsFieldLabel" value="${escapeHtml(field.label || '')}" placeholder="Field name (example: 15M First Candle Range)" />
       <select class="analyticsFieldType"><option value="yesno">Yes / No</option><option value="dropdown">Dropdown</option><option value="number">Number</option><option value="text">Short Text</option></select>
       <input class="analyticsFieldOptions" value="${escapeHtml((field.options || []).join(', '))}" placeholder="Dropdown options, comma separated" />
-      <button type="button" class="danger removeAnalyticsField">Remove</button>`;
+      <div class="analyticsFieldActions"><button type="button" class="danger removeAnalyticsField">Remove</button></div>`;
     div.querySelector('.analyticsFieldType').value = field.type || 'yesno';
     const toggle = () => { div.querySelector('.analyticsFieldOptions').style.display = div.querySelector('.analyticsFieldType').value === 'dropdown' ? '' : 'none'; };
     div.querySelector('.analyticsFieldType').addEventListener('change', toggle); toggle();
-    div.querySelector('.removeAnalyticsField').addEventListener('click', () => { div.remove(); });
+    const handle = div.querySelector('.analyticsDragHandle');
+    handle.addEventListener('pointerdown', () => div.classList.add('drag-armed'));
+    handle.addEventListener('pointerup', () => div.classList.remove('drag-armed'));
+    handle.addEventListener('pointercancel', () => div.classList.remove('drag-armed'));
+    div.addEventListener('dragstart', event => {
+      if (!div.classList.contains('drag-armed')) { event.preventDefault(); return; }
+      div.classList.add('analytics-dragging');
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', div.dataset.id);
+    });
+    div.addEventListener('dragend', () => {
+      div.classList.remove('analytics-dragging', 'drag-armed');
+      box.querySelectorAll('.analytics-drag-over').forEach(row => row.classList.remove('analytics-drag-over'));
+    });
+    div.addEventListener('dragover', event => {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+      if (!div.classList.contains('analytics-dragging')) div.classList.add('analytics-drag-over');
+    });
+    div.addEventListener('dragleave', () => div.classList.remove('analytics-drag-over'));
+    div.addEventListener('drop', event => {
+      event.preventDefault();
+      div.classList.remove('analytics-drag-over');
+      const dragged = box.querySelector('.analytics-dragging');
+      if (!dragged || dragged === div) return;
+      const bounds = div.getBoundingClientRect();
+      box.insertBefore(dragged, event.clientY < bounds.top + bounds.height / 2 ? div : div.nextSibling);
+    });
+    div.querySelector('.removeAnalyticsField').addEventListener('click', () => div.remove());
     if (journalReadOnly) div.querySelectorAll('input,select,button').forEach(control => control.disabled = true);
     box.appendChild(div);
   });
 }
-function readAnalyticsFieldRows() {
-  return Array.from(document.querySelectorAll('#analyticsFieldsBuilder .analytics-field-row')).map(row => ({
+function readAnalyticsFieldRows(includeBlank = false) {
+  const rows = Array.from(document.querySelectorAll('#analyticsFieldsBuilder .analytics-field-row')).map(row => ({
     id: row.dataset.id || analyticsFieldId(), label: row.querySelector('.analyticsFieldLabel').value.trim(), type: row.querySelector('.analyticsFieldType').value,
     options: row.querySelector('.analyticsFieldType').value === 'dropdown' ? row.querySelector('.analyticsFieldOptions').value.split(',').map(x=>x.trim()).filter(Boolean) : []
-  })).filter(x => x.label);
+  }));
+  return includeBlank ? rows : rows.filter(row => row.label);
 }
 function analyticsFieldsForTrade(trade) {
   // An empty snapshot is still a historical snapshot; do not inherit later questions.
@@ -3491,10 +3596,12 @@ function renderTradeCustomAnalytics(trade) {
   if (journalReadOnly) box.querySelectorAll('input,select').forEach(control => control.disabled = true);
 }
 function excursionTradeInputs(trade) {
+  const reference = riskReferenceInfo(trade);
   return {
-    entry: $('editEntry')?.value || trade?.entry,
-    size: trade?.size,
-    risk: $('editRisk')?.value || trade?.risk,
+    entry: reference.entry,
+    size: reference.size,
+    risk: reference.risk,
+    riskDistance: reference.distance,
     direction: trade?.direction
   };
 }
@@ -3502,12 +3609,11 @@ function excursionRFromPrice(price, trade) {
   return globalThis.CamTradeExcursion.rFromPrice(price, excursionTradeInputs(trade));
 }
 function excursionPriceFromR(rValue, trade) {
-  return globalThis.CamTradeExcursion.priceFromR(rValue, {
-    entry: trade?.entry,
-    size: trade?.size,
-    risk: trade?.risk,
-    direction: trade?.direction
-  });
+  const reference = firstEntryFillStats(trade);
+  if (!reference) return null;
+  const risk = Math.abs(cleanNumber(trade?.risk));
+  const riskDistance = Math.abs(cleanNumber(trade?.riskDistance)) || (reference.size > 0 && risk > 0 ? risk / reference.size : null);
+  return globalThis.CamTradeExcursion.priceFromR(rValue, { entry: reference.entry, size: reference.size, risk, riskDistance, direction: trade?.direction });
 }
 function loadExcursionPriceInput(inputId, priceKey, rKey, trade) {
   const input = $(inputId);
@@ -3559,12 +3665,13 @@ function readTradeAnalytics(existing) {
   const calculatedMae = maePrice === null ? null : excursionRFromPrice(maePrice, existing);
   const preserveMfe = $('editMfePrice')?.dataset?.preserveLegacyR === 'true';
   const preserveMae = $('editMaePrice')?.dataset?.preserveLegacyR === 'true';
+  const cleaned = { ...previous };
+  delete cleaned.directionConfirmed;
+  delete cleaned.setupOutcome;
+  delete cleaned.entryQuality;
+  delete cleaned.setupFollowed;
   return {
-    ...previous,
-    directionConfirmed: $('editDirectionConfirmed')?.value || '',
-    setupOutcome: $('editSetupOutcome')?.value || '',
-    entryQuality: $('editEntryQuality')?.value || '',
-    setupFollowed: $('editSetupFollowed')?.value || '',
+    ...cleaned,
     mfePrice: mfePrice ?? '',
     maePrice: maePrice ?? '',
     mfe: calculatedMfe ?? (preserveMfe ? previous.mfe : ''),
@@ -3597,9 +3704,6 @@ function analyticsSummary(list) {
   const rs = closed.map(validRValue).filter(value => value !== null);
   const mfes = reviewed.map(t => analyticsNumber(t.analytics.mfe)).filter(value => value !== null);
   const maes = reviewed.map(t => analyticsNumber(t.analytics.mae)).filter(value => value !== null);
-  const directionReviewed = reviewed.filter(t => ['yes', 'no'].includes(t.analytics.directionConfirmed));
-  const outcomes = reviewed.filter(t => t.analytics.setupOutcome);
-  const worked = outcomes.filter(t => String(t.analytics.setupOutcome).startsWith('Worked'));
   return {
     trades: list.length,
     closed: closed.length,
@@ -3608,12 +3712,7 @@ function analyticsSummary(list) {
     totalR: rs.reduce((sum, r) => sum + r, 0),
     avgR: rs.length ? average(rs) : null,
     avgMfe: mfes.length ? average(mfes) : null,
-    avgMae: maes.length ? average(maes) : null,
-    directionReviewed: directionReviewed.length,
-    directionConfirmed: directionReviewed.filter(t => t.analytics.directionConfirmed === 'yes').length,
-    outcomeReviewed: outcomes.length,
-    worked: worked.length,
-    captured: worked.filter(t => t.analytics.setupOutcome === 'Worked - Captured').length
+    avgMae: maes.length ? average(maes) : null
   };
 }
 function analyticsR(value) { return value === null ? '—' : `${value.toFixed(2)}R`; }
@@ -3624,24 +3723,19 @@ function renderSetupAnalytics() {
   const setupName = $('analyticsSetup')?.value || '';
   const list = analyticsFilteredTrades();
   if (!setupName) {
-    $('analyticsHealth').innerHTML = '<p class="empty">Choose a setup to analyze.</p>';
-    ['analyticsOutcome', 'analyticsBreakdowns', 'analyticsMistakeBody', 'analyticsMissedBody'].forEach(id => $(id).innerHTML = '');
+    $('analyticsHealth').innerHTML = '<p class="empty">Select a setup to review its analytics.</p>';
+    ['analyticsBreakdowns', 'analyticsMistakeBody'].forEach(id => $(id).innerHTML = '');
     return;
   }
   const stats = analyticsSummary(list);
   $('analyticsHealth').innerHTML = [
     analyticsStat('Trades', stats.trades),
     analyticsStat('Win Rate', pct(stats.wins, stats.closed)),
-    analyticsStat('Direction Confirmed', pct(stats.directionConfirmed, stats.directionReviewed)),
-    analyticsStat('Setup Worked', pct(stats.worked, stats.outcomeReviewed)),
-    analyticsStat('Capture Rate', pct(stats.captured, stats.worked)),
     analyticsStat('Avg R', analyticsR(stats.avgR)),
     analyticsStat('Avg MFE', analyticsR(stats.avgMfe)),
     analyticsStat('Avg MAE', analyticsR(stats.avgMae))
   ].join('');
   const reviewed = list.filter(t => String(t.status || 'Closed').toLowerCase() === 'closed' && t.analytics);
-  const outcomes = ['Worked - Captured', 'Worked - Missed', 'Failed - Managed', 'Failed - Execution Error'];
-  $('analyticsOutcome').innerHTML = outcomes.map(outcome => `<div class="analytics-outcome-card"><span>${outcome}</span><strong>${reviewed.filter(t => t.analytics.setupOutcome === outcome).length}</strong></div>`).join('');
   const setup = getSetupByName(setupName);
   const fieldMap = new Map();
   (setup?.versions || []).forEach(version => (version.analyticsFields || []).forEach(field => fieldMap.set(field.id, field)));
@@ -3655,11 +3749,8 @@ function renderSetupAnalytics() {
   });
   $('analyticsMistakeBody').innerHTML = [...mistakes.entries()].map(([mistake, group]) => {
     const summary = analyticsSummary(group);
-    return `<tr><td>${escapeHtml(mistake)}</td><td>${group.length}</td><td>${analyticsR(summary.avgR)}</td><td>${analyticsR(summary.rCount ? summary.totalR : null)}</td><td>${pct(summary.directionConfirmed, summary.directionReviewed)}</td></tr>`;
-  }).join('') || '<tr><td colspan="5" class="empty">No mistake-tagged trades in this filter.</td></tr>';
-  const missed = reviewed.filter(t => ['Loss', 'BE'].includes(getWinLoss(t)) && t.analytics.directionConfirmed === 'yes');
-  $('analyticsMissedBody').innerHTML = missed.map(trade => `<tr><td>${escapeHtml(formatDisplayDate(trade.date))}</td><td>${escapeHtml(trade.ticker || '')}</td><td>${analyticsR(validRValue(trade))}</td><td>${escapeHtml(trade.grade || 'Ungraded')}</td><td>${escapeHtml(trade.analytics.entryQuality || '—')}</td><td>${escapeHtml(trade.mistakeTag || '—')}</td><td>${analyticsR(analyticsNumber(trade.analytics.mfe))}</td><td><button type="button" class="openAnalyticsTrade" data-id="${escapeHtml(trade.id)}">Open</button></td></tr>`).join('') || '<tr><td colspan="8" class="empty">No missed winners in this filter.</td></tr>';
-  document.querySelectorAll('.openAnalyticsTrade').forEach(button => button.addEventListener('click', () => openTradeDialog(button.dataset.id)));
+    return `<tr><td>${escapeHtml(mistake)}</td><td>${group.length}</td><td>${analyticsR(summary.avgR)}</td><td>${analyticsR(summary.rCount ? summary.totalR : null)}</td></tr>`;
+  }).join('') || '<tr><td colspan="4" class="empty">No mistake-tagged trades in this filter.</td></tr>';
 }
 function renderAnalyticsFieldBreakdown(field, list) {
   const groups = new Map();
@@ -3673,15 +3764,15 @@ function renderAnalyticsFieldBreakdown(field, list) {
   if (!groups.size) return '';
   const rows = [...groups.entries()].map(([value, group]) => {
     const stats = analyticsSummary(group);
-    return `<tr><td>${escapeHtml(value)}</td><td>${group.length}</td><td>${pct(stats.wins, stats.closed)}</td><td>${pct(stats.directionConfirmed, stats.directionReviewed)}</td><td>${analyticsR(stats.avgR)}</td><td>${analyticsR(stats.rCount ? stats.totalR : null)}</td></tr>`;
+    return `<tr><td>${escapeHtml(value)}</td><td>${group.length}</td><td>${pct(stats.wins, stats.closed)}</td><td>${analyticsR(stats.avgR)}</td><td>${analyticsR(stats.rCount ? stats.totalR : null)}</td></tr>`;
   }).join('');
-  return `<div class="analytics-breakdown-block"><h3>${escapeHtml(field.label)}</h3><div class="grade-table-wrap"><table class="trade-table"><thead><tr><th>Value</th><th>Trades</th><th>Win %</th><th>Direction Confirmed</th><th>Avg R</th><th>Total R</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return `<div class="analytics-breakdown-block"><h3>${escapeHtml(field.label)}</h3><div class="grade-table-wrap"><table class="trade-table"><thead><tr><th>Value</th><th>Trades</th><th>Win %</th><th>Avg R</th><th>Total R</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 if($('addAnalyticsFieldBtn')) $('addAnalyticsFieldBtn').addEventListener('click',()=>{const draft=readSetupDraft();draft.analyticsFields=draft.analyticsFields||[];draft.analyticsFields.push({id:analyticsFieldId(),label:'',type:'yesno',options:[]});fillSetupForm(draft,$('setupSaveMode')?.value||'edit');});
 ['analyticsSetup','analyticsVersion','analyticsGrade','analyticsDirection'].forEach(id=>{if($(id))$(id).addEventListener('change',()=>{if(id==='analyticsSetup'&&$('analyticsVersion'))$('analyticsVersion').value='all';renderSetupAnalytics();});});
 if($('resetAnalyticsFilters'))$('resetAnalyticsFilters').addEventListener('click',()=>{if($('analyticsVersion'))$('analyticsVersion').value='all';if($('analyticsGrade'))$('analyticsGrade').value='';if($('analyticsDirection'))$('analyticsDirection').value='';renderSetupAnalytics();});
 if($('editSetup')) $('editSetup').addEventListener('change',()=>{const t=trades.find(x=>x.id===$('editId').value)||{};renderTradeCustomAnalytics(String(t.setup || '').toLowerCase() === String($('editSetup').value).toLowerCase() ? t : {setup:$('editSetup').value});});
-['editMfePrice','editMaePrice','editRisk','editEntry'].forEach(id => {
+['editMfePrice','editMaePrice'].forEach(id => {
   const input = $(id);
   if (!input) return;
   input.addEventListener('input', () => {
