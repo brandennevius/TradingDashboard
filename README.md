@@ -1,69 +1,24 @@
-# Trading KPI Dashboard
+# Trading Dashboard
 
-A local Streamlit dashboard for importing trade-log spreadsheets (Excel/CSV), calculating KPI metrics, and visualizing performance across time horizons.
+The active application is the Next.js trading journal in [`monthly-trading-report/`](monthly-trading-report/).
 
-## Features
-
-- Multi-file Excel/CSV import
-- Header row parsing controls (auto-detect or manual row/depth) for logs that keep stats above the table
-- Flexible column mapping (works with different trade-log headers)
-- Date-range filter for custom KPI windows
-- UI modes:
-  - Compact vs expanded layout density
-  - Presentation mode for cleaner screenshots
-- Setup-based filters from your trade-log columns (Trend, Grade, etc.)
-- KPI breakdown by:
-  - Month
-  - Quarter
-  - 6-month (H1/H2)
-  - Year
-- KPI baseline tracking for:
-  - MTD
-  - QTD
-  - 6M
-  - YTD
-- Deviation table against trailing historical average
-- Goal tracking and comparison for Net P&L, Win Rate, and Expectancy (R)
-- Weekly, monthly, and quarterly check-ins with saved reviews and reminders
-- Specific trade logging with persistent annotations:
-  - Setup tags
-  - Mistake type
-  - Review notes
-  - Chart link URL
-  - Chart image URL/path
-- Visuals:
-  - Equity curve
-  - Daily P&L calendar heatmap
-  - P&L by period bar chart
-  - Trade P&L and R-multiple distributions
-  - Losses by mistake-type pie chart
-  - Weekly check-in summary charts
-
-## Quick start
+## Local development
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
+cd monthly-trading-report
+npm ci
+npm run dev
 ```
 
-## Expected inputs
+Local development uses JSON storage when `DATABASE_URL` is unset. See the [application README](monthly-trading-report/README.md) for local demo logins, configuration, features, and Vercel deployment instructions.
 
-At minimum, map:
+## Validation
 
-- Exit/Close date
-- P&L
+Run from `monthly-trading-report/`:
 
-Optional but recommended:
+```bash
+npm run build
+node --import tsx --test tests/*.test.ts tests/*.test.mjs tests/*.test.js
+```
 
-- Entry date
-- R Multiple
-- Risk ($)
-- Asset/Symbol
-
-## Notes
-
-- The app parses values like `$1,250`, `-350`, and `(200)` automatically.
-- KPI calculations are based on realized trade close date.
-- If your workbook has multiple sheets, choose the correct sheet in the top import panel.
+The retired Python/Streamlit dashboard has been removed. Historical data, screenshots, reference material, and standalone analysis scripts remain in the repository.
