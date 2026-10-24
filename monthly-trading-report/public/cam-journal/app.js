@@ -2116,7 +2116,7 @@ function openTradeDialog(id) {
   });
   if ($('editRiskDistance') && !$('editRiskDistance').value) {
     const reference = firstEntryFillStats(trade);
-    const risk = Math.abs(cleanNumber(trade.risk));
+    const risk = Math.abs(numberOrBlank(trade.risk));
     if (reference?.size > 0 && risk > 0) $('editRiskDistance').value = (risk / reference.size).toFixed(3);
   }
   updateRiskReferencePreview();
@@ -2223,8 +2223,8 @@ function firstEntryFillStats(trade) {
 
 function riskReferenceInfo(trade) {
   const reference = firstEntryFillStats(trade);
-  const risk = Math.abs(cleanNumber($('editRisk')?.value || trade?.risk));
-  let distance = Math.abs(cleanNumber($('editRiskDistance')?.value || trade?.riskDistance));
+  const risk = Math.abs(numberOrBlank($('editRisk')?.value || trade?.risk));
+  let distance = Math.abs(numberOrBlank($('editRiskDistance')?.value || trade?.riskDistance));
   if (!(distance > 0) && reference?.size > 0 && risk > 0) distance = risk / reference.size;
   return { ...(reference || {}), risk, distance };
 }
@@ -3611,8 +3611,8 @@ function excursionRFromPrice(price, trade) {
 function excursionPriceFromR(rValue, trade) {
   const reference = firstEntryFillStats(trade);
   if (!reference) return null;
-  const risk = Math.abs(cleanNumber(trade?.risk));
-  const riskDistance = Math.abs(cleanNumber(trade?.riskDistance)) || (reference.size > 0 && risk > 0 ? risk / reference.size : null);
+  const risk = Math.abs(numberOrBlank(trade?.risk));
+  const riskDistance = Math.abs(numberOrBlank(trade?.riskDistance)) || (reference.size > 0 && risk > 0 ? risk / reference.size : null);
   return globalThis.CamTradeExcursion.priceFromR(rValue, { entry: reference.entry, size: reference.size, risk, riskDistance, direction: trade?.direction });
 }
 function loadExcursionPriceInput(inputId, priceKey, rKey, trade) {

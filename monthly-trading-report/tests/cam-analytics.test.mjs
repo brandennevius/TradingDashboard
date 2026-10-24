@@ -145,3 +145,69 @@ test('Version 79 UI uses custom analytics questions and shared Data Health filte
   assert.match(source, /class="analyticsDragHandle"/);
   assert.match(functionSource('renderDataHealth'), /getReportFilteredTrades\(\)/);
 });
+
+function tradeDialogHarness(trade) {
+  const inputs = new Map();
+  const context = vm.createContext({
+    trades: [trade],
+    loadingTradeDialog: false,
+    tradeDialogOriginalTrade: null,
+    tradeDialogSaved: false,
+    tradeDialogDeleted: false,
+    CamTradeExcursion: require('../public/cam-journal/trade-excursion-calculator.js'),
+    syntheticExecutionsFromTrade: parser.syntheticExecutionsFromTrade,
+    dedupeExecutions: parser.dedupeExecutions,
+    setTimeout: callback => callback(),
+    formatDisplayDate: value => value,
+    formatDisplayTime: value => value,
+    money: String,
+    getRMultiple: () => null,
+    cleanBrokerImportNoteText: value => value,
+    renderTradeCustomAnalytics: () => {},
+    updateAtrStats: () => {},
+    renderScreenshotGallery: () => {},
+    renderExecutionTable: () => {},
+    $: id => {
+      if (!inputs.has(id)) inputs.set(id, {
+        value: '', textContent: '', dataset: {}, open: false,
+        showModal() { this.open = true; }
+      });
+      return inputs.get(id);
+    }
+  });
+  [
+    'numberOrBlank', 'price4', 'analyticsNumber', 'firstEntryFillStats',
+    'riskReferenceInfo', 'updateRiskReferencePreview', 'excursionTradeInputs',
+    'excursionRFromPrice', 'excursionPriceFromR', 'loadExcursionPriceInput',
+    'loadExcursionPriceInputs', 'updateExcursionPreview', 'updateExcursionRPreview',
+    'openTradeDialog'
+  ].forEach(name => vm.runInContext(functionSource(name), context));
+  return context;
+}
+
+test('trade dialog opens for legacy, saved-risk-distance, and missing-risk trades', () => {
+  for (const overrides of [
+    { risk: 20, analytics: { mfe: 2, mae: -1 } },
+    { risk: 20, riskDistance: 2, analytics: { mfePrice: 104, maePrice: 98 } },
+    { risk: '', size: '', entry: '', analytics: { mfe: 2, mae: -1 } }
+  ]) {
+    const trade = { id: 'click-regression', ticker: 'TEST', entry: 100, size: 10, direction: 'Long', ...overrides };
+    const before = JSON.stringify(trade);
+    const context = tradeDialogHarness(trade);
+    context.openTradeDialog(trade.id);
+    assert.equal(context.$('tradeDialog').open, true);
+    assert.equal(context.$('editId').value, trade.id);
+    assert.equal(context.loadingTradeDialog, false);
+    assert.equal(JSON.stringify(trade), before, 'Opening the dialog must not mutate the saved trade');
+    if (trade.risk) {
+      assert.equal(context.$('editRiskDistance').value, overrides.riskDistance || '2.000');
+      assert.equal(context.$('editMfePrice').value, '104.0000');
+      assert.equal(context.$('editMaePrice').value, '98.0000');
+      assert.equal(context.$('editMfeCalculated').textContent, 'Calculated MFE: +2.00R');
+      assert.equal(context.$('editMaeCalculated').textContent, 'Calculated MAE: -1.00R');
+    } else {
+      assert.equal(context.$('editMfeCalculated').textContent, 'Saved MFE: +2.00R');
+      assert.equal(context.$('editMaeCalculated').textContent, 'Saved MAE: -1.00R');
+    }
+  }
+});
