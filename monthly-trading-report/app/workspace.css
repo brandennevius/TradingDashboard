@@ -477,3 +477,14 @@ body:has(.branden-route-shell) { background: #faf9f2; }
   padding: 10px 0;
 }
 .branden-route-shell .watchlist-workspace { padding: 0; }
+
+.branden-sidebar-icon svg {
+  display: block;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+.branden-sidebar-group-items > a.active .branden-sidebar-icon {
+  color: #3f6136;
+  background: rgba(111, 143, 95, 0.2);
+}

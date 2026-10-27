@@ -249,7 +249,7 @@ test("Word report is a concise period review and keeps strategy material private
     qaReview.workOn.priorities[0].evidenceTradeIds = ["trade-1", "trade-4", "trade-7"];
     qaReview.workOn.priorities[0].evidence = "Late additions appeared in three losing trades, making entry discipline a recurring issue in this period.";
     qaReview.tradeReviews = Object.fromEntries(qaTrades.map((item, index) => [item.id, { mainLesson: index % 3 === 0 ? "Avoid adding after the planned entry area." : "Keep the defined risk and wait for the intended trigger." }]));
-    const qaDocument = await buildDocument(qaTrades, templates, "2026-09-01", "2026-09-13", data, qaReview, focus);
+    const qaDocument = await buildDocument(qaTrades, templates, "2026-09-01", "2026-09-13", data, qaReview);
     await writeFile(process.env.REVIEW_QA_PATH, await Packer.toBuffer(qaDocument));
   }
 });

@@ -40,6 +40,7 @@ import type {
 import { displayTradeReturnPercent, tradeReturnLabel } from "@/lib/trade-return";
 import type { TradeExcursionResult } from "@/lib/trade-excursion";
 import { emptyTradeReviewSections, tradeNeedsReview, resolvedTradeReviewSections } from "@/lib/trade-review";
+import BrandenNavIcon from "./components/BrandenNavIcon";
 import BrandenSidebar from "./components/BrandenSidebar";
 
 const BottomToBullChecklist = dynamic(() => import("./components/BottomToBullChecklist"), {
@@ -5910,7 +5911,7 @@ export default function Home() {
                     {
                       key: "import-broker-statement",
                       label: "Import broker statement",
-                      icon: "I",
+                      icon: <BrandenNavIcon name="import" />,
                       disabled: Boolean(busyProgress),
                       onClick: async () => {
                         const targetPortfolio = await choosePortfolioForImport("broker statement import");

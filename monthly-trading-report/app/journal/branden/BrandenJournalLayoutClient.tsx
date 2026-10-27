@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
+import BrandenNavIcon from "@/app/components/BrandenNavIcon";
 import BrandenSidebar from "@/app/components/BrandenSidebar";
 import { BrandenSnapshotActionsProvider } from "./BrandenSnapshotActionsContext";
 import { buildDailySnapshotRequestBody } from "@/lib/daily-portfolio-snapshot-request";
@@ -323,7 +324,7 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         {
           key: "import-broker-statement",
           label: isImporting ? "Importing statement..." : "Import broker statement",
-          icon: "I",
+          icon: <BrandenNavIcon name="import" />,
           disabled: isImporting,
           onClick: async () => {
             const targetPortfolio = await choosePortfolioForImport();

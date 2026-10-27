@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent } from "react";
+import BrandenNavIcon from "./BrandenNavIcon";
+import { useEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 
 const SIDEBAR_PREFERENCES_KEY = "branden-sidebar-preferences";
 const DEFAULT_WIDTH = 264;
@@ -19,7 +20,7 @@ function PanelIcon() {
 type BrandenSidebarAction = {
   key: string;
   label: string;
-  icon: string;
+  icon: ReactNode;
   disabled?: boolean;
   onClick: () => void | Promise<void>;
 };
@@ -32,13 +33,13 @@ type BrandenSidebarProps = {
 type BrandenSidebarLinkItem = {
   href: string;
   label: string;
-  icon: string;
+  icon: ReactNode;
 };
 
 type BrandenSidebarButtonItem = {
   action: BrandenSidebarAction;
   label: string;
-  icon: string;
+  icon: ReactNode;
 };
 
 type BrandenSidebarItem = BrandenSidebarLinkItem | BrandenSidebarButtonItem;
@@ -47,26 +48,26 @@ const brandenSidebarGroups = [
   {
     title: "Overview",
     items: [
-      { href: "/journal/branden/dashboard", label: "Dashboard", icon: "D" },
-      { href: "/journal/branden/daily-review", label: "Daily Review", icon: "R" },
-      { href: "/journal/branden/calendar", label: "Calendar", icon: "C" },
-      { href: "/journal/branden/open-positions", label: "Open Positions", icon: "H" },
-      { href: "/journal/branden/trade-log", label: "Trade Log", icon: "L" }
+      { href: "/journal/branden/dashboard", label: "Dashboard", icon: <BrandenNavIcon name="dashboard" /> },
+      { href: "/journal/branden/daily-review", label: "Daily Review", icon: <BrandenNavIcon name="review" /> },
+      { href: "/journal/branden/calendar", label: "Calendar", icon: <BrandenNavIcon name="calendar" /> },
+      { href: "/journal/branden/open-positions", label: "Open Positions", icon: <BrandenNavIcon name="positions" /> },
+      { href: "/journal/branden/trade-log", label: "Trade Log", icon: <BrandenNavIcon name="journal" /> }
     ]
   },
   {
     title: "Tools",
     items: [
-      { href: "/journal/branden/market-gauge", label: "Market Gauge", icon: "G" },
-      { href: "/journal/branden/benchmark", label: "Benchmark", icon: "X" },
-      { href: "/journal/branden/rprp", label: "RPRP Sizer", icon: "R" },
-      { href: "/journal/branden/setup-builder", label: "Setup Builder", icon: "S" },
-      { href: "/journal/branden/portfolios", label: "Portfolios", icon: "P" }
+      { href: "/journal/branden/market-gauge", label: "Market Gauge", icon: <BrandenNavIcon name="gauge" /> },
+      { href: "/journal/branden/benchmark", label: "Benchmark", icon: <BrandenNavIcon name="benchmark" /> },
+      { href: "/journal/branden/rprp", label: "RPRP Sizer", icon: <BrandenNavIcon name="sizing" /> },
+      { href: "/journal/branden/setup-builder", label: "Setup Builder", icon: <BrandenNavIcon name="setup" /> },
+      { href: "/journal/branden/portfolios", label: "Portfolios", icon: <BrandenNavIcon name="portfolio" /> }
     ]
   },
   {
     title: "Account",
-    items: [{ href: "/journal/branden/settings", label: "Settings", icon: "G" }]
+    items: [{ href: "/journal/branden/settings", label: "Settings", icon: <BrandenNavIcon name="settings" /> }]
   }
 ];
 
