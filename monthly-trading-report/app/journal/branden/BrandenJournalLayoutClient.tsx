@@ -281,7 +281,7 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   }
 
   async function choosePortfolioForImport() {
-    const targetPortfolio = await chooseBrokerImportPortfolio(defaultPortfolio.trim());
+    const targetPortfolio = await chooseBrokerImportPortfolio(defaultPortfolio.trim(), [], { input: cfImportInputRef.current, onChoose: portfolio => { pendingImportPortfolioRef.current = portfolio; } });
     if (targetPortfolio === null) return "";
     const normalized = targetPortfolio.trim();
     if (!normalized) {
@@ -329,8 +329,7 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
           icon: <BrandenNavIcon name="import" />,
           disabled: isImporting,
           onClick: async () => {
-            const targetPortfolio = await choosePortfolioForImport();
-            if (targetPortfolio) cfImportInputRef.current?.click();
+            await choosePortfolioForImport();
           }
         }
       ] : [])

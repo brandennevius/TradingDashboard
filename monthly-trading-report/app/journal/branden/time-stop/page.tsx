@@ -88,10 +88,7 @@ export default function BrandenTimeStopPage() {
           icon: "I",
           disabled: isImporting,
           onClick: async () => {
-            const targetPortfolio = await choosePortfolioForImport();
-            if (targetPortfolio) {
-              cfImportInputRef.current?.click();
-            }
+            await choosePortfolioForImport();
           }
         }
       ]
@@ -99,7 +96,7 @@ export default function BrandenTimeStopPage() {
 
   async function choosePortfolioForImport() {
     const defaultValue = activePortfolio.trim() || defaultPortfolio.trim();
-    const targetPortfolio = await chooseBrokerImportPortfolio(defaultValue);
+    const targetPortfolio = await chooseBrokerImportPortfolio(defaultValue, [], { input: cfImportInputRef.current, onChoose: portfolio => { pendingImportPortfolioRef.current = portfolio; } });
 
     if (targetPortfolio === null) {
       return "";

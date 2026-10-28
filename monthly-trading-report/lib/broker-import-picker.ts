@@ -1,5 +1,5 @@
 /** A single portfolio chooser shared by the journal's broker import entry points. */
-export async function chooseBrokerImportPortfolio(defaultValue = "", known: string[] = []): Promise<string | null> {
+export async function chooseBrokerImportPortfolio(defaultValue = "", known: string[] = [], filePicker?: { input: HTMLInputElement | null; onChoose: (portfolio: string) => void }): Promise<string | null> {
   let saved = known;
   try {
     const response = await fetch("/api/settings/branden-portfolios", { cache: "no-store" });
@@ -23,7 +23,12 @@ export async function chooseBrokerImportPortfolio(defaultValue = "", known: stri
     const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Cancel"; cancel.onclick = () => dialog.close();
     const submit = document.createElement("button"); submit.type = "submit"; submit.textContent = "Choose file";
     let result: string | null = null;
-    form.onsubmit = event => { event.preventDefault(); const chosen = select.value.trim(); if (!chosen) return; result = chosen; dialog.close(); };
+    form.onsubmit = event => { event.preventDefault(); const chosen = select.value.trim(); if (!chosen) return; result = chosen;
+      // Keep the native picker inside the user gesture; Safari blocks it after
+      // awaiting dialog close (or saving portfolio settings over the network).
+      filePicker?.onChoose(chosen);
+      dialog.close();
+      filePicker?.input?.click(); };
     dialog.onclose = () => { dialog.remove(); resolve(result); };
     actions.append(cancel, submit); form.append(title, hint, label, actions); dialog.append(form); document.body.append(dialog); dialog.showModal();
   });

@@ -225,10 +225,7 @@ export default function BrandenMarketCyclePage() {
           icon: "I",
           disabled: isImporting,
           onClick: async () => {
-            const targetPortfolio = await choosePortfolioForImport();
-            if (targetPortfolio) {
-              cfImportInputRef.current?.click();
-            }
+            await choosePortfolioForImport();
           }
         }
       ]
@@ -402,7 +399,7 @@ export default function BrandenMarketCyclePage() {
 
   async function choosePortfolioForImport() {
     const defaultValue = defaultPortfolio.trim() || savedPortfolios[0] || "";
-    const targetPortfolio = await chooseBrokerImportPortfolio(defaultValue);
+    const targetPortfolio = await chooseBrokerImportPortfolio(defaultValue, [], { input: cfImportInputRef.current, onChoose: portfolio => { pendingImportPortfolioRef.current = portfolio; } });
 
     if (targetPortfolio === null) {
       return "";

@@ -3899,7 +3899,7 @@ export default function Home() {
 
   async function choosePortfolioForImport(importLabel: string) {
     const defaultValue = importPortfolioTag.trim() || activePortfolio.trim() || defaultPortfolio.trim();
-    const requestedPortfolio = await chooseBrokerImportPortfolio(defaultValue, portfolioOptions);
+    const requestedPortfolio = await chooseBrokerImportPortfolio(defaultValue, portfolioOptions, { input: cfImportInputRef.current, onChoose: portfolio => { pendingImportPortfolioRef.current = portfolio; } });
 
     if (requestedPortfolio === null) {
       setStatus(`${importLabel} cancelled.`);
@@ -3911,14 +3911,6 @@ export default function Home() {
     if (!targetPortfolio) {
       setStatus(`Enter a portfolio name before starting ${importLabel}.`);
       return "";
-    }
-
-    if (!savedPortfolios.includes(targetPortfolio)) {
-      const savedPortfolioList = await saveBrandenPortfolios([...savedPortfolios, targetPortfolio]);
-
-      if (!savedPortfolioList) {
-        return "";
-      }
     }
 
     pendingImportPortfolioRef.current = targetPortfolio;
@@ -5916,10 +5908,7 @@ export default function Home() {
                       icon: <BrandenNavIcon name="import" />,
                       disabled: Boolean(busyProgress),
                       onClick: async () => {
-                        const targetPortfolio = await choosePortfolioForImport("broker statement import");
-                        if (targetPortfolio) {
-                          cfImportInputRef.current?.click();
-                        }
+                        await choosePortfolioForImport("broker statement import");
                       }
                     }
                   ]
