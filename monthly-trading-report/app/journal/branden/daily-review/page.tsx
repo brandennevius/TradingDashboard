@@ -179,54 +179,6 @@ function activityLabel(kind: DailyActivity["kind"]) {
   return "Closed";
 }
 
-function ActivitySection({
-  title,
-  eyebrow,
-  activities,
-  emptyMessage
-}: {
-  title: string;
-  eyebrow: string;
-  activities: DailyActivity[];
-  emptyMessage: string;
-}) {
-  return (
-    <article className="daily-review-card daily-activity-section">
-      <div className="daily-card-heading">
-        <div>
-          <p className="eyebrow">{eyebrow}</p>
-          <h2>{title}</h2>
-        </div>
-        <span>{activities.length}</span>
-      </div>
-      {activities.length ? (
-        <div className="daily-activity-list">
-          {activities.map((activity) => (
-            <div className="daily-activity-row" key={activity.id}>
-              <span className={`daily-activity-icon ${activity.kind}`}>
-                {activity.kind === "opened" || activity.kind === "added" ? "+" : "−"}
-              </span>
-              <div>
-                <strong>{activityLabel(activity.kind)} {activity.symbol}</strong>
-                <span>{formatNumber(activity.shares)} shares at {formatCurrency(activity.price)} · {activity.side}</span>
-              </div>
-              {activity.kind === "closed" || activity.kind === "reduced" ? (
-                <strong className={activity.realizedPnl >= 0 ? "daily-positive" : "daily-negative"}>
-                  {formatCurrency(activity.realizedPnl)}
-                </strong>
-              ) : null}
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="daily-empty-state daily-empty-state-compact">
-          <span>{emptyMessage}</span>
-        </div>
-      )}
-    </article>
-  );
-}
-
 export default function DailyReviewPage() {
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
@@ -237,6 +189,7 @@ export default function DailyReviewPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMarket, setIsLoadingMarket] = useState(false);
   const [error, setError] = useState("");
+  const [contributionDescending, setContributionDescending] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -457,42 +410,62 @@ export default function DailyReviewPage() {
   const dailyPnl = !isLoadingMarket && performance.length ? performance.reduce((sum, row) => sum + row.dailyPnl, 0) : null;
   const startingMarketValue = performance.reduce((sum, row) => sum + Math.abs(row.startShares * row.previousClose), 0);
   const dailyReturn = dailyPnl !== null && startingMarketValue ? (dailyPnl / startingMarketValue) * 100 : null;
-  const closedActivities = activities.filter((activity) => activity.kind === "closed");
-  const openedActivities = activities.filter((activity) => activity.kind === "opened");
-  const updatedActivities = activities.filter((activity) => activity.kind === "added" || activity.kind === "reduced");
+  const activitySummary = (["closed", "opened", "added", "reduced"] as const)
+    .map((kind) => ({ kind, count: activities.filter((activity) => activity.kind === kind).length }))
+    .filter(({ count }) => count > 0)
+    .map(({ kind, count }) => `${count} ${kind === "reduced" ? "trimmed" : kind}`)
+    .join(" · ");
+  const sortedPerformance = [...performance].sort((a, b) => contributionDescending ? b.dailyPnl - a.dailyPnl : a.dailyPnl - b.dailyPnl);
+  const maxContribution = Math.max(...performance.map((row) => Math.abs(row.dailyPnl)), 1);
+
+  function moveDate(offset: number) {
+    if (!selectedDate) return;
+    const date = new Date(`${selectedDate}T12:00:00Z`);
+    date.setUTCDate(date.getUTCDate() + offset);
+    setSelectedDate(date.toISOString().slice(0, 10));
+  }
+
   const selectedPortfolioEquity = provenance.accountEquity;
 
   return (
     <div className="branden-journal-content daily-review-page">
-        <header className="branden-route-header">
+        <header className="branden-route-header daily-review-header">
           <div>
-            <p className="eyebrow">Portfolio change report</p>
+            <p className="eyebrow">Journal / Daily Review</p>
             <h1>Daily Review</h1>
-            <span>{formatDate(selectedDate)}</span>
+            <p className="daily-review-subtitle">Your portfolio, at a glance.</p>
+          </div>
+          <div className="daily-review-controls">
+            <div className="daily-date-control">
+              <button type="button" aria-label="Previous day" disabled={!selectedDate} onClick={() => moveDate(-1)}>‹</button>
+              <input aria-label="Review date" title={formatDate(selectedDate)} type="date" value={selectedDate} onChange={(event) => { if (event.target.value) setSelectedDate(event.target.value); }} />
+              <button type="button" aria-label="Next day" disabled={!selectedDate} onClick={() => moveDate(1)}>›</button>
+            </div>
+            <span className="daily-review-account"><span aria-hidden="true">{user?.name.charAt(0) || "G"}</span>{user?.name || "Read-only view"}</span>
           </div>
         </header>
-
-        <section className="branden-route-toolbar">
-          <label>
-            Review date
-            <input type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
-          </label>
-          {user ? <span>Signed in as {user.name}</span> : <span>Public read-only view</span>}
-        </section>
 
         {error ? <p className="status error">{error}</p> : null}
         {isLoading ? <p className="status">Loading daily review...</p> : null}
 
         {!isLoading && !error ? (
           <>
-            <section className="daily-review-provenance" aria-label="Daily Review data provenance">
-              <strong>{provenance.label}</strong>
-              <span>Selected session: {selectedDate}</span>
-              {provenance.anchorCoverageDate ? <span>Broker anchor: {provenance.anchorCoverageDate}</span> : <span>No dated broker anchor</span>}
-              <span>Valuation: exact-session historical closes</span>
-              {provenance.kind === "BROKER_SNAPSHOT" && provenance.snapshot ? (
-                <span title={provenance.snapshot.sourceHash}>Source SHA-256: {provenance.snapshot.sourceHash.slice(0, 12)}…</span>
-              ) : null}
+            <section className="daily-review-source" aria-label="Daily Review data provenance">
+              <div className="daily-source-summary">
+                <span className={`daily-source-label ${provenance.kind === "BROKER_SNAPSHOT" ? "exact" : ""}`}>
+                  <span aria-hidden="true">●</span>{provenance.kind === "BROKER_SNAPSHOT" ? "Dated broker snapshot" : provenance.label}
+                </span>
+                <span>As of {formatDate(selectedDate)}</span>
+              </div>
+              <details className="daily-source-details" key={selectedDate}>
+                <summary>View source details</summary>
+                <dl>
+                  <div><dt>Selected session</dt><dd>{selectedDate}</dd></div>
+                  <div><dt>Broker anchor</dt><dd>{provenance.anchorCoverageDate || "No dated broker anchor"}</dd></div>
+                  <div><dt>Valuation</dt><dd>Exact-session historical closes</dd></div>
+                  {provenance.kind === "BROKER_SNAPSHOT" && provenance.snapshot ? <div><dt>Source SHA-256</dt><dd>{provenance.snapshot.sourceHash}</dd></div> : null}
+                </dl>
+              </details>
             </section>
 
             <section className="daily-review-hero">
@@ -509,13 +482,14 @@ export default function DailyReviewPage() {
                 </strong>
               </div>
               <div>
-                <span>Broker-exact equity</span>
+                <span>Account equity</span>
                 <strong>{selectedPortfolioEquity !== null ? formatCurrency(selectedPortfolioEquity) : "—"}</strong>
                 <small>{provenance.kind === "BROKER_SNAPSHOT" ? `As of ${selectedDate}` : "Requires an exact-date broker snapshot"}</small>
               </div>
               <div>
                 <span>Position changes</span>
                 <strong>{activities.length}</strong>
+                <small>{activitySummary || "No position changes"}</small>
               </div>
             </section>
 
@@ -527,76 +501,67 @@ export default function DailyReviewPage() {
 
             <section className="daily-activity-overview">
               <div className="daily-section-heading">
-                <div>
-                  <p className="eyebrow">What changed</p>
-                  <h2>Portfolio activity</h2>
-                </div>
-                <span>{activities.length} total changes</span>
+                <h2>Portfolio activity</h2>
+                <span>{activities.length} changes</span>
               </div>
-              <div className="daily-activity-grid">
-                <ActivitySection
-                  eyebrow="Exits"
-                  title="Closed positions"
-                  activities={closedActivities}
-                  emptyMessage="No positions were closed."
-                />
-                <ActivitySection
-                  eyebrow="New exposure"
-                  title="Newly opened positions"
-                  activities={openedActivities}
-                  emptyMessage="No new positions were opened."
-                />
-                <ActivitySection
-                  eyebrow="Adds and trims"
-                  title="Updated positions"
-                  activities={updatedActivities}
-                  emptyMessage="No existing positions were added to or trimmed."
-                />
+              <div className="table-wrap daily-feed-table">
+                <table>
+                  <thead><tr><th>Action</th><th>Asset</th><th>Details</th><th>Realized P&amp;L</th></tr></thead>
+                  <tbody>
+                    {activities.map((activity) => (
+                      <tr key={activity.id}>
+                        <td><span className={`daily-action ${activity.kind}`}><span aria-hidden="true">{activity.kind === "opened" || activity.kind === "added" ? "+" : "−"}</span>{activityLabel(activity.kind)}</span></td>
+                        <td><strong>{activity.symbol}</strong></td>
+                        <td>{formatNumber(activity.shares)} shares at {formatCurrency(activity.price)} <span className="daily-muted">· {activity.side}</span></td>
+                        <td className={activity.kind === "closed" || activity.kind === "reduced" ? activity.realizedPnl >= 0 ? "daily-positive" : "daily-negative" : "daily-muted"}>
+                          {activity.kind === "closed" || activity.kind === "reduced" ? formatCurrency(activity.realizedPnl) : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                    {!activities.length ? <tr><td colSpan={4} className="empty-cell">No position changes for this date.</td></tr> : null}
+                  </tbody>
+                </table>
               </div>
             </section>
 
             <section className="daily-review-card">
               <div className="daily-card-heading">
                 <div>
-                  <p className="eyebrow">Position performance</p>
-                  <h2>How each asset performed</h2>
+                  <h2>Position performance</h2>
+                  <p className="daily-review-subtitle">Daily contribution across {performance.length} tracked assets.</p>
                 </div>
-                <span>{performance.length} tracked assets</span>
+                <button type="button" className="daily-sort-button" onClick={() => setContributionDescending((value) => !value)} aria-label={`Sort daily P&L ${contributionDescending ? "ascending" : "descending"}`}>Contribution {contributionDescending ? "↓" : "↑"}</button>
               </div>
               <div className="table-wrap daily-performance-table">
                 <table>
                   <thead>
                     <tr>
                       <th>Asset</th>
-                      <th>Side</th>
-                      <th>Start shares</th>
-                      <th>End shares</th>
+                      <th>Shares (start → end)</th>
                       <th>Previous close</th>
                       <th>Daily close</th>
                       <th>Asset return</th>
-                      <th>P&amp;L contribution</th>
+                      <th aria-sort={contributionDescending ? "descending" : "ascending"}>Daily P&amp;L</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {performance.map((row) => (
+                    {sortedPerformance.map((row) => (
                       <tr key={row.symbol}>
-                        <td><strong>{row.symbol}</strong></td>
-                        <td>{row.side}</td>
-                        <td>{formatNumber(row.startShares)}</td>
-                        <td>{formatNumber(row.endShares)}</td>
+                        <td><strong>{row.symbol}</strong><small className="daily-asset-side">{row.side}</small></td>
+                        <td>{formatNumber(row.startShares)} <span className="daily-muted">→</span> {formatNumber(row.endShares)}</td>
                         <td>{formatCurrency(row.previousClose)}</td>
                         <td>{formatCurrency(row.close)}</td>
                         <td className={row.returnPercent >= 0 ? "daily-positive" : "daily-negative"}>
                           {formatPercent(row.returnPercent)}
                         </td>
                         <td className={row.dailyPnl >= 0 ? "daily-positive" : "daily-negative"}>
-                          {formatCurrency(row.dailyPnl)}
+                          <span className="daily-contribution"><span className="daily-contribution-track" aria-hidden="true"><span style={{ width: `${Math.abs(row.dailyPnl) / maxContribution * 100}%` }} /></span><span>{formatCurrency(row.dailyPnl)}</span></span>
                         </td>
                       </tr>
                     ))}
                     {!isLoadingMarket && !performance.length ? (
                       <tr>
-                        <td className="empty-cell" colSpan={8}>No market performance data was available for this date.</td>
+                        <td className="empty-cell" colSpan={6}>No market performance data was available for this date.</td>
                       </tr>
                     ) : null}
                   </tbody>
