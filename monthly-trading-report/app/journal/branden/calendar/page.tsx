@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { useEffect, useMemo, useState } from "react";
 import type { TradeLogEntry, TraderUser } from "@/lib/types";
 
@@ -153,7 +155,7 @@ function calendarActivityLabel(summary: ReturnType<typeof summarizeCalendarRows>
 export default function BrandenCalendarPage() {
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
-  const [activePortfolio, setActivePortfolio] = useState("");
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [calendarMonth, setCalendarMonth] = useState(new Date().toISOString().slice(0, 7));
   const [selectedCalendarDate, setSelectedCalendarDate] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -179,7 +181,7 @@ export default function BrandenCalendarPage() {
 
       setUser(calendarData.user || null);
       setTrades(Array.isArray(calendarData.trades) ? calendarData.trades : []);
-      setActivePortfolio(String(calendarData.defaultPortfolio || ""));
+      initializePortfolio(String(calendarData.defaultPortfolio || ""));
       setIsLoading(false);
     }
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { useEffect, useMemo, useState } from "react";
 import type { TradeLogEntry, TraderUser } from "@/lib/types";
 
@@ -35,7 +37,7 @@ export default function BrandenPortfoliosPage() {
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
   const [savedPortfolios, setSavedPortfolios] = useState<string[]>([]);
   const [defaultPortfolio, setDefaultPortfolio] = useState("");
-  const [activePortfolio, setActivePortfolio] = useState("");
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [newPortfolio, setNewPortfolio] = useState("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -67,7 +69,7 @@ export default function BrandenPortfoliosPage() {
       setTrades(Array.isArray(data.trades) ? data.trades : []);
       setSavedPortfolios(Array.isArray(data.portfolios) ? data.portfolios : []);
       setDefaultPortfolio(String(data.defaultPortfolio || ""));
-      setActivePortfolio(String(data.defaultPortfolio || ""));
+      initializePortfolio(String(data.defaultPortfolio || ""));
       setIsLoading(false);
     }
 
@@ -127,7 +129,7 @@ export default function BrandenPortfoliosPage() {
     const saved = await savePortfolios(portfolioOptions, nextDefaultPortfolio);
     if (!saved) return;
     setDefaultPortfolio(nextDefaultPortfolio);
-    setActivePortfolio(nextDefaultPortfolio);
+    initializePortfolio(nextDefaultPortfolio);
     setStatus(nextDefaultPortfolio ? `Default portfolio set to ${nextDefaultPortfolio}.` : "Default portfolio set to all portfolios.");
   }
 

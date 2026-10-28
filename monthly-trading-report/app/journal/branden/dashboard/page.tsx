@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -215,7 +217,7 @@ export default function BrandenDashboardPage() {
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
   const [setupTemplates, setSetupTemplates] = useState<SetupChecklistTemplate[]>([]);
-  const [activePortfolio, setActivePortfolio] = useState("");
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [startDate, setStartDate] = useState(currentMonthStartDate());
   const [endDate, setEndDate] = useState(currentDate());
   const [isLoading, setIsLoading] = useState(true);
@@ -247,7 +249,7 @@ export default function BrandenDashboardPage() {
       setUser(data.user || null);
       setTrades(Array.isArray(data.trades) ? data.trades : []);
       setSetupTemplates(Array.isArray(data.setupChecklists) ? data.setupChecklists : []);
-      setActivePortfolio(nextDefaultPortfolio);
+      initializePortfolio(nextDefaultPortfolio);
       setIsLoading(false);
     }
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { useEffect, useMemo, useState } from "react";
 import {
   resolveDailyReviewProvenance,
@@ -183,7 +185,7 @@ export default function DailyReviewPage() {
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
   const [brokerPortfolioSnapshots, setBrokerPortfolioSnapshots] = useState<BrokerPortfolioSnapshot[]>([]);
-  const [activePortfolio, setActivePortfolio] = useState("");
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [selectedDate, setSelectedDate] = useState("");
   const [marketSeries, setMarketSeries] = useState<Record<string, Candle[]>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -219,7 +221,7 @@ export default function DailyReviewPage() {
       setUser(reviewData.user || null);
       setTrades(nextTrades);
       setBrokerPortfolioSnapshots(Array.isArray(reviewData.brokerPortfolioSnapshots) ? reviewData.brokerPortfolioSnapshots : []);
-      setActivePortfolio(String(reviewData.defaultPortfolio || ""));
+      initializePortfolio(String(reviewData.defaultPortfolio || ""));
       setSelectedDate(params.get("date") || latestExecutionDate || new Date().toISOString().slice(0, 10));
       setIsLoading(false);
     }

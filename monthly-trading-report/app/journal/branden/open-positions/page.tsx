@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { useEffect, useMemo, useState } from "react";
 import OpenHeatDashboard from "@/app/components/OpenHeatDashboard";
 import TimeStopMonitor from "@/app/components/TimeStopMonitor";
@@ -28,7 +30,7 @@ export default function BrandenOpenPositionsPage() {
   const [defaultPortfolio, setDefaultPortfolio] = useState("");
   const [portfolioMeta, setPortfolioMeta] = useState<Record<string, PortfolioMeta>>({});
   const [brokerPortfolioSnapshots, setBrokerPortfolioSnapshots] = useState<BrokerPortfolioSnapshot[]>([]);
-  const [activePortfolio, setActivePortfolio] = useState("");
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -85,7 +87,7 @@ export default function BrandenOpenPositionsPage() {
           ? snapshotsData.brokerPortfolioSnapshots
           : []
       );
-      setActivePortfolio(nextDefaultPortfolio);
+      initializePortfolio(nextDefaultPortfolio);
       setIsLoading(false);
     }
 

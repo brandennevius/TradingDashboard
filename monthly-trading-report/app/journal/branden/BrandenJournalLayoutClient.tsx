@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { chooseBrokerImportPortfolio } from "@/lib/broker-import-picker";
 
 import { useEffect, useRef, useState } from "react";
@@ -132,7 +134,7 @@ function formatMtdSnapshotValidationError(data: {
 export default function BrandenJournalLayoutClient({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [user, setUser] = useState<TraderUser | null>(null);
-  const [defaultPortfolio, setDefaultPortfolio] = useState("");
+  const [defaultPortfolio, selectPortfolio, setDefaultPortfolio] = usePortfolioSelection();
   const [snapshotSession, setSnapshotSession] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()));
   const [mtdMonth, setMtdMonth] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit" }).format(new Date()));
   const [mtdAsOfDate, setMtdAsOfDate] = useState(() => new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date()));
@@ -314,6 +316,7 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
       }
 
       window.alert(`Broker statement imported. Open: ${data.openTrades}. Closed: ${data.closedTrades}. Updated: ${data.updated}.`);
+      selectPortfolio(targetPortfolio);
       window.location.reload();
     } finally {
       pendingImportPortfolioRef.current = "";

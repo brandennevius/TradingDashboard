@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
 import BrandenNavIcon from "./BrandenNavIcon";
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 
@@ -72,6 +73,19 @@ const brandenSidebarGroups = [
 ];
 
 export default function BrandenSidebar({ activeHref, accountActions = [] }: BrandenSidebarProps) {
+  const [portfolio, selectPortfolio, initializePortfolio] = usePortfolioSelection();
+  const [portfolios, setPortfolios] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings/branden-portfolios", { cache: "no-store" })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => {
+        if (cancelled || !data) return;
+        setPortfolios(Array.isArray(data.portfolios) ? data.portfolios : []);
+        initializePortfolio(String(data.defaultPortfolio || ""));
+      }).catch(() => { /* Existing selection remains visible if settings fail. */ });
+    return () => { cancelled = true; };
+  }, [initializePortfolio]);
   const [collapsed, setCollapsed] = useState(false);
   const [width, setWidth] = useState(DEFAULT_WIDTH);
   const [closedGroups, setClosedGroups] = useState<Record<string, boolean>>({});
@@ -167,7 +181,7 @@ export default function BrandenSidebar({ activeHref, accountActions = [] }: Bran
                       onClick={item.action.onClick}
                     >{content}</button>;
                   }
-                  return <Link
+                  const link = <Link
                     key={item.href}
                     className={item.href === activeHref ? "active" : ""}
                     href={item.href}
@@ -175,6 +189,17 @@ export default function BrandenSidebar({ activeHref, accountActions = [] }: Bran
                     aria-current={item.href === activeHref ? "page" : undefined}
                     title={item.label}
                   >{content}</Link>;
+                  if (item.href !== "/journal/branden/portfolios") return link;
+                  return <div key={item.href} className="branden-sidebar-portfolio">
+                    {link}
+                    {!collapsed ? <label className="branden-sidebar-portfolio-picker">
+                      <span>Viewing portfolio</span>
+                      <select aria-label="Viewing portfolio" value={portfolio} onChange={event => selectPortfolio(event.target.value)}>
+                        <option value="">All portfolios</option>
+                        {Array.from(new Set([...portfolios, portfolio].filter(Boolean))).sort().map(name => <option key={name} value={name}>{name}</option>)}
+                      </select>
+                    </label> : null}
+                  </div>;
                 })}
               </div>
             </div>

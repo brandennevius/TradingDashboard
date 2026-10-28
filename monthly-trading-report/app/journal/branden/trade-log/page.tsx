@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { buildMergedTrade, validateMergeSelection, MERGED_TRADE_SOURCE } from "@/lib/trade-merge";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent } from "react";
@@ -432,7 +434,7 @@ export default function BrandenTradeLogPage() {
     return () => controller.abort();
   }, [trades]);
   const [setupTemplates, setSetupTemplates] = useState<SetupChecklistTemplate[]>([]);
-  const [activePortfolio, setActivePortfolio] = useState(initialStateRef.current.portfolio);
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection(initialStateRef.current.portfolio);
   const [filters, setFilters] = useState<Record<TradeFilterKey, string[] | null>>(initialStateRef.current.filters);
   const [startDate, setStartDate] = useState(initialStateRef.current.startDate);
   const [endDate, setEndDate] = useState(initialStateRef.current.endDate);
@@ -490,7 +492,7 @@ export default function BrandenTradeLogPage() {
           ? tradeLogData.preferences
           : {}
       );
-      setActivePortfolio((current) => current || String(tradeLogData.defaultPortfolio || ""));
+      initializePortfolio(String(tradeLogData.defaultPortfolio || ""));
       setIsLoading(false);
     }
 

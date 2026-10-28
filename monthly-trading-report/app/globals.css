@@ -8581,3 +8581,8 @@ body:has(.journal-hub-shell) { background: #f5f5ef; }
 .broker-import-actions { display: flex; justify-content: flex-end; gap: 12px; }
 .broker-import-actions button { padding: 10px 16px; border-radius: 6px; border: 1px solid #64748b; background: #1e293b; color: #fff; cursor: pointer; }
 .broker-import-actions button[type=submit] { background: #2563eb; border-color: #2563eb; }
+
+.branden-sidebar-portfolio { display: grid; gap: 6px; }
+.branden-sidebar-portfolio-picker { display: grid; gap: 6px; padding: 4px 12px 12px; font-size: 12px; }
+.branden-sidebar-portfolio-picker > span { font-weight: 700; opacity: .8; }
+.branden-sidebar-portfolio-picker select { width: 100%; min-width: 0; border: 1px solid #cbd7c4; border-radius: 8px; padding: 10px 8px; color: #344d34; background: #faf9f2; font: inherit; font-size: 14px; }

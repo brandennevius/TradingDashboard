@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { useEffect, useMemo, useState } from "react";
 import RprpSizer from "@/app/components/RprpSizer";
 import type { TradeLogEntry, TraderUser } from "@/lib/types";
@@ -23,7 +25,7 @@ export default function BrandenRprpPage() {
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
   const [portfolioMeta, setPortfolioMeta] = useState<Record<string, PortfolioMeta>>({});
-  const [activePortfolio, setActivePortfolio] = useState("");
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
 
@@ -52,7 +54,7 @@ export default function BrandenRprpPage() {
       setUser(data.user || null);
       setTrades(Array.isArray(data.trades) ? data.trades : []);
       setPortfolioMeta(data.portfolioMeta || {});
-      setActivePortfolio(String(data.defaultPortfolio || ""));
+      initializePortfolio(String(data.defaultPortfolio || ""));
       setIsLoading(false);
     }
 

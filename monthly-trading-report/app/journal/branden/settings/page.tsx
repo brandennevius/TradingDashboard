@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { ChangeEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useBrandenSnapshotActions } from "../BrandenSnapshotActionsContext";
 import type { TradeLogEntry, TraderUser } from "@/lib/types";
@@ -145,7 +147,7 @@ export default function BrandenSettingsPage() {
   const [user, setUser] = useState<TraderUser | null>(null);
   const [portfolios, setPortfolios] = useState<string[]>([]);
   const [defaultPortfolio, setDefaultPortfolio] = useState("");
-  const [activePortfolio, setActivePortfolio] = useState("");
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [newPortfolio, setNewPortfolio] = useState("");
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
   const [selectedHiddenTradeIds, setSelectedHiddenTradeIds] = useState<string[]>([]);
@@ -203,7 +205,7 @@ export default function BrandenSettingsPage() {
       setUser(sessionData.user || null);
       setPortfolios(Array.isArray(portfolioData.portfolios) ? portfolioData.portfolios : []);
       setDefaultPortfolio(String(portfolioData.defaultPortfolio || ""));
-      setActivePortfolio(String(portfolioData.defaultPortfolio || ""));
+      initializePortfolio(String(portfolioData.defaultPortfolio || ""));
       setTrades(Array.isArray(tradeData.trades) ? tradeData.trades : []);
       setPreferences(columnData.preferences && typeof columnData.preferences === "object" ? columnData.preferences : {});
       setIsLoading(false);

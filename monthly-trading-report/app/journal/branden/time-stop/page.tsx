@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { chooseBrokerImportPortfolio } from "@/lib/broker-import-picker";
 
 import Link from "next/link";
@@ -16,7 +18,7 @@ export default function BrandenTimeStopPage() {
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
   const [defaultPortfolio, setDefaultPortfolio] = useState("");
-  const [activePortfolio, setActivePortfolio] = useState("");
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
@@ -54,7 +56,7 @@ export default function BrandenTimeStopPage() {
       setUser(publicData.user || null);
       setTrades(Array.isArray(tradesData.trades) ? tradesData.trades : []);
       setDefaultPortfolio(nextDefaultPortfolio);
-      setActivePortfolio(nextDefaultPortfolio);
+      initializePortfolio(nextDefaultPortfolio);
       setIsLoading(false);
     }
 

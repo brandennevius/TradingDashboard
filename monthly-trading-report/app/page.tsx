@@ -1,5 +1,7 @@
 "use client";
 
+import { usePortfolioSelection } from "@/lib/portfolio-selection";
+
 import { chooseBrokerImportPortfolio } from "@/lib/broker-import-picker";
 
 import dynamic from "next/dynamic";
@@ -1737,7 +1739,7 @@ export default function Home() {
   const [marketCycleEntries, setMarketCycleEntries] = useState<MarketCycleEntry[]>([]);
   const [marketCycleForm, setMarketCycleForm] = useState<MarketCycleFormState>(emptyMarketCycleForm);
   const [savedPortfolios, setSavedPortfolios] = useState<string[]>([]);
-  const [activePortfolio, setActivePortfolio] = useState("");
+  const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [defaultPortfolio, setDefaultPortfolio] = useState("");
   const [importPortfolioTag, setImportPortfolioTag] = useState("");
   const excelImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -2383,7 +2385,7 @@ export default function Home() {
     setDefaultPortfolio(nextDefault);
 
     if (nextDefault) {
-      setActivePortfolio(nextDefault);
+      initializePortfolio(nextDefault);
     }
   }
 
@@ -4196,7 +4198,7 @@ export default function Home() {
     }
 
     setDefaultPortfolio(nextDefaultPortfolio);
-    setActivePortfolio(nextDefaultPortfolio);
+    initializePortfolio(nextDefaultPortfolio);
     setStatus(nextDefaultPortfolio ? `Default portfolio set to ${nextDefaultPortfolio}.` : "Default portfolio set to all portfolios.");
   }
 
