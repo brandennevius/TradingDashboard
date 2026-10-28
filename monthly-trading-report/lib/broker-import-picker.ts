@@ -18,16 +18,13 @@ export async function chooseBrokerImportPortfolio(defaultValue = "", known: stri
       const option = document.createElement("option"); option.value = name; option.textContent = name; select.append(option);
     }
     select.value = defaultValue || "IBKR Personal";
-    const create = document.createElement("option"); create.value = "__new__"; create.textContent = "Create a portfolio…"; select.append(create);
-    const input = document.createElement("input"); input.placeholder = "New portfolio name"; input.setAttribute("aria-label", "New portfolio name"); input.hidden = true;
-    select.onchange = () => { input.hidden = select.value !== "__new__"; input.required = !input.hidden; if (!input.hidden) input.focus(); };
     label.append(select);
     const actions = document.createElement("div"); actions.className = "broker-import-actions";
     const cancel = document.createElement("button"); cancel.type = "button"; cancel.textContent = "Cancel"; cancel.onclick = () => dialog.close();
     const submit = document.createElement("button"); submit.type = "submit"; submit.textContent = "Choose file";
     let result: string | null = null;
-    form.onsubmit = event => { event.preventDefault(); const chosen = (select.value === "__new__" ? input.value : select.value).trim(); if (!chosen) return; result = chosen; dialog.close(); };
+    form.onsubmit = event => { event.preventDefault(); const chosen = select.value.trim(); if (!chosen) return; result = chosen; dialog.close(); };
     dialog.onclose = () => { dialog.remove(); resolve(result); };
-    actions.append(cancel, submit); form.append(title, hint, label, input, actions); dialog.append(form); document.body.append(dialog); dialog.showModal();
+    actions.append(cancel, submit); form.append(title, hint, label, actions); dialog.append(form); document.body.append(dialog); dialog.showModal();
   });
 }
