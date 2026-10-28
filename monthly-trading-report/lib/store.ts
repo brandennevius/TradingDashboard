@@ -1,3 +1,4 @@
+import { IBKR_SOURCE, IbkrImportError, mergeIbkrData, buildIbkrTrades, ibkrDate, ibkrSnapshotPositions, type IbkrFlexData } from "./ibkr-flex";
 import fs from "fs/promises";
 import { MERGED_TRADE_SOURCE, mergeTradeRecords, undoTradeMerge, reconcileTradeMerges } from "./trade-merge";
 import { versionSetupTemplates } from "./setup-versioning";
@@ -55,9 +56,11 @@ export function getPool() {
   return pool;
 }
 
-const localDataFile = path.join(process.cwd(), "data", "monthly-reports.json");
-const localTradesFile = path.join(process.cwd(), "data", "trade-logs.json");
-const localSettingsFile = path.join(process.cwd(), "data", "app-settings.json");
+const localDataDirectory = process.env.NODE_ENV !== "production" && process.env.LOCAL_DATA_DIR
+  ? process.env.LOCAL_DATA_DIR : path.join(process.cwd(), "data");
+const localDataFile = path.join(localDataDirectory, "monthly-reports.json");
+const localTradesFile = path.join(localDataDirectory, "trade-logs.json");
+const localSettingsFile = path.join(localDataDirectory, "app-settings.json");
 const defaultChecklistGradeBands: ChecklistGradeBand[] = [
   { id: "grade-a-plus", label: "A+", minScore: 10, maxScore: null },
   { id: "grade-a", label: "A", minScore: 8, maxScore: 9 },
@@ -1300,7 +1303,7 @@ function rowToBrokerPortfolioSnapshot(row: Record<string, unknown>): BrokerPortf
     coverageDate: String(row.coverage_date || ""),
     sourceHash: String(row.source_hash || ""),
     sourceFilename: String(row.source_filename || ""),
-    source: "CF_STATEMENT_PDF",
+    source: row.source === "IBKR_FLEX_XML" ? "IBKR_FLEX_XML" : "CF_STATEMENT_PDF",
     importedAt: new Date(String(row.imported_at)).toISOString(),
     balance: row.balance === null ? undefined : Number(row.balance),
     currentEquity: row.current_equity === null ? undefined : Number(row.current_equity),
@@ -2938,11 +2941,11 @@ export async function listCfStatementTrades(userId: string, portfolioTag: string
   return result.rows.map(rowToTrade);
 }
 
-function materializeCfStatementTrades(trades: CfStatementReplacementTrade[], portfolioTag: string, now: string) {
+function materializeCfStatementTrades(trades: CfStatementReplacementTrade[], portfolioTag: string, now: string, source = "cf-statement-pdf") {
   return trades.map((trade): TradeLogEntry => ({
       ...trade,
       id: trade.id || stableTradeId(trade),
-      importSource: "cf-statement-pdf",
+      importSource: source,
       importRowKey: trade.importRowKey || "",
       chartLinks: trade.chartLinks || [],
       manualGrade: trade.manualGrade || "",
@@ -2963,18 +2966,18 @@ function materializeCfStatementTrades(trades: CfStatementReplacementTrade[], por
     }));
 }
 
-async function replaceCfStatementTradesWithClient(client: PoolClient, userId: string, portfolioTag: string, trades: CfStatementReplacementTrade[]) {
+async function replaceCfStatementTradesWithClient(client: PoolClient, userId: string, portfolioTag: string, trades: CfStatementReplacementTrade[], source = "cf-statement-pdf") {
     await client.query("lock table trade_logs in share row exclusive mode");
     await client.query(
-      "delete from trade_logs where user_id = $1 and portfolio_tag = $2 and import_source = 'cf-statement-pdf'",
-      [userId, portfolioTag]
+      "delete from trade_logs where user_id = $1 and portfolio_tag = $2 and import_source = $3",
+      [userId, portfolioTag, source]
     );
 
     for (const trade of trades) {
       const values = [
         trade.id || stableTradeId(trade),
         trade.userId,
-        "cf-statement-pdf",
+        source,
         trade.importRowKey || "",
         trade.symbol,
         trade.side,
@@ -4312,4 +4315,68 @@ export async function changeTradeMerge(userId: string, selection: string[] | str
   } finally {
     client.release();
   }
+}
+
+/** Apply an IBKR ledger, journal rows, and dated snapshot as one transaction. */
+export async function importIbkrFlexStatement(userId: string, portfolioTag: string, incoming: IbkrFlexData, sourceHash: string, sourceFilename: string) {
+  const key = `ibkr_flex:${userId}:${portfolioTag}`;
+  const now = new Date().toISOString();
+  const prepare = (previous: IbkrFlexData | undefined, existing: TradeLogEntry[], settings: BrandenPortfolioSettings) => {
+    if ((settings.portfolioMeta?.[portfolioTag]?.equitySource && settings.portfolioMeta[portfolioTag].equitySource !== "IBKR Flex") || existing.some(t => t.userId === userId && t.portfolioTag === portfolioTag && t.importSource !== IBKR_SOURCE)) {
+      throw new IbkrImportError("Choose a separate IBKR Personal portfolio. This portfolio already contains other trades.");
+    }
+    const state = mergeIbkrData(previous, incoming);
+    const trades = buildIbkrTrades(state, userId, portfolioTag, existing);
+    const equity = state.equities.find(r => ibkrDate(r.reportDate) === state.toDate)!;
+    const positions = ibkrSnapshotPositions(state, trades);
+    const floatingPnl = positions.reduce((sum,p) => sum + p.floatingPnl, 0);
+    const meta = { currentEquity: Number(equity.total), statementEquity: Number(equity.total), floatingPnl,
+      equitySource: "IBKR Flex", equityStatementDate: state.toDate, workingOrders: [] };
+    const snapshots: BrokerPortfolioSnapshotInput[] = state.equities
+      .filter(e => ibkrDate(e.reportDate) >= state.fromDate && (ibkrDate(e.reportDate) === state.toDate || Number(e.stock) === 0))
+      .map(e => ({ userId, portfolioTag, coverageDate: ibkrDate(e.reportDate), sourceHash, sourceFilename, source: "IBKR_FLEX_XML",
+        balance: Number(e.cash), currentEquity: Number(e.total), statementEquity: Number(e.total),
+        floatingPnl: ibkrDate(e.reportDate) === state.toDate ? floatingPnl : 0,
+        openPositions: ibkrDate(e.reportDate) === state.toDate ? positions : [], workingOrders: [] }));
+    const nextSettings = portfolioSettingsWithImportMeta(settings, portfolioTag, meta, now);
+    const keys = new Set(existing.map(t => t.importRowKey));
+    const created = trades.filter(t => !keys.has(t.importRowKey)).length;
+    return { state, trades, snapshots, nextSettings, result: { imported: trades.length, created, updated: trades.length-created,
+      openTrades: trades.filter(t => t.status === "OPEN").length, closedTrades: trades.filter(t => t.status !== "OPEN").length,
+      needsReview: 0, currentEquity: meta.currentEquity, equityStatementDate: state.toDate,
+      cashTransactions: state.cashTransactions.length, broker: "IBKR", message: "IBKR Flex imported. Stop prices are manual and preserved; pending orders are not included." } };
+  };
+  const db = getPool();
+  if (!db) {
+    const settings = await readLocalSettings();
+    const existing = await readLocalTrades();
+    const plan = prepare(settings[key] as IbkrFlexData | undefined, existing.filter(t => t.userId === userId && t.portfolioTag === portfolioTag), normalizeBrandenPortfolioSettings(settings.brandenPortfolioNames));
+    let snapshots = normalizeBrokerPortfolioSnapshotList(settings.brandenBrokerPortfolioSnapshots);
+    for (const snapshot of plan.snapshots) snapshots = upsertBrokerPortfolioSnapshotCollection(snapshots, snapshot, now);
+    try {
+      await writeLocalTrades([...existing.filter(t => !(t.userId === userId && t.portfolioTag === portfolioTag && t.importSource === IBKR_SOURCE)), ...materializeCfStatementTrades(plan.trades, portfolioTag, now, IBKR_SOURCE)].sort(tradeLogOrder));
+      await writeLocalSettings({ ...settings, [key]: plan.state, brandenPortfolioNames: plan.nextSettings, brandenBrokerPortfolioSnapshots: snapshots });
+    } catch(error) { await writeLocalTrades(existing); await writeLocalSettings(settings); throw error; }
+    return plan.result;
+  }
+  await ensureTradeTable(); await ensureSettingsTable(); await ensureBrokerPortfolioSnapshotTable();
+  const client = await db.connect();
+  try {
+    await client.query("begin");
+    // Serialize imports including the first import where no settings row exists yet.
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", ["broker-import-settings"]);
+    const stateResult = await client.query("select value from app_settings where key = $1 for update", [key]);
+    const settingsResult = await client.query("select value from app_settings where key = $1 for update", ["branden_portfolio_names"]);
+    await client.query("lock table trade_logs in share row exclusive mode");
+    const existingResult = await client.query(`select ${tradeColumns} from trade_logs where user_id = $1 and portfolio_tag = $2`, [userId, portfolioTag]);
+    const plan = prepare(stateResult.rows[0]?.value, existingResult.rows.map(rowToTrade), normalizeBrandenPortfolioSettings(settingsResult.rows[0]?.value));
+    await replaceCfStatementTradesWithClient(client, userId, portfolioTag, plan.trades, IBKR_SOURCE);
+    for (const snapshot of plan.snapshots) await upsertBrokerPortfolioSnapshotWithClient(client, snapshot, now);
+    for (const [name, value] of [[key, plan.state], ["branden_portfolio_names", plan.nextSettings]]) {
+      await client.query("insert into app_settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value, updated_at = now()", [name, JSON.stringify(value)]);
+    }
+    await client.query("commit");
+    return plan.result;
+  } catch(error) { await client.query("rollback"); throw error; }
+  finally { client.release(); }
 }

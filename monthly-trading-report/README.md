@@ -116,3 +116,14 @@ MAE/MFE are loaded or calculated using the existing excursion engine and its cac
 Evidence is not silently truncated. Oversized requests fail with instructions to narrow the filters or reduce active example charts/sources. Repeated comparison charts are loaded once and sent to the model once with every associated trade ID, oversized images are normalized to a readable review resolution, and image/excursion preparation runs with bounded concurrency. Before generation, the Responses input-token endpoint counts the exact request. Current Luna pricing and the full 16,000-token output allowance must remain at or below the $0.25 safety ceiling, leaving margin below the $0.30 report target; an over-budget report is blocked before the paid generation request. Other safeguards are 1,000,000 characters of text context, 450 unique image parts, and a request below 45 MiB; image decoding is limited to 20 MiB/40 megapixels per input. Each submit, status, and finalization request has its own bounded deadline, while the model continues independently between polls. A refusal, incomplete response, invalid trade references, or missing work priorities fails the export instead of producing a partial report.
 
 Run export regression coverage with `node --import tsx --test tests/trade-review.test.ts tests/trade-review-export.test.ts tests/trade-log-csv.test.ts`. Set `REVIEW_QA_PATH` to write the synthetic Word fixture for layout checks. These tests mock the model and do not establish live API access or model quality.
+
+IBKR Personal imports: choose **Import broker statement → IBKR Personal → Flex XML**.
+The first upload should cover account opening through the latest completed business day;
+subsequent Last Business Day uploads merge execution IDs and cash transaction IDs.
+The importer stores the broker's report/availability dates separately from cash transaction
+dates, equity history, currency rates, and instrument metadata. Stop prices are entered in
+the trade editor and preserved across uploads; Flex does not verify working orders.
+Currently supported: USD-base accounts holding USD stocks/ETFs. Files with other traded
+asset classes, asset transfers, or corporate actions are rejected before persistence.
+Run `npm run test:ibkr-import`. Optional `IBKR_HISTORY_FILE` and `IBKR_DAILY_FILE`
+paths enable validation against private local exports without committing account data.

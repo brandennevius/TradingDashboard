@@ -1,7 +1,7 @@
 import type { CfWorkingOrderMetadata } from "./cf-import-idempotency";
 import type { ParsedOpenPositionRow } from "./cf-statement";
 
-export type BrokerPortfolioSnapshotSource = "CF_STATEMENT_PDF";
+export type BrokerPortfolioSnapshotSource = "CF_STATEMENT_PDF" | "IBKR_FLEX_XML";
 
 export type BrokerPortfolioPosition = {
   symbol: string;
@@ -137,7 +137,7 @@ export function normalizeBrokerPortfolioSnapshot(
     coverageDate,
     sourceHash,
     sourceFilename: String(input.sourceFilename || "").trim().slice(0, 255),
-    source: "CF_STATEMENT_PDF",
+    source: input.source === "IBKR_FLEX_XML" ? "IBKR_FLEX_XML" : "CF_STATEMENT_PDF",
     importedAt,
     balance: nullablePositive(input.balance),
     currentEquity: nullablePositive(input.currentEquity),

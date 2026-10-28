@@ -1,5 +1,7 @@
 "use client";
 
+import { chooseBrokerImportPortfolio } from "@/lib/broker-import-picker";
+
 import dynamic from "next/dynamic";
 import TradeMarketContext from "@/app/components/TradeMarketContext";
 import { CSSProperties, DragEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
@@ -3793,13 +3795,13 @@ export default function Home() {
       return;
     }
 
-    setStatus(`Selected CF statement: ${file.name}`);
+    setStatus(`Selected broker statement: ${file.name}`);
 
     const targetPortfolio = pendingImportPortfolioRef.current.trim() || importPortfolioTag.trim() || activePortfolio.trim();
     pendingImportPortfolioRef.current = "";
 
     if (!targetPortfolio) {
-      setStatus("Choose, select, or create a portfolio before CF import.");
+      setStatus("Choose, select, or create a portfolio before Broker import.");
       return;
     }
 
@@ -3811,8 +3813,8 @@ export default function Home() {
       }
     }
 
-    setStatus("Importing CF statement...");
-    setBusyProgress({ label: "Importing CF statement", current: 0, total: 100, detail: "Preparing upload..." });
+    setStatus("Importing broker statement...");
+    setBusyProgress({ label: "Importing broker statement", current: 0, total: 100, detail: "Preparing upload..." });
 
     let progressTimer: ReturnType<typeof setInterval> | null = null;
     try {
@@ -3820,7 +3822,7 @@ export default function Home() {
       formData.append("file", file);
       formData.append("portfolioTag", targetPortfolio);
       let simulatedProgress = 8;
-      setBusyProgress({ label: "Importing CF statement", current: simulatedProgress, total: 100, detail: `Uploading ${file.name}` });
+      setBusyProgress({ label: "Importing broker statement", current: simulatedProgress, total: 100, detail: `Uploading ${file.name}` });
 
       progressTimer = setInterval(() => {
         simulatedProgress = Math.min(88, simulatedProgress + (simulatedProgress < 45 ? 7 : 3));
@@ -3828,9 +3830,9 @@ export default function Home() {
           simulatedProgress < 35
             ? `Uploading ${file.name}`
             : simulatedProgress < 72
-              ? "Parsing PDF statement on the server..."
+              ? "Parsing broker statement on the server..."
               : "Matching fills and preparing journal rows...";
-        setBusyProgress({ label: "Importing CF statement", current: simulatedProgress, total: 100, detail });
+        setBusyProgress({ label: "Importing broker statement", current: simulatedProgress, total: 100, detail });
       }, 900);
 
       const response = await fetch("/api/import/cf-statement", {
@@ -3841,7 +3843,7 @@ export default function Home() {
         clearInterval(progressTimer);
         progressTimer = null;
       }
-      setBusyProgress({ label: "Importing CF statement", current: 90, total: 100, detail: "Reading import result..." });
+      setBusyProgress({ label: "Importing broker statement", current: 90, total: 100, detail: "Reading import result..." });
       const text = await response.text();
       let data: Record<string, unknown> = {};
 
@@ -3850,23 +3852,24 @@ export default function Home() {
           data = JSON.parse(text);
         } catch {
           data = {
-            error: `CF import returned a non-JSON response (${response.status}). ${text.slice(0, 140)}`
+            error: `Broker import returned a non-JSON response (${response.status}). ${text.slice(0, 140)}`
           };
         }
       }
 
       if (!response.ok) {
-        setStatus(String(data.error || "Could not import CF statement."));
+        setStatus(String(data.error || "Could not import broker statement."));
         return;
       }
 
-      setBusyProgress({ label: "Importing CF statement", current: 95, total: 100, detail: "Refreshing journal..." });
+      setBusyProgress({ label: "Importing broker statement", current: 95, total: 100, detail: "Refreshing journal..." });
       const nextTrades = await loadTrades();
+      await loadBrandenPortfolios();
       setTradeView("table");
       setActivePortfolio(targetPortfolio);
       setTradeFilters(emptyTradeFilters);
 
-      const importedPortfolioTrades = nextTrades.filter((trade) => trade.portfolioTag === targetPortfolio && trade.importSource === "cf-statement-pdf");
+      const importedPortfolioTrades = nextTrades.filter((trade) => trade.portfolioTag === targetPortfolio && trade.importSource === (data.broker === "IBKR" ? "ibkr-flex-xml" : "cf-statement-pdf"));
       const visibleImportedTrades = importedPortfolioTrades.filter((trade) => !trade.hidden);
       const importedExecutionCount = visibleImportedTrades.reduce((sum, trade) => sum + (trade.executions?.length || 0), 0);
       const hiddenImportedTrades = importedPortfolioTrades.filter((trade) => trade.hidden);
@@ -3876,16 +3879,16 @@ export default function Home() {
       }
 
       setBusyProgress({
-        label: "Importing CF statement",
+        label: "Importing broker statement",
         current: 100,
         total: 100,
         detail: `${data.imported} rows loaded`
       });
       setStatus(
-        `CF import complete. Built ${visibleImportedTrades.length} position rows from ${data.imported} parsed positions/fills. Open: ${data.openTrades}. Closed: ${data.closedTrades}. Needs review: ${data.needsReview}. New: ${data.created}. Updated: ${data.updated}. Stored executions: ${importedExecutionCount}.${data.hiddenLegacyRows ? ` Migrated old transaction rows out of the main log: ${data.hiddenLegacyRows}.` : ""}${data.hiddenSupersededRows ? ` Hid corrected old wrong-side rows: ${data.hiddenSupersededRows}.` : ""}${data.hiddenOpenComponentRows ? ` Collapsed old open fill rows: ${data.hiddenOpenComponentRows}.` : ""}${data.hiddenStaleOpenRows ? ` Moved stale open rows out of the main log: ${data.hiddenStaleOpenRows}.` : ""}${hiddenImportedTrades.length ? ` Hidden/excluded: ${hiddenImportedTrades.length}.` : ""}${data.currentEquity ? ` Current equity saved: ${money(Number(data.currentEquity))}.` : " Current equity was not found in the statement."}`
+        `Broker import complete.${data.broker === "IBKR" ? " IBKR stop prices are manual and preserved; pending orders are not included." : ""} Built ${visibleImportedTrades.length} position rows from ${data.imported} parsed positions/fills. Open: ${data.openTrades}. Closed: ${data.closedTrades}. Needs review: ${data.needsReview}. New: ${data.created}. Updated: ${data.updated}. Stored executions: ${importedExecutionCount}.${data.hiddenLegacyRows ? ` Migrated old transaction rows out of the main log: ${data.hiddenLegacyRows}.` : ""}${data.hiddenSupersededRows ? ` Hid corrected old wrong-side rows: ${data.hiddenSupersededRows}.` : ""}${data.hiddenOpenComponentRows ? ` Collapsed old open fill rows: ${data.hiddenOpenComponentRows}.` : ""}${data.hiddenStaleOpenRows ? ` Moved stale open rows out of the main log: ${data.hiddenStaleOpenRows}.` : ""}${hiddenImportedTrades.length ? ` Hidden/excluded: ${hiddenImportedTrades.length}.` : ""}${data.currentEquity ? ` Current equity saved: ${money(Number(data.currentEquity))}.` : " Current equity was not found in the statement."}`
       );
     } catch (error) {
-      setStatus(error instanceof Error ? `CF import failed: ${error.message}` : "CF import failed.");
+      setStatus(error instanceof Error ? `Broker import failed: ${error.message}` : "Broker import failed.");
     } finally {
       if (progressTimer) {
         clearInterval(progressTimer);
@@ -3896,8 +3899,7 @@ export default function Home() {
 
   async function choosePortfolioForImport(importLabel: string) {
     const defaultValue = importPortfolioTag.trim() || activePortfolio.trim() || defaultPortfolio.trim();
-    const savedList = portfolioOptions.length ? `\n\nSaved portfolios:\n${portfolioOptions.join(", ")}` : "";
-    const requestedPortfolio = window.prompt(`${importLabel}: which portfolio should this import save to?${savedList}`, defaultValue);
+    const requestedPortfolio = await chooseBrokerImportPortfolio(defaultValue, portfolioOptions);
 
     if (requestedPortfolio === null) {
       setStatus(`${importLabel} cancelled.`);
@@ -5359,7 +5361,7 @@ export default function Home() {
                             <td>{numberValue(execution.price) ? numberValue(execution.price).toFixed(2) : "-"}</td>
                             <td>{shareQuantity(execution.shares) || "-"}</td>
                             <td className={numberValue(execution.pnl) >= 0 ? "trade-positive" : "trade-negative"}>{money(execution.pnl)}</td>
-                            <td>{execution.importSource === "cf-statement-pdf" ? "CF statement" : execution.importSource || "Manual"}</td>
+                            <td>{execution.importSource === "cf-statement-pdf" ? "CF statement" : execution.importSource === "ibkr-flex-xml" ? "IBKR Flex" : execution.importSource || "Manual"}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -5465,7 +5467,7 @@ export default function Home() {
                         />
                       </label>
                       <label>
-                        Stop
+                        {selectedTrade.importSource === "ibkr-flex-xml" ? "Manual stop — not verified with IBKR" : "Stop"}
                         <input
                           type="number"
                           step="any"
@@ -5944,7 +5946,7 @@ export default function Home() {
             ref={cfImportInputRef}
             className="trade-file-input"
             type="file"
-            accept="application/pdf,.pdf"
+            accept="application/pdf,.pdf,application/xml,text/xml,.xml"
             disabled={Boolean(busyProgress) || !canEditActiveTradeLog}
             onChange={(event) => {
               importCfStatement(event.target.files);

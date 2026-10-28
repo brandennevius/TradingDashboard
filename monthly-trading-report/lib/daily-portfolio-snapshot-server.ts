@@ -106,7 +106,7 @@ type BrokerPortfolioMeta = {
   }>;
 };
 
-const BROKER_IMPORT_SOURCE = "cf-statement-pdf";
+const BROKER_IMPORT_SOURCES = ["cf-statement-pdf", "ibkr-flex-xml"];
 const DIAGNOSTIC_SAMPLE_LIMIT = 5;
 
 function diagnosticSample(trades: TradeLogEntry[]) {
@@ -151,7 +151,7 @@ function needsReviewRelevance(trade: TradeLogEntry, session: string): NeedsRevie
 }
 
 function brokerImportDiagnostic(trades: TradeLogEntry[], portfolio: string, session: string, portfolioMeta: BrokerPortfolioMeta | undefined): SnapshotValidationDiagnostic | null {
-  const importedTrades = trades.filter((trade) => !trade.hidden && trade.importSource === BROKER_IMPORT_SOURCE);
+  const importedTrades = trades.filter((trade) => !trade.hidden && BROKER_IMPORT_SOURCES.includes(trade.importSource));
   const accountImportedTrades = importedTrades.filter((trade) => trade.portfolioTag === portfolio);
   const needsReview = accountImportedTrades.filter((trade) => trade.customTags.some((tag) => tag.trim().toLowerCase() === "needs review"));
   const needsReviewRows = needsReview.map((trade) => needsReviewRelevance(trade, session));

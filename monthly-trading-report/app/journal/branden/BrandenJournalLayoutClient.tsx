@@ -1,5 +1,7 @@
 "use client";
 
+import { chooseBrokerImportPortfolio } from "@/lib/broker-import-picker";
+
 import { useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
 import BrandenNavIcon from "@/app/components/BrandenNavIcon";
@@ -279,7 +281,7 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
   }
 
   async function choosePortfolioForImport() {
-    const targetPortfolio = window.prompt("Portfolio for broker statement import", defaultPortfolio.trim());
+    const targetPortfolio = await chooseBrokerImportPortfolio(defaultPortfolio.trim());
     if (targetPortfolio === null) return "";
     const normalized = targetPortfolio.trim();
     if (!normalized) {
@@ -340,7 +342,7 @@ export default function BrandenJournalLayoutClient({ children }: { children: Rea
         ref={cfImportInputRef}
         className="trade-file-input"
         type="file"
-        accept="application/pdf,.pdf"
+        accept="application/pdf,.pdf,application/xml,text/xml,.xml"
         disabled={isImporting || !canEditBrandenJournal}
         onChange={(event) => {
           importBrokerStatement(event.target.files);

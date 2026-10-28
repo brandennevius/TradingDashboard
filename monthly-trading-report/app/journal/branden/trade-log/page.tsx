@@ -819,7 +819,7 @@ export default function BrandenTradeLogPage() {
       case "exit":
         return trade.exitPrice ? trade.exitPrice.toFixed(2) : "-";
       case "stop":
-        return trade.stopPrice ? trade.stopPrice.toFixed(2) : "-";
+        return <span title={trade.importSource === "ibkr-flex-xml" ? "Manual stop — not verified with IBKR" : undefined}>{trade.stopPrice ? trade.stopPrice.toFixed(2) : "-"}{trade.importSource === "ibkr-flex-xml" && trade.stopPrice ? " (manual)" : ""}</span>;
       case "commission":
         return money(trade.commission);
       case "usedMargin":

@@ -14,12 +14,14 @@
     "test:mtd-snapshot": "tsx --test tests/month-to-date-snapshot.test.ts",
     "test:cf-import": "tsx --test tests/cf-statement-import.test.ts",
     "test:market-gauge": "tsx --test tests/market-gauge.test.ts",
-    "test:market-context": "node --import tsx --test tests/trade-market-context.test.ts tests/market-context-ui.test.ts tests/market-gauge.test.ts"
+    "test:market-context": "node --import tsx --test tests/trade-market-context.test.ts tests/market-context-ui.test.ts tests/market-gauge.test.ts",
+    "test:ibkr-import": "tsx --test tests/ibkr-flex.test.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.0",
     "@types/pg": "^8.11.10",
     "docx": "^9.7.1",
+    "fast-xml-parser": "^5.11.2",
     "jszip": "^3.10.1",
     "lightweight-charts": "^5.2.0",
     "mammoth": "^1.12.0",

@@ -265,7 +265,7 @@ function protectivePlan(trade: TradeLogEntry, meta: PortfolioMeta | undefined, s
         role: "POSITION_STOP", order_type: "STOP"
       }] : [],
       provenance: trade.stopPrice ? {
-        source: "TRADE_LOG_STORED_STOP", linkage: null, dynamic_resize: false, statement_coverage_date: meta?.equityStatementDate || null
+        source: trade.importSource === "ibkr-flex-xml" ? "MANUAL_STOP_NOT_BROKER_VERIFIED" : "TRADE_LOG_STORED_STOP", linkage: null, dynamic_resize: false, statement_coverage_date: meta?.equityStatementDate || null
       } : null,
       profitTakingOrders
     };
@@ -321,10 +321,10 @@ function timeHeld(trade: TradeLogEntry, finalExit: TradeExecution | undefined) {
 }
 
 function brokerMetadata(trades: TradeLogEntry[], meta: PortfolioMeta | undefined, session: string) {
-  const imported = trades.filter((trade) => trade.importSource === "cf-statement-pdf");
+  const imported = trades.filter((trade) => ["cf-statement-pdf", "ibkr-flex-xml"].includes(trade.importSource));
   const importedAt = [meta?.equityUpdatedAt || "", ...imported.map((trade) => trade.updatedAt)].filter(Boolean).sort().at(-1) || null;
   const statementDate = meta?.equityStatementDate || null;
-  const hasBrokerImport = imported.length > 0 || meta?.equitySource === "CF Import";
+  const hasBrokerImport = imported.length > 0 || ["CF Import", "IBKR Flex"].includes(meta?.equitySource || "");
   const warnings: SnapshotWarning[] = [];
   if (!hasBrokerImport || !importedAt) warnings.push(warning("BROKER_IMPORT_MISSING", "No broker import metadata was found for this account.", "critical"));
   if (statementDate && statementDate < session) warnings.push(warning("BROKER_IMPORT_STALE", `Latest broker statement is ${statementDate}; requested session is ${session}. Exposure percentages exclude stale account value.`, "warning"));

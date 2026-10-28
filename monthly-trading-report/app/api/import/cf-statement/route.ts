@@ -1,3 +1,5 @@
+import { parseIbkrFlex, IbkrImportError } from "@/lib/ibkr-flex";
+import { importIbkrFlexStatement, getBrandenPortfolioSettings } from "@/lib/store";
 import { after, NextResponse } from "next/server";
 import { refreshMarketArchive } from "@/lib/market-context-service";
 import crypto from "node:crypto";
@@ -35,13 +37,29 @@ export async function POST(request: Request) {
   const portfolioTag = String(formData.get("portfolioTag") || "").trim();
 
   if (!portfolioTag) {
-    return NextResponse.json({ error: "A portfolio is required for CF import." }, { status: 400 });
+    return NextResponse.json({ error: "A portfolio is required for broker statement import." }, { status: 400 });
   }
 
   if (!(file instanceof File)) {
-    return NextResponse.json({ error: "A PDF statement file is required." }, { status: 400 });
+    return NextResponse.json({ error: "A PDF statement or IBKR Flex XML file is required." }, { status: 400 });
   }
 
+  if (file.size > 10 * 1024 * 1024) return NextResponse.json({ error: "Statement files must be under 10 MB." }, { status: 400 });
+  if (/\.xml$/i.test(file.name) || /xml/i.test(file.type)) {
+    try {
+      if (user.id !== "branden") return NextResponse.json({ error: "IBKR import is available in Branden's personal journal." }, { status: 403 });
+      const xml = await file.text();
+      const parsed = parseIbkrFlex(xml);
+      const hash = crypto.createHash("sha256").update(xml).digest("hex");
+      return NextResponse.json(await importIbkrFlexStatement(user.id, portfolioTag, parsed, hash, file.name));
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "IBKR import failed." }, { status: error instanceof IbkrImportError ? 400 : 500 });
+    }
+  }
+  if (!/\.pdf$/i.test(file.name)) return NextResponse.json({ error: "Choose a CF PDF or IBKR Flex XML file." }, { status: 400 });
+  // A CF upload must never overwrite an IBKR portfolio's accounting snapshot.
+  const portfolioTrades = (await listTrades()).filter(t => t.userId === user.id && t.portfolioTag === portfolioTag);
+  if ((await getBrandenPortfolioSettings()).portfolioMeta?.[portfolioTag]?.equitySource === "IBKR Flex" || portfolioTrades.some(t => t.importSource === "ibkr-flex-xml")) return NextResponse.json({ error: "Choose a separate portfolio for CF statements." }, { status: 400 });
   try {
     const PDFParser = (await import("pdf2json")).default;
     const buffer = Buffer.from(await file.arrayBuffer());

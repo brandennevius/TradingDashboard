@@ -1,5 +1,7 @@
 "use client";
 
+import { chooseBrokerImportPortfolio } from "@/lib/broker-import-picker";
+
 import { CSSProperties, useEffect, useMemo, useRef, useState } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import SpyMarketCycleChart from "@/app/components/SpyMarketCycleChart";
@@ -400,7 +402,7 @@ export default function BrandenMarketCyclePage() {
 
   async function choosePortfolioForImport() {
     const defaultValue = defaultPortfolio.trim() || savedPortfolios[0] || "";
-    const targetPortfolio = window.prompt("Portfolio for broker statement import", defaultValue);
+    const targetPortfolio = await chooseBrokerImportPortfolio(defaultValue);
 
     if (targetPortfolio === null) {
       return "";
@@ -463,7 +465,7 @@ export default function BrandenMarketCyclePage() {
           ref={cfImportInputRef}
           className="trade-file-input"
           type="file"
-          accept="application/pdf,.pdf"
+          accept="application/pdf,.pdf,application/xml,text/xml,.xml"
           disabled={isImporting || !canEditBrandenJournal}
           onChange={(event) => {
             importBrokerStatement(event.target.files);

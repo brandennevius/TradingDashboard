@@ -1,5 +1,7 @@
 "use client";
 
+import { chooseBrokerImportPortfolio } from "@/lib/broker-import-picker";
+
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import TimeStopMonitor from "@/app/components/TimeStopMonitor";
@@ -97,7 +99,7 @@ export default function BrandenTimeStopPage() {
 
   async function choosePortfolioForImport() {
     const defaultValue = activePortfolio.trim() || defaultPortfolio.trim();
-    const targetPortfolio = window.prompt("Portfolio for broker statement import", defaultValue);
+    const targetPortfolio = await chooseBrokerImportPortfolio(defaultValue);
 
     if (targetPortfolio === null) {
       return "";
@@ -172,7 +174,7 @@ export default function BrandenTimeStopPage() {
           ref={cfImportInputRef}
           className="trade-file-input"
           type="file"
-          accept="application/pdf,.pdf"
+          accept="application/pdf,.pdf,application/xml,text/xml,.xml"
           disabled={isImporting || !canEditBrandenJournal}
           onChange={(event) => {
             importBrokerStatement(event.target.files);

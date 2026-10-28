@@ -8570,3 +8570,14 @@ body:has(.journal-hub-shell) { background: #f5f5ef; }
 @media(min-width: 701px) and (max-width: 1100px) {
  .report-workspace .chart-stack > .chart-panel:last-child { grid-column: 1 / -1; }
 }
+
+.broker-import-dialog { width: min(460px, 92vw); border: 1px solid #475569; border-radius: 14px; padding: 24px; background: #101827; color: #f1f5f9; }
+.broker-import-dialog::backdrop { background: rgb(0 0 0 / 60%); }
+.broker-import-dialog form { display: grid; gap: 16px; }
+.broker-import-dialog h2, .broker-import-dialog p { margin: 0; }
+.broker-import-dialog p { color: #cbd5e1; }
+.broker-import-dialog label { display: grid; gap: 8px; }
+.broker-import-dialog select, .broker-import-dialog input { width: 100%; padding: 10px; background: #1e293b; color: #fff; border: 1px solid #64748b; border-radius: 6px; }
+.broker-import-actions { display: flex; justify-content: flex-end; gap: 12px; }
+.broker-import-actions button { padding: 10px 16px; border-radius: 6px; border: 1px solid #64748b; background: #1e293b; color: #fff; cursor: pointer; }
+.broker-import-actions button[type=submit] { background: #2563eb; border-color: #2563eb; }

@@ -1,5 +1,7 @@
 "use client";
 
+import { chooseBrokerImportPortfolio } from "@/lib/broker-import-picker";
+
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import TradeBenchmarkAnalyzer from "@/app/components/TradeBenchmarkAnalyzer";
@@ -78,7 +80,7 @@ export default function BrandenBenchmarkPage() {
 
   async function choosePortfolioForImport() {
     const defaultValue = activePortfolio.trim() || defaultPortfolio.trim();
-    const targetPortfolio = window.prompt("Portfolio for broker statement import", defaultValue);
+    const targetPortfolio = await chooseBrokerImportPortfolio(defaultValue);
     if (targetPortfolio === null) return "";
     const normalized = targetPortfolio.trim();
     if (!normalized) {
@@ -127,7 +129,7 @@ export default function BrandenBenchmarkPage() {
           ref={cfImportInputRef}
           className="trade-file-input"
           type="file"
-          accept="application/pdf,.pdf"
+          accept="application/pdf,.pdf,application/xml,text/xml,.xml"
           disabled={isImporting || !canEditBrandenJournal}
           onChange={(event) => {
             importBrokerStatement(event.target.files);

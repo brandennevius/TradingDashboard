@@ -233,7 +233,9 @@ export function buildOpenPositionRiskRow(
   const marketPrice = positive(price?.price);
   const statementPrice = positive(brokerPosition?.currentPrice);
   const currentPrice = marketPrice ?? statementPrice;
-  const stopPrice = positive(brokerPosition?.stopPrice) ?? positive(trade.stopPrice);
+  const stopPrice = trade.importSource === "ibkr-flex-xml"
+    ? positive(trade.stopPrice)
+    : positive(brokerPosition?.stopPrice) ?? positive(trade.stopPrice);
   const storedRisk = Math.abs(Number(trade.risk) || 0);
   const positionValue = currentPrice && shares ? currentPrice * shares : null;
   const basis = fifoCostBasis(trade, shares, entryPrice);
