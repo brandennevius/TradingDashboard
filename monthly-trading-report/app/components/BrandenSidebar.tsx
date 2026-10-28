@@ -62,13 +62,15 @@ const brandenSidebarGroups = [
       { href: "/journal/branden/market-gauge", label: "Market Gauge", icon: <BrandenNavIcon name="gauge" /> },
       { href: "/journal/branden/benchmark", label: "Benchmark", icon: <BrandenNavIcon name="benchmark" /> },
       { href: "/journal/branden/rprp", label: "RPRP Sizer", icon: <BrandenNavIcon name="sizing" /> },
-      { href: "/journal/branden/setup-builder", label: "Setup Builder", icon: <BrandenNavIcon name="setup" /> },
-      { href: "/journal/branden/portfolios", label: "Portfolios", icon: <BrandenNavIcon name="portfolio" /> }
+      { href: "/journal/branden/setup-builder", label: "Setup Builder", icon: <BrandenNavIcon name="setup" /> }
     ]
   },
   {
     title: "Account",
-    items: [{ href: "/journal/branden/settings", label: "Settings", icon: <BrandenNavIcon name="settings" /> }]
+    items: [
+      { href: "/journal/branden/portfolios", label: "Portfolios", icon: <BrandenNavIcon name="portfolio" /> },
+      { href: "/journal/branden/settings", label: "Settings", icon: <BrandenNavIcon name="settings" /> }
+    ]
   }
 ];
 
