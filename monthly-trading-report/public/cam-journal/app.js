@@ -2502,7 +2502,7 @@ async function importBrokerCsvFile(file) {
           .join('; ')}${skippedTradeRows.length > 5 ? `; and ${skippedTradeRows.length - 5} more` : ''}.</span>`
       : '';
     if (!executions.length) {
-      showImportStatus(`<strong>No broker trades found.</strong><br><span class="small">This importer looks for Thinkorswim/Schwab account statement rows with TYPE = TRD. If this file has trades, send the CSV format so another parser can be added.</span>${skippedWarning}`);
+      showImportStatus(`<strong>No broker trades found.</strong><br><span class="small">Import a Thinkorswim/Schwab account statement with TYPE = TRD rows, or a paperMoney Trade Activity export with stock fills in Filled Orders.</span>${skippedWarning}`);
       return;
     }
 

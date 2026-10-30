@@ -157,6 +157,16 @@
   }
 
   function statementExecutions(rows) {
+    // Account statements also contain order tables. Keep using their cash ledger
+    // so executions are never counted twice.
+    const hasCashLedger = rows.some((row) =>
+      normalizedText(row[0]).toUpperCase() === "DATE" &&
+      normalizedText(row[1]).toUpperCase() === "TIME" &&
+      normalizedText(row[2]).toUpperCase() === "TYPE"
+    );
+    if (!hasCashLedger && rows.some((row) => /paperMoney/i.test(row[0] || ""))) {
+      return paperStatementExecutions(rows);
+    }
     const executions = [];
     const skippedTradeRows = [];
     let header = null;
@@ -205,6 +215,58 @@
       }));
     }
 
+    return { executions, skippedTradeRows };
+  }
+
+  function paperStatementExecutions(rows) {
+    const executions = [];
+    const skippedTradeRows = [];
+    const occurrences = new Map();
+    let inFilledOrders = false;
+    let header = null;
+    for (const row of rows) {
+      const title = normalizedText(row[0]);
+      if (row.filter((cell) => normalizedText(cell)).length === 1 && title) {
+        inFilledOrders = title === "Filled Orders";
+        header = null;
+        continue;
+      }
+      if (!inFilledOrders) continue;
+      if (row.includes("Exec Time") && row.includes("Symbol")) {
+        header = row.map(normalizedText);
+        continue;
+      }
+      if (!header) continue;
+      const get = (name) => normalizedText(row[header.indexOf(name)]);
+      const timestamp = get("Exec Time");
+      const match = timestamp.match(/^(\d{1,2}\/\d{1,2}\/\d{2})\s+(\d{2}:\d{2}:\d{2})$/);
+      const side = get("Side").toUpperCase();
+      const qty = Math.abs(cleanNumber(get("Qty")));
+      const price = cleanNumber(get("Price"));
+      const ticker = get("Symbol").toUpperCase();
+      // Only stock fills are supported: option prices need a contract multiplier
+      // and a full contract identity, not just the underlying symbol.
+      if (!match || !["BUY", "SELL"].includes(side) || !qty || price <= 0 || !ticker ||
+          get("Spread").toUpperCase() !== "STOCK" || get("Type").toUpperCase() !== "STOCK") {
+        skippedTradeRows.push({ date: match ? normalizeDate(match[1]) : "", time: timestamp, ref: "", description: row.join(",") });
+        continue;
+      }
+      const signedQty = side === "BUY" ? qty : -qty;
+      const execution = {
+        date: normalizeDate(match[1]), time: match[2], type: "TRD",
+        action: side === "BUY" ? "BOT" : "SOLD", qty, signedQty,
+        instrument: ticker, ticker, price, isOption: false, accountType: "paper",
+        positionEffect: get("Pos Effect"),
+        amount: -signedQty * price, miscFees: 0, commissions: 0,
+        description: `${side} ${qty} ${ticker} @${price}`
+      };
+      // No broker execution IDs are supplied. Preserve identical fills within a
+      // file while keeping their identities stable on repeat imports.
+      const signature = canonicalExecutionKey(execution);
+      const occurrence = (occurrences.get(signature) || 0) + 1;
+      occurrences.set(signature, occurrence);
+      executions.push(normalizedExecution({ ...execution, ref: `paper:${occurrence}` }));
+    }
     return { executions, skippedTradeRows };
   }
 
@@ -274,6 +336,7 @@
       checklist: "",
       notes: "",
       source: "Broker CSV import",
+      ...(first.accountType ? { accountType: first.accountType } : {}),
       screenshots: [],
       importOpenKey: `${first.instrument}|${direction}|${openingKeys.join("~")}`,
       importTradeKey: `${first.instrument}|${executionKeys.join("~")}`,
@@ -302,6 +365,24 @@
 
       for (const execution of list) {
         const before = position;
+        if (before !== 0 && Math.sign(before) !== Math.sign(execution.signedQty) && execution.qty > Math.abs(before)) {
+          const closingQty = Math.abs(before);
+          const split = (qty, part) => normalizedExecution({
+            ...execution,
+            ref: `${execution.ref}:${part}`,
+            qty,
+            signedQty: Math.sign(execution.signedQty) * qty,
+            amount: execution.amount * qty / execution.qty,
+            miscFees: execution.miscFees * qty / execution.qty,
+            commissions: execution.commissions * qty / execution.qty
+          });
+          bucket.push(split(closingQty, "close"));
+          imported.push(summarizeRoundTrip(key, bucket, true, idFactory));
+          const opening = split(execution.qty - closingQty, "open");
+          bucket = [opening];
+          position = opening.signedQty;
+          continue;
+        }
         position += execution.signedQty;
         bucket.push(execution);
         if (before !== 0 && position === 0) {
@@ -448,6 +529,7 @@
   }
 
   function lifecycleMatches(existing, imported) {
+    if ((existing.accountType || "live") !== (imported.accountType || "live")) return false;
     const existingInstrument = normalizedLifecycleValue(existing.instrument || existing.ticker || existing.symbol);
     const importedInstrument = normalizedLifecycleValue(imported.instrument || imported.ticker || imported.symbol);
     const sameNumber = (left, right, tolerance = 0.000001) => {
@@ -527,6 +609,7 @@
         const openCandidates = trades
           .map((trade, candidateIndex) => ({ trade, candidateIndex }))
           .filter(({ trade }) => {
+            if ((trade.accountType || "live") !== (imported.accountType || "live")) return false;
             const sameInstrument =
               normalizedLifecycleValue(trade.instrument || trade.ticker || trade.symbol) ===
               normalizedLifecycleValue(imported.instrument || imported.ticker);
