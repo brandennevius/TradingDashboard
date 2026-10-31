@@ -11,7 +11,7 @@ Start with the **[visual project guide](docs/guide/README.md)** for a high-level
 | Node.js 24.19.0, Next.js 15.5.19 | Local/server runtime, App Router pages and API handlers; versions verified from lockfile/runtime |
 | React 19, TypeScript 5 | Branden journal and monthly-report UI; shared types and server/domain logic |
 | HTML/CSS/browser JavaScript | Cam journal in `public/cam-journal/`; shares authenticated Next.js APIs |
-| PostgreSQL (`pg`) | Persistent deployed records, settings, screenshots, and Cam revisions |
+| Supabase PostgreSQL (`pg`) | Supabase hosts persistent deployed records, settings, screenshots, and Cam revisions; the server accesses PostgreSQL through `pg` |
 | Local JSON | Non-production fallback under `data/` or `LOCAL_DATA_DIR`; no database required for demo |
 | Recharts, lightweight-charts | Dashboard and market charts |
 | CSV, XML, PDF/document libraries | Supported broker imports and review/export documents |
@@ -23,7 +23,7 @@ Start with the **[visual project guide](docs/guide/README.md)** for a high-level
 Branden React UI ────────> Next.js API routes ──> lib/ parsers, calculations, store
 Cam HTML/JS + CSV parser ─> /api/cam-journal ────> lib/store.ts
                                                    ├─ development: JSON files
-                                                   └─ deployment: PostgreSQL
+                                                   └─ deployment: Supabase PostgreSQL
 Optional market/AI/email features ──> server-side provider calls
 ```
 
@@ -104,7 +104,7 @@ All application configuration below is server-side; no secret belongs in a `NEXT
 
 Work on a feature branch, define observable acceptance criteria, implement with relevant tests, and open a pull request. Run the commands above locally; GitHub Actions repeats checks before review. Follow the [verification/release guide](docs/verification.md) for traceability, manual validation, and smoke checks. Performance plans in this repository remain plans unless supported by measurements.
 
-The existing deployment setup targets **Vercel + PostgreSQL**. Set the Vercel root directory to `monthly-trading-report`, framework to Next.js, Node to 24.x, install command to `npm ci`, and build command to `npm run build`. Configure `APP_SECRET`, `TRADER_USERS`, and `DATABASE_URL` separately for the intended environment; optional integrations require their own configuration. Tables are created/extended by store helpers on first access, so the deployment database role needs appropriate schema permissions. Review changes against a disposable/staging database before production.
+The existing deployment stack is **Vercel + Supabase-hosted PostgreSQL**. The application connects with `pg` through `DATABASE_URL` and uses its own signed-session authentication, rather than Supabase Auth. Set the Vercel root directory to `monthly-trading-report`, framework to Next.js, Node to 24.x, install command to `npm ci`, and build command to `npm run build`. Configure `APP_SECRET`, `TRADER_USERS`, and `DATABASE_URL` separately for the intended environment; optional integrations require their own configuration. Tables are created/extended by store helpers on first access, so the deployment database role needs appropriate schema permissions. Review changes against a disposable/staging database before production.
 
 `vercel.json` retains two UTC schedules: market-context archive at 22:30 Monday–Friday and Cam backup at 05:15 daily. Set `CRON_SECRET` for scheduled access. Confirm scheduling support, backups, restoration, and database permissions in your hosting plan. JSON files on a deployment filesystem do not replace durable PostgreSQL storage.
 

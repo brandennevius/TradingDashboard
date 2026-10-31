@@ -15,6 +15,10 @@ A **scenario** states behavior in plain language. A **fixture** supplies control
 | Playwright suite | Two browser workflows and a real HTTP permission case against a local app with JSON persistence. |
 | Manual exploratory and acceptance checks | A person investigates workflows and checks intended user needs; record what was actually checked. |
 
+**Branden examples:** existing fast tests cover CF statement reconciliation, IBKR Flex parsing and local storage, manual-field preservation, trade merges, risk calculations, and snapshots. Relevant files include [CF import tests](../../tests/cf-statement-import.test.ts), [IBKR tests](../../tests/ibkr-flex.test.ts), and [stored merge tests](../../tests/trade-merge-store.test.ts).
+
+**Cam browser example:** the current Playwright suite covers the CSV workflow we used in the lesson. It does not exercise Branden's React import and edit screens. Those are separate flows, as shown on the [data-flow page](02-data-flow.md).
+
 **Planned next:** a focused PostgreSQL integration test. The current suites do not establish PostgreSQL transaction, schema-change, or concurrent-write correctness.
 
 ## What happens when we run Playwright?
@@ -47,7 +51,7 @@ An unhappy-path test **passes** when an error is handled correctly. A red result
 
 Keep tests while they protect supported behavior. Update expectations when requirements intentionally change, add cases for meaningful gaps, and retire obsolete or redundant cases. A green suite establishes its specific assertions, not every acceptance criterion.
 
-The current browser cases cover initial import, preserved edits and execution contents on reimport, fresh-browser recovery, unrecognized-input preservation, and 401/403 responses. See [verification and release](../verification.md) for the mapping and known gaps.
+The current Cam browser cases cover initial import, preserved edits and execution contents on reimport, fresh-browser recovery, and unrecognized-input preservation; the HTTP case checks 401/403 responses. See [verification and release](../verification.md) for the mapping and known gaps.
 
 ## Where to look later
 
