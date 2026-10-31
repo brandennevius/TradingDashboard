@@ -6,16 +6,19 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
     "snapshot:daily": "tsx scripts/generate-daily-portfolio-snapshot.ts",
-    "test:cam": "node --import tsx --test tests/cam-support.test.mjs tests/cam-analytics.test.mjs tests/cam-broker-csv-import.test.ts tests/cam-paper-import.test.mjs",
-    "test:auth": "node --import tsx --test tests/auth.test.ts",
-    "test:daily-snapshot": "tsx --test tests/daily-portfolio-snapshot.test.ts",
-    "test:mtd-snapshot": "tsx --test tests/month-to-date-snapshot.test.ts",
-    "test:cf-import": "tsx --test tests/cf-statement-import.test.ts",
-    "test:market-gauge": "tsx --test tests/market-gauge.test.ts",
-    "test:market-context": "node --import tsx --test tests/trade-market-context.test.ts tests/market-context-ui.test.ts tests/market-gauge.test.ts",
-    "test:ibkr-import": "tsx --test tests/ibkr-flex.test.ts"
+    "test:cam": "node scripts/run-node-tests.mjs tests/cam-support.test.mjs tests/cam-analytics.test.mjs tests/cam-broker-csv-import.test.ts tests/cam-paper-import.test.mjs",
+    "test:auth": "node scripts/run-node-tests.mjs tests/auth.test.ts",
+    "test:daily-snapshot": "node scripts/run-node-tests.mjs tests/daily-portfolio-snapshot.test.ts",
+    "test:mtd-snapshot": "node scripts/run-node-tests.mjs tests/month-to-date-snapshot.test.ts",
+    "test:cf-import": "node scripts/run-node-tests.mjs tests/cf-statement-import.test.ts",
+    "test:market-gauge": "node scripts/run-node-tests.mjs tests/market-gauge.test.ts",
+    "test:market-context": "node scripts/run-node-tests.mjs tests/trade-market-context.test.ts tests/market-context-ui.test.ts tests/market-gauge.test.ts",
+    "test:ibkr-import": "node scripts/run-node-tests.mjs tests/ibkr-flex.test.ts",
+    "typecheck": "tsc --noEmit --incremental false",
+    "test": "node scripts/run-node-tests.mjs",
+    "test:e2e": "node scripts/run-browser-tests.mjs",
+    "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.0",
@@ -37,6 +40,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@playwright/test": "1.64.1",
     "@types/node": "^22.9.0",
     "@types/nodemailer": "^8.0.1",
     "@types/react": "^19.0.0",
@@ -45,5 +49,8 @@
     "eslint-config-next": "^15.0.3",
     "tsx": "^4.23.1",
     "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=24 <25"
   }
 }

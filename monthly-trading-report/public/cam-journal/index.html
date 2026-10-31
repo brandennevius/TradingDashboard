@@ -36,7 +36,7 @@
     </div>
   </aside>
 
-  <main class="content">
+  <main class="content" aria-busy="true">
     <section id="dashboardView" class="view active">
       <header class="page-head">
         <div>
@@ -45,7 +45,7 @@
         </div>
       </header>
 
-      <div id="importStatus" class="card import-status hidden"></div>
+      <div id="importStatus" role="status" aria-live="polite" class="card import-status hidden"></div>
 
       <section class="card report-filters-card">
         <div class="section-head">
@@ -534,7 +534,7 @@
 
   </main>
 
-  <dialog id="tradeDialog" class="trade-dialog">
+  <dialog id="tradeDialog" aria-labelledby="editTitle" class="trade-dialog">
     <form id="editForm" method="dialog" novalidate>
       <div class="dialog-head">
         <div>

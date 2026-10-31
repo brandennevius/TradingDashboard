@@ -1,0 +1,87 @@
+name: Verification
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verification-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# No repository secrets or deployment actions. Each job uses a fresh runner.
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+  DATABASE_URL: ''
+  ALPACA_API_KEY: ''
+  ALPACA_API_SECRET: ''
+  OPENAI_API_KEY: ''
+  CRON_SECRET: ''
+
+jobs:
+  typecheck:
+    name: TypeScript
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: monthly-trading-report
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: monthly-trading-report/.nvmrc
+          cache: npm
+          cache-dependency-path: monthly-trading-report/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+
+  regression-build:
+    name: Node regressions and build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: monthly-trading-report
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: monthly-trading-report/.nvmrc
+          cache: npm
+          cache-dependency-path: monthly-trading-report/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+
+  browser:
+    name: Playwright Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: monthly-trading-report
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: monthly-trading-report/.nvmrc
+          cache: npm
+          cache-dependency-path: monthly-trading-report/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - name: Preserve browser failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: playwright-failure-${{ github.run_attempt }}
+          path: |
+            monthly-trading-report/playwright-report/
+            monthly-trading-report/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
