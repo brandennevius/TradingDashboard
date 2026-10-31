@@ -1456,6 +1456,98 @@ export async function saveBrandenPortfolioMeta(
   return saveBrandenPortfolioSettings(portfolioSettingsWithImportMeta(current, normalizedPortfolio, meta));
 }
 
+export class PortfolioDeletionError extends Error {
+  constructor(message: string, public readonly status: 404 | 409) {
+    super(message);
+  }
+}
+
+/** Delete one owner's exact portfolio, including hidden trades and screenshots. */
+export async function deleteBrandenPortfolio(portfolio: string) {
+  const name = portfolio.trim();
+  if (!name) throw new PortfolioDeletionError("Choose a named portfolio to delete.", 404);
+  const withoutPortfolio = (current: BrandenPortfolioSettings) => normalizeBrandenPortfolioSettings({
+    ...current,
+    portfolios: current.portfolios.filter(value => value !== name),
+    defaultPortfolio: current.defaultPortfolio === name ? "" : current.defaultPortfolio,
+    portfolioMeta: Object.fromEntries(Object.entries(current.portfolioMeta || {}).filter(([key]) => key !== name))
+  });
+  const validate = (current: BrandenPortfolioSettings, trades: Array<{ groupId: string; groupRole: string }>) => {
+    if (!current.portfolios.includes(name) && !trades.length) {
+      throw new PortfolioDeletionError("Portfolio not found.", 404);
+    }
+    if (trades.some(trade => trade.groupId || trade.groupRole === "parent" || trade.groupRole === "child")) {
+      throw new PortfolioDeletionError("Undo this portfolio's trade merges before deleting it.", 409);
+    }
+  };
+  const db = getPool();
+  if (!db) {
+    if (process.env.NODE_ENV === "production") throw new Error("DATABASE_URL is required before deleting portfolios.");
+    const previousTrades = await readLocalTrades();
+    const previousSettings = await readLocalSettings();
+    const matches = previousTrades.filter(trade => trade.userId === "branden" && trade.portfolioTag === name);
+    const current = normalizeBrandenPortfolioSettings(previousSettings.brandenPortfolioNames);
+    validate(current, matches);
+    const settings = withoutPortfolio(current);
+    const preferences = { ...(previousSettings.brandenColumnPreferences as Record<string, unknown> || {}) };
+    delete preferences[name];
+    const nextLocalSettings = { ...previousSettings };
+    delete nextLocalSettings[`ibkr_flex:branden:${name}`];
+    const snapshots = Array.isArray(previousSettings.brandenBrokerPortfolioSnapshots)
+      ? previousSettings.brandenBrokerPortfolioSnapshots as BrokerPortfolioSnapshot[] : [];
+    try {
+      await writeLocalTrades(previousTrades.filter(trade => !(trade.userId === "branden" && trade.portfolioTag === name)));
+      await writeLocalSettings({
+        ...nextLocalSettings,
+        brandenPortfolioNames: settings,
+        brandenColumnPreferences: preferences,
+        brandenBrokerPortfolioSnapshots: snapshots
+          .filter(snapshot => !(snapshot.userId === "branden" && snapshot.portfolioTag === name))
+      });
+    } catch (error) {
+      await writeLocalTrades(previousTrades);
+      await writeLocalSettings(previousSettings);
+      throw error;
+    }
+    return { ...settings, deletedTrades: matches.length };
+  }
+
+  await ensureSettingsTable();
+  await ensureTradeTable();
+  await ensureTradeScreenshotTable();
+  await ensureBrokerPortfolioSnapshotTable();
+  const client = await db.connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", ["broker-import-settings"]);
+    const settingsResult = await client.query("select value from app_settings where key = $1 for update", ["branden_portfolio_names"]);
+    const current = normalizeBrandenPortfolioSettings(settingsResult.rows[0]?.value);
+    await client.query("lock table trade_logs in share row exclusive mode");
+    const target = await client.query("select id, group_id, group_role from trade_logs where user_id = $1 and portfolio_tag = $2 for update", ["branden", name]);
+    validate(current, target.rows.map(row => ({ groupId: String(row.group_id || ""), groupRole: String(row.group_role || "none") })));
+    const settings = withoutPortfolio(current);
+    await client.query(
+      "delete from trade_screenshots where user_id = $1 and trade_id in (select id from trade_logs where user_id = $1 and portfolio_tag = $2)",
+      ["branden", name]
+    );
+    const deleted = await client.query("delete from trade_logs where user_id = $1 and portfolio_tag = $2", ["branden", name]);
+    await client.query("delete from broker_portfolio_snapshots where user_id = $1 and portfolio_tag = $2", ["branden", name]);
+    await client.query(
+      "insert into app_settings (key, value) values ($1, $2::jsonb) on conflict (key) do update set value = excluded.value, updated_at = now()",
+      ["branden_portfolio_names", JSON.stringify(settings)]
+    );
+    await client.query("update app_settings set value = value - $2::text, updated_at = now() where key = $1", ["branden_column_preferences", name]);
+    await client.query("delete from app_settings where key = $1", [`ibkr_flex:branden:${name}`]);
+    await client.query("commit");
+    return { ...settings, deletedTrades: deleted.rowCount || 0 };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function portfolioSettingsWithImportMeta(
   current: BrandenPortfolioSettings,
   normalizedPortfolio: string,
