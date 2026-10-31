@@ -45,6 +45,7 @@ Run commands sequentially when Next.js is writing generated `.next/types` files.
 | Temporary directory inspection after browser completion | No `trading-dashboard-e2e-*` directories remained under `/tmp` |
 | `npm run build` | Exit 0; optimized production build completed with all 60 static pages |
 | Workflow validation | Python YAML parse and `actionlint` 1.7.7 both passed; actionlint exit 0 with no diagnostics |
+| `npm run test:ibkr-import` | 4 passed, 1 optional private-file case skipped |
 | `git diff --check` | No whitespace errors at inspection |
 
 The final Node launcher was also run as `LOCAL_DATA_DIR=/tmp/trading-protected-journal DATABASE_URL=postgres://invalid.example/do-not-connect npm test`. All 228 runnable checks passed, one private-file case skipped, and sentinel settings/trade files in the inherited directory remained byte-for-byte unchanged. This verifies the new launcher prevents the inherited override from redirecting storage-test writes.
@@ -55,6 +56,8 @@ During test development, ambiguous accessible labels/text and a string-versus-nu
 
 ## Hosted checks and deployment limits
 
-PR and hosted Actions evidence will be recorded here after publication. Local passing commands do not establish hosted execution. The GitHub connector can access the repository; the shell `gh` token failed authentication, so publication may require the connected GitHub tools.
+Published as [PR #3](https://github.com/brandennevius/TradingDashboard/pull/3). [Verification run 41154467289](https://github.com/brandennevius/TradingDashboard/actions/runs/41154467289) completed successfully on implementation commit `633c4cad97cdd68c246743d42a07fdefde11f6a5`. All three hosted jobs passed: **TypeScript**, **Node regressions and build**, and **Playwright Chromium**. Unlike the local system-browser run, the hosted browser job installed Playwright's matching Chromium with system dependencies. The follow-up evidence commit changes documentation only; the linked run identifies the exact tested implementation.
 
-No staging or production smoke check, PostgreSQL transaction/concurrency/restore check, live provider/AI call, email delivery, or cron execution was performed. No production deployment was initiated. Existing Git-provider/Vercel branch deployment behavior and preview data isolation must be verified in hosting settings. See [known gaps](verification.md#known-gaps) before describing the scope of evidence.
+The existing Vercel integration also reported a successful branch build for that implementation commit ([deployment status](https://vercel.com/branden-nevius-projects-666c9e97/monthly-trading-report/AWp2mANzTPQujr6M4mcJB9iVWsst)). Deployment metadata identified `codex/import-verification-work-sample` and returned `target: null` rather than a production target. No deployed application requests or write smoke checks were made.
+
+No staging or production smoke check, PostgreSQL transaction/concurrency/restore check, live provider/AI call, email delivery, or cron execution was performed. No production deployment was initiated. The feature-branch build above was observed; production-branch/root settings and preview data isolation still need confirmation in hosting settings. See [known gaps](verification.md#known-gaps) before describing the scope of evidence.
