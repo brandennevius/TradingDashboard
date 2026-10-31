@@ -10,17 +10,17 @@ TradingDashboard helps traders connect broker executions with their own notes, r
 flowchart LR
     trader["Trader"] --> browser["Journal in a browser"]
     browser <-->|"Requests and responses"| app["Next.js application"]
-    app <-->|"Read and save"| storage["JSON locally or PostgreSQL when configured"]
+    app <-->|"Read and save"| storage["JSON locally or Supabase PostgreSQL when deployed"]
 ```
 
-Branden's journal and monthly reports use React. Cam's journal uses HTML and browser JavaScript. Both use the same Next.js server. GitHub stores the source code and runs automated checks; Vercel is the existing deployment platform.
+Branden's journal and monthly reports use React. Cam's journal uses HTML and browser JavaScript. Both use the same Next.js server. GitHub stores the source code and runs automated checks; Vercel hosts the application, and Supabase hosts its deployed PostgreSQL database.
 
 ## Reading path
 
 | Page | Question it answers |
 | --- | --- |
 | [1. Stack and infrastructure](01-stack-and-infrastructure.md) | What technologies do we use, and what does each one do? |
-| [2. Data flow](02-data-flow.md) | What happens between uploading a statement and saving a trade? |
+| [2. Data flow](02-data-flow.md) | How do Branden's server-side imports and trade edits work, and how does Cam's flow differ? |
 | [3. Testing](03-testing.md) | How do fixtures, test scripts, assertions, and results fit together? |
 | [4. Feature to release](04-feature-to-release.md) | What goes into a PR, and how does GitHub run the checks? |
 | [5. Environments](05-environments.md) | What differs between development, testing, previews, and production? |
