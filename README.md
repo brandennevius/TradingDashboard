@@ -4,7 +4,8 @@ A shared trading journal for reviewing executions, risk, setups, and trading dec
 
 The active application is **[monthly-trading-report/](monthly-trading-report/)**. The directory name reflects its original monthly-report feature; the app now includes separate Branden and Cam journals, trade logs, portfolios, watchlists, setup checklists, market context, and snapshots.
 
-- **[Application guide](monthly-trading-report/README.md):** verified stack, synthetic demo, configuration, integrations, and deployment.
+- **[Start here: visual project guide](monthly-trading-report/docs/guide/README.md):** a high-level explanation of the stack, data flow, tests, environments, and delivery process, with diagrams.
+- **[Application setup and reference](monthly-trading-report/README.md):** verified stack, synthetic demo, configuration, integrations, and deployment.
 - **[Verification and release](monthly-trading-report/docs/verification.md):** test layers, acceptance criteria, CI checks, evidence, and gaps.
 - **[Interview walkthrough](monthly-trading-report/docs/interview-guide.md):** explanation, reading path, investigation example, and exercise.
 - **[Audit record](monthly-trading-report/docs/audit.md):** baseline and validation results, with explicit limits.
