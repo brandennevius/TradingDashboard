@@ -2,7 +2,7 @@
 
 This Next.js application helps traders connect broker executions with their own risk decisions and reviews. Branden's React journal includes trade imports, portfolios, open-position risk, watchlists, setup checklists, market context, and exports. Cam's journal uses a separate browser JavaScript interface served by the same application, with broker CSV imports, manual annotations, setup analytics, and shared saved state. Monthly KPI reporting remains available.
 
-Start with the [repository README](../README.md). Deeper material: [verification/release](docs/verification.md), [interview guide](docs/interview-guide.md), [audit/evidence](docs/audit.md).
+Start with the **[visual project guide](docs/guide/README.md)** for a high-level explanation with diagrams. This page is the detailed setup and configuration reference. Deeper material: [verification/release](docs/verification.md), [interview guide](docs/interview-guide.md), [audit/evidence](docs/audit.md). The [repository README](../README.md) is the project entry point.
 
 ## Stack and data flow
 
