@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
-import { getBrandenPortfolioSettings, saveBrandenPortfolioSettings } from "@/lib/store";
+import { deleteBrandenPortfolio, getBrandenPortfolioSettings, PortfolioDeletionError, saveBrandenPortfolioSettings } from "@/lib/store";
 
 function normalizeNames(value: unknown) {
   if (!Array.isArray(value)) {
@@ -37,7 +37,7 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
-  if (user.id !== "branden") {
+  if (user.id !== "branden" || user.readOnly) {
     return NextResponse.json({ error: "Only Branden can update these portfolios." }, { status: 403 });
   }
 
@@ -53,6 +53,26 @@ export async function PUT(request: Request) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not save portfolios." },
       { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const user = await getSessionUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+  if (user.id !== "branden" || user.readOnly) {
+    return NextResponse.json({ error: "Only Branden can delete portfolios." }, { status: 403 });
+  }
+  const body = await request.json().catch(() => null);
+  if (typeof body?.portfolio !== "string" || !body.portfolio.trim()) {
+    return NextResponse.json({ error: "Choose a named portfolio to delete." }, { status: 400 });
+  }
+  try {
+    return NextResponse.json(await deleteBrandenPortfolio(body.portfolio));
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Could not delete portfolio." },
+      { status: error instanceof PortfolioDeletionError ? error.status : 500 }
     );
   }
 }

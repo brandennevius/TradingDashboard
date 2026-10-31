@@ -42,6 +42,7 @@ export default function BrandenPortfoliosPage() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [deletingPortfolio, setDeletingPortfolio] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -133,6 +134,39 @@ export default function BrandenPortfoliosPage() {
     setStatus(nextDefaultPortfolio ? `Default portfolio set to ${nextDefaultPortfolio}.` : "Default portfolio set to all portfolios.");
   }
 
+  async function deletePortfolio(portfolio: string) {
+    if (!canEdit || deletingPortfolio) return;
+    if (!window.confirm(`Delete "${portfolio}" and ALL its trades, including closed and hidden trades, screenshots, and broker snapshots? Other portfolios will be kept. A journal backup will download first. This cannot be undone in the app.`)) return;
+    setDeletingPortfolio(portfolio);
+    setStatus("");
+    try {
+      const backupResponse = await fetch("/api/settings/branden-backup", { cache: "no-store" });
+      if (!backupResponse.ok) throw new Error("Could not download a journal backup. Portfolio was not deleted.");
+      const url = URL.createObjectURL(await backupResponse.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `branden-journal-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      const response = await fetch("/api/settings/branden-portfolios", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ portfolio })
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Could not delete portfolio.");
+      if (activePortfolio === portfolio) setActivePortfolio(data.defaultPortfolio || "");
+      // Reload shared navigation and every portfolio-derived view together.
+      window.location.reload();
+    } catch (deleteError) {
+      setStatus(deleteError instanceof Error ? deleteError.message : "Could not delete portfolio.");
+    } finally {
+      setDeletingPortfolio("");
+    }
+  }
+
   return (
     <div className="branden-journal-content">
         <header className="branden-route-header">
@@ -157,9 +191,9 @@ export default function BrandenPortfoliosPage() {
                 <div className="trade-portfolio-builder">
                   <label>
                     Portfolio name
-                    <input value={newPortfolio} onChange={(event) => setNewPortfolio(event.target.value)} placeholder="Long Term, IRA, Cash" disabled={!canEdit} />
+                    <input value={newPortfolio} onChange={(event) => setNewPortfolio(event.target.value)} placeholder="Long Term, IRA, Cash" disabled={!canEdit || Boolean(deletingPortfolio)} />
                   </label>
-                  <button className="trade-muted-button" type="button" onClick={createPortfolio} disabled={!canEdit}>
+                  <button className="trade-muted-button" type="button" onClick={createPortfolio} disabled={!canEdit || Boolean(deletingPortfolio)}>
                     Save Portfolio
                   </button>
                 </div>
@@ -182,7 +216,7 @@ export default function BrandenPortfoliosPage() {
                 <h4>Default portfolio</h4>
                 <label>
                   Default portfolio
-                  <select value={defaultPortfolio} onChange={(event) => saveDefault(event.target.value)} disabled={!canEdit}>
+                  <select value={defaultPortfolio} onChange={(event) => saveDefault(event.target.value)} disabled={!canEdit || Boolean(deletingPortfolio)}>
                     <option value="">All portfolios</option>
                     {portfolioOptions.map((portfolio) => (
                       <option key={portfolio} value={portfolio}>{portfolio}</option>
@@ -209,7 +243,10 @@ export default function BrandenPortfoliosPage() {
                         <div><dt>Net P&amp;L</dt><dd className={portfolioPnl >= 0 ? "trade-positive" : "trade-negative"}>{money(portfolioPnl)}</dd></div>
                       </dl>
                       <button className="trade-muted-button" type="button" onClick={() => setActivePortfolio(portfolio)}>View Portfolio</button>
-                      <button className="trade-muted-button" type="button" onClick={() => saveDefault(portfolio)} disabled={!canEdit}>Set Default</button>
+                      <button className="trade-muted-button" type="button" onClick={() => saveDefault(portfolio)} disabled={!canEdit || Boolean(deletingPortfolio)}>Set Default</button>
+                      {canEdit ? <button className="trade-muted-button trade-negative" type="button" onClick={() => deletePortfolio(portfolio)} disabled={Boolean(deletingPortfolio)} aria-label={`Delete portfolio ${portfolio}`}>
+                        {deletingPortfolio === portfolio ? "Deleting..." : "Delete Portfolio"}
+                      </button> : null}
                     </article>
                   );
                 })
