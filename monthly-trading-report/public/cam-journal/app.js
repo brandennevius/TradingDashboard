@@ -3484,6 +3484,7 @@ async function bootJournal() {
   renderAll();
   applyReadOnlyUi();
   bootingJournal = false;
+  document.querySelector('main').setAttribute('aria-busy', 'false');
 }
 
 

@@ -1,129 +1,111 @@
-# Monthly Trading Report
+# Trading journal application
 
-A small shared dashboard for Branden and Cam to log monthly trading KPIs, review trends, and edit past monthly entries.
+This Next.js application helps traders connect broker executions with their own risk decisions and reviews. Branden's React journal includes trade imports, portfolios, open-position risk, watchlists, setup checklists, market context, and exports. Cam's journal uses a separate browser JavaScript interface served by the same application, with broker CSV imports, manual annotations, setup analytics, and shared saved state. Monthly KPI reporting remains available.
 
-## What it includes
+Start with the [repository README](../README.md). Deeper material: [verification/release](docs/verification.md), [interview guide](docs/interview-guide.md), [audit/evidence](docs/audit.md).
 
-- Login for two traders, configured through `TRADER_USERS`
-- Monthly KPI form that asks for raw inputs and calculates derived metrics
-- Saved month-to-month history
-- Dedicated edit tab for updating or deleting your own submitted months
-- Filterable dashboard visuals for Branden, Cam, or both across monthly P&L, return, win rate, and R metrics
-- Postgres persistence for deployment
-- Local JSON persistence when `DATABASE_URL` is not set
+## Stack and data flow
 
-## Local setup
+| Component | Purpose |
+| --- | --- |
+| Node.js 24.19.0, Next.js 15.5.19 | Local/server runtime, App Router pages and API handlers; versions verified from lockfile/runtime |
+| React 19, TypeScript 5 | Branden journal and monthly-report UI; shared types and server/domain logic |
+| HTML/CSS/browser JavaScript | Cam journal in `public/cam-journal/`; shares authenticated Next.js APIs |
+| PostgreSQL (`pg`) | Persistent deployed records, settings, screenshots, and Cam revisions |
+| Local JSON | Non-production fallback under `data/` or `LOCAL_DATA_DIR`; no database required for demo |
+| Recharts, lightweight-charts | Dashboard and market charts |
+| CSV, XML, PDF/document libraries | Supported broker imports and review/export documents |
+| `node:test`, `node:assert/strict`, `tsx` | Fast domain, local storage, mocked-service, and static/extracted-UI regression checks |
+| Playwright (TypeScript) | Bounded real-browser import and persistence suite |
+| GitHub Actions | Independent TypeScript, regression/build, and Chromium checks |
+
+```text
+Branden React UI ────────> Next.js API routes ──> lib/ parsers, calculations, store
+Cam HTML/JS + CSV parser ─> /api/cam-journal ────> lib/store.ts
+                                                   ├─ development: JSON files
+                                                   └─ deployment: PostgreSQL
+Optional market/AI/email features ──> server-side provider calls
+```
+
+Cam parses CSV and groups executions in the browser, merges imported records while retaining review fields, caches locally, then debounces a full-state PUT to the API. Reloading retrieves shared state. This is whole-state persistence, with no optimistic concurrency control; simultaneous writers can overwrite each other's changes. Local JSON is intended for a single local instance, not multi-user deployment.
+
+Authentication uses configured trader passwords and an HMAC-signed, HTTP-only, same-site session cookie (`lib/auth.ts`). Production cookies are secure. Cam's write route requires the `cam` identity; other authenticated users can read it. This is a small shared-journal permission model. A built-in `tim` / `tim` read-only delegate to Branden exists even in production; an optional `codex` delegate is enabled by `CODEX_JOURNAL_PASSWORD`. The `/api/public/branden-open-positions` route intentionally exposes a subset of positions without requiring login. Review these policies, password handling, session lifetime, rate limiting, and the development secret fallback before wider use. This work does not certify or redesign authentication.
+
+## Synthetic local setup
 
 ```bash
-cd monthly-trading-report
-npm install
+nvm install && nvm use
+npm ci
 cp .env.example .env.local
+# Choose a fresh absolute path; do not reuse a directory with real journal records.
+export LOCAL_DATA_DIR="$(mktemp -d /tmp/trading-demo-XXXXXX)"
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Leave `DATABASE_URL` and provider/email credentials empty. Open [localhost:3000](http://localhost:3000), choose **Cam**, log in with `password`, and select Cam's journal. Import `e2e/fixtures/synthetic-schwab.csv` from the sidebar. Expected: one closed long `XYZ` trade, ten shares, entry $100, exit $103, and $28 P/L after $2 fees. Add a stop and notes in Trade Log, save, reload, and import again. The record should retain its annotations and report one ignored duplicate. `e2e/fixtures/invalid.csv` should explain supported inputs and leave saved records unchanged.
 
-Default local demo logins are:
+`branden` / `password` is also available with the example configuration. These credentials and the example secret are for an isolated local demo. Leave the data directory in place if you want to retain the demo; it is not automatically removed by `npm run dev`. The automated browser launcher creates and removes its own directory.
 
-- `branden` / `password`
-- `cam` / `password`
+Local records use `monthly-reports.json`, `trade-logs.json`, and `app-settings.json`; Cam state is inside `app-settings.json`. `LOCAL_DATA_DIR` is ignored in production. Production writes require `DATABASE_URL`; `next start` without a database is not a supported JSON demo. Screenshot persistence has database-specific paths and is outside this demo.
 
-Change these before sharing the app.
+## Commands
+
+Run from this directory after `npm ci`:
+
+| Command | Purpose |
+| --- | --- |
+| `npm run dev` | Development server on port 3000 |
+| `npm run typecheck` | Strict TypeScript checking without incremental output |
+| `npm test` | All 27 Node test files, explicitly under `tests/`, with inherited database/data-directory/provider settings cleared |
+| `npm run test:cam` | Focused Cam support/analytics/CSV/paper regression group |
+| `npm run test:auth` | Authentication configuration unit checks |
+| `npm run test:cf-import` / `npm run test:ibkr-import` | Broker parser/reconciliation and local-store groups |
+| `npm run test:daily-snapshot` / `npm run test:mtd-snapshot` | Snapshot calculations/export and injected-email checks |
+| `npm run test:market-gauge` / `npm run test:market-context` | Market context/calculation/static-render group |
+| `npx playwright install --with-deps chromium` | Install the browser matching the locked Playwright version |
+| `npm run test:e2e` | Start disposable app on 127.0.0.1:3100 and run `e2e/` only |
+| `npm run test:e2e -- --grep 'unrecognized CSV'` | Focus one browser case while investigating |
+| `npm run test:e2e:report` | View latest HTML browser report |
+| `npm run build` / `npm start` | Production build / production server (writes need PostgreSQL) |
+| `npm run snapshot:daily -- --session YYYY-MM-DD` | Existing snapshot CLI (needs appropriate data/configuration; append `--send-email` only for intended delivery) |
+
+Node and Playwright discovery are deliberately separate. All Node test commands use `scripts/run-node-tests.mjs`, which clears inherited database, local-data override, provider, and SMTP settings so storage tests can use their own temporary directories. The old `next lint` script was removed: it had no committed lint configuration and did not provide a dependable standalone check. No separate ESLint gate is claimed. Browser tests use one worker because Cam's journal state is shared, reset that disposable state before each case, and do not depend on test order. To use an already-installed Chromium in a restricted environment: `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium npm run test:e2e`; CI installs Playwright's pinned browser. Do not point the suite at a deployed server.
 
 ## Environment variables
 
-```bash
-APP_SECRET="a-long-random-secret"
-TRADER_USERS="branden:password,cam:password"
-DATABASE_URL="postgres://..."
-ALPACA_API_KEY="..."
-ALPACA_API_SECRET="..."
-```
+All application configuration below is server-side; no secret belongs in a `NEXT_PUBLIC_` variable. Copy the committed `.env.example`, which contains only local placeholders.
 
-Trade-detail MAE/MFE uses Alpaca consolidated SIP historical bars. The Basic account can retrieve historical data outside the most recent 15 minutes; requests leave a 16-minute margin. Credentials are server-only headers sent exclusively to `data.alpaca.markets`, never trading endpoints. Configure both values as sensitive Vercel variables before deploying.
+| Name | Purpose / default |
+| --- | --- |
+| `APP_SECRET` | Signs sessions; set a strong unique secret in deployment; code otherwise uses a development fallback |
+| `TRADER_USERS` | Comma-separated `id:password` pairs; development defaults exist; production trader list must be configured |
+| `DATABASE_URL` | PostgreSQL connection; absent selects local JSON only outside production |
+| `LOCAL_DATA_DIR` | Absolute development/test storage override; otherwise `<cwd>/data` |
+| `CODEX_JOURNAL_PASSWORD` | Enables optional read-only Branden mentor login; empty disables dedicated login |
+| `ALPACA_API_KEY`, `ALPACA_API_SECRET` | Alpaca historical market data; both required for that provider |
+| `TRADE_EXCURSION_INTERVAL` | MAE/MFE bar resolution, default `5min` |
+| `OPENAI_API_KEY` | Enables optional paid AI review features |
+| `OPENAI_REVIEW_MODEL` | Watchlist-review model override; defaults to `gpt-4.1-mini`; separate from trade-review export |
+| `CRON_SECRET` | Bearer authorization for scheduled market archiving and Cam backups |
+| `SNAPSHOT_SMTP_HOST`, `SNAPSHOT_SMTP_PORT`, `SNAPSHOT_SMTP_SECURE` | Optional SMTP endpoint, numeric port, and literal `true` for TLS |
+| `SNAPSHOT_SMTP_USERNAME`, `SNAPSHOT_SMTP_PASSWORD` | Optional SMTP authentication |
+| `SNAPSHOT_EMAIL_FROM`, `SNAPSHOT_EMAIL_TO` | Optional snapshot sender/recipient; incomplete SMTP configuration disables sending |
 
-Optional configuration:
+`NODE_ENV` is managed by Next.js. Browser tooling uses generated `E2E_DATA_DIR` and `E2E_PASSWORD`; do not configure them manually. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` is an optional local test override. `IBKR_HISTORY_FILE` and `IBKR_DAILY_FILE` enable an existing private-file regression that is otherwise skipped; never upload private statements as CI artifacts. `REVIEW_QA_PATH` optionally writes the existing generated document QA sample during Node tests.
 
-```bash
-TRADE_EXCURSION_INTERVAL="5min"
-```
+## Integrations and limits
 
-MAE/MFE uses regular US sessions (09:30–16:00 America/New_York), raw prices, and execution-aware quantities, FIFO trims and commissions. Fractional execution seconds are preserved. Results remain bar-based approximations around executions and do not cover overnight risk. A versioned cache automatically recalculates results after the provider/timestamp change; risk and interval changes also invalidate cached values.
+- **Broker imports:** Branden supports Capital.com/CF statement processing and IBKR Flex XML; Cam supports Thinkorswim/Schwab cash-ledger CSV and paperMoney stock Filled Orders. Formats, account boundaries, duplicate identity, and unsupported instruments matter. Partial valid imports can include warnings; an entirely unrecognized CSV is a no-op. The new browser suite covers only the synthetic Cam cash-ledger example. Other parsing/accounting edges stay in faster tests. No broker trading API is used by this workflow.
+- **Market data:** Alpaca historical SIP bars, with Stooq/Yahoo fallbacks for daily consumers; other intervals retain Yahoo paths. MAE/MFE uses regular US sessions, raw bars, execution-aware quantities/FIFO trims/fees, and a delay margin for recent data. Results are bar approximations and exclude overnight risk. `.US500`, `.US100`, and `.US30` use labelled scaled ETF estimates; unsupported FX/intraday instruments remain unavailable. Provider availability, entitlements, price adjustment, and exact-session freshness affect results. See [market-context notes](docs/trade-market-context.md).
+- **AI:** OpenAI watchlist review and trade-review Word exports are optional. Trade export currently selects `gpt-5.6-luna` in code, validates completeness, estimates a cost ceiling, and uses background Responses polling. Access to that configured model is unverified here. With AI enabled, trade reflections and screenshots can leave the application; review consent and provider retention before using real material. Mocks do not prove live model availability or quality.
+- **Email:** Nodemailer sends optional daily/MTD snapshot attachments only with complete configuration. Tests inject a transport; no real mail delivery is verified.
 
-US stocks and ETFs use Alpaca directly. The `.US500`, `.US100`, and `.US30` broker CFDs use scaled SPY, QQQ, and DIA ETF proxies respectively, explicitly labelled estimates. These do not replicate broker CFD prices, leverage, spreads, or overnight sessions. Spot FX and unsupported intraday instruments remain unavailable rather than receiving synthetic zero results.
+## Delivery and deployment
 
-Daily charts, valuations, Market Gauge, benchmark and exit-analysis consumers share the Alpaca daily loader, retaining Stooq/Yahoo fallbacks when Alpaca cannot supply a symbol. Exact-session exports still reject missing/stale prices. Other chart intervals continue to use Yahoo as before. No paid fundamental-data provider is required by this app.
+Work on a feature branch, define observable acceptance criteria, implement with relevant tests, and open a pull request. Run the commands above locally; GitHub Actions repeats checks before review. Follow the [verification/release guide](docs/verification.md) for traceability, manual validation, and smoke checks. Performance plans in this repository remain plans unless supported by measurements.
 
-If `DATABASE_URL` is empty, local submissions are stored in `data/monthly-reports.json`.
+The existing deployment setup targets **Vercel + PostgreSQL**. Set the Vercel root directory to `monthly-trading-report`, framework to Next.js, Node to 24.x, install command to `npm ci`, and build command to `npm run build`. Configure `APP_SECRET`, `TRADER_USERS`, and `DATABASE_URL` separately for the intended environment; optional integrations require their own configuration. Tables are created/extended by store helpers on first access, so the deployment database role needs appropriate schema permissions. Review changes against a disposable/staging database before production.
 
-### Read-only mentor login
+`vercel.json` retains two UTC schedules: market-context archive at 22:30 Monday–Friday and Cam backup at 05:15 daily. Set `CRON_SECRET` for scheduled access. Confirm scheduling support, backups, restoration, and database permissions in your hosting plan. JSON files on a deployment filesystem do not replace durable PostgreSQL storage.
 
-Set the server-only `CODEX_JOURNAL_PASSWORD` environment variable to enable the
-`codex` login for Branden's journal. Add it as a sensitive Production variable in
-Vercel and redeploy. Keep the value out of source control and client-side variables.
-The account uses the existing read-only permissions; trader credentials in
-`TRADER_USERS` remain unchanged. If that list already contains `codex`, the mentor
-configuration takes precedence and makes that identity read-only. Removing the
-variable disables the dedicated login; also remove any separately configured
-`codex` entry from `TRADER_USERS` when revoking all access for that identity.
-
-## Deployment
-
-This is ready for Vercel:
-
-1. Create a Postgres database through Vercel Postgres, Neon, Supabase, or another hosted Postgres provider.
-2. Add `APP_SECRET`, `TRADER_USERS`, and `DATABASE_URL` in Vercel project environment variables.
-3. Deploy this `monthly-trading-report` folder.
-
-The app creates the `monthly_reports` table automatically on first read/write.
-
-## Entered fields
-
-- Account size
-- Net P&L
-- Total trades
-- Win rate
-- Avg winning R
-- Avg losing R
-- Average risk
-- Current risk percent
-- Average trade length
-- Notes
-
-## Calculated fields
-
-- Percent return
-- Total return
-- Total R
-- Avg R
-- Average win
-- Average loss
-- Expected value in R
-- Return stability score
-
-### AI trade review Word export
-
-The Trade Log's **AI Review .docx** button reviews all currently filtered trades in display order. Every included trade must satisfy the shared Complete rules: nonzero risk, manual or calculated grade, assigned setup, all five required reflection fields, and at least one screenshot. The server rechecks these rules and returns each incomplete trade's missing fields before calling OpenAI.
-
-The export uses the Responses API with `gpt-5.6-luna`, medium reasoning, structured output, background processing, and `store: false`. The page polls the background response until it is ready, so a long review is not tied to one server request. OpenAI temporarily retains a background response while it is available for polling. Set `OPENAI_API_KEY` on the server; the separate `OPENAI_REVIEW_MODEL` setting still belongs to the watchlist review and does not override this export. Model access must be enabled for the API project.
-
-All six structured reflections (General Review is optional), legacy notes, mistake tags, executions, stored checklist assessments, assigned setup requirements, and full active strategy sources and examples are included. Readable trade charts are analyzed at high detail; reusable model-example charts use low detail to control vision tokens. Every chart is embedded in the Word file with its aspect ratio preserved. Unreadable images stop the export with a re-upload message. Chart links remain references and are not fetched. Disabled strategy sources/examples are excluded.
-
-MAE/MFE are loaded or calculated using the existing excursion engine and its cache. They retain the full lifecycle/as-of scope, provider, proxy status and unavailable reasons. Period P&L/R uses in-range exits when available, as in the trade log. Unavailable excursion data is never presented as zero, and the review is instructed not to equate MFE with achievable profit.
-
-**What to Work On** ranks one to three evidence-backed priorities: the period's primary process gap, supporting trade IDs and observations, likely effect on outcomes, an explicit rule going forward, a measurable adherence target/review horizon, and confidence. A repeated mistake needs at least two distinct trades; small samples and one-offs must be identified. The report does not promise hypothetical profits or claim improvement against an unseen prior period.
-
-Evidence is not silently truncated. Oversized requests fail with instructions to narrow the filters or reduce active example charts/sources. Repeated comparison charts are loaded once and sent to the model once with every associated trade ID, oversized images are normalized to a readable review resolution, and image/excursion preparation runs with bounded concurrency. Before generation, the Responses input-token endpoint counts the exact request. Current Luna pricing and the full 16,000-token output allowance must remain at or below the $0.25 safety ceiling, leaving margin below the $0.30 report target; an over-budget report is blocked before the paid generation request. Other safeguards are 1,000,000 characters of text context, 450 unique image parts, and a request below 45 MiB; image decoding is limited to 20 MiB/40 megapixels per input. Each submit, status, and finalization request has its own bounded deadline, while the model continues independently between polls. A refusal, incomplete response, invalid trade references, or missing work priorities fails the export instead of producing a partial report.
-
-Run export regression coverage with `node --import tsx --test tests/trade-review.test.ts tests/trade-review-export.test.ts tests/trade-log-csv.test.ts`. Set `REVIEW_QA_PATH` to write the synthetic Word fixture for layout checks. These tests mock the model and do not establish live API access or model quality.
-
-IBKR Personal imports: choose **Import broker statement → IBKR Personal → Flex XML**.
-The first upload should cover account opening through the latest completed business day;
-subsequent Last Business Day uploads merge execution IDs and cash transaction IDs.
-The importer stores the broker's report/availability dates separately from cash transaction
-dates, equity history, currency rates, and instrument metadata. Stop prices are entered in
-the trade editor and preserved across uploads; Flex does not verify working orders.
-Currently supported: USD-base accounts holding USD stocks/ETFs. Files with other traded
-asset classes, asset transfers, or corporate actions are rejected before persistence.
-Run `npm run test:ibkr-import`. Optional `IBKR_HISTORY_FILE` and `IBKR_DAILY_FILE`
-paths enable validation against private local exports without committing account data.
+A linked Vercel Next.js project named `monthly-trading-report` with Node 24.x was observed during this audit. The available metadata did not expose its root directory, Git production branch, or preview data isolation. Confirm those in Vercel before relying on preview validation; use a separate preview database and credentials. No deployment settings or branch-protection rules were changed, and no production deployment is added by this workflow. Existing Git-provider deployment behavior remains external to these checks.

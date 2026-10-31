@@ -6,3 +6,8 @@ data
 *.log
 .vercel
 .env*
+
+!.env.example
+playwright-report/
+test-results/
+*.tsbuildinfo
