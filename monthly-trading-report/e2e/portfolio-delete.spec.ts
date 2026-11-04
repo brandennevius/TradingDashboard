@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
+import { readFile } from "node:fs/promises";
 
-test("portfolio delete confirms scope, downloads a backup, persists, and rejects non-owner access", async ({ page, playwright }) => {
+test("portfolio delete confirms scope, downloads a backup, persists, and rejects non-owner access", async ({ page, playwright }, testInfo) => {
   const endpoint = "/api/settings/branden-portfolios";
   const anonymous = await playwright.request.newContext({ baseURL: "http://127.0.0.1:3100" });
   try {
@@ -18,6 +19,11 @@ test("portfolio delete confirms scope, downloads a backup, persists, and rejects
     symbol: "LEGACY", entryDate: "2026-06-10", portfolioTag: "Legacy", side: "LONG", status: "OPEN", risk: 250
   } });
   expect(created.ok()).toBe(true);
+  const originalTrade = (await created.json()).trade;
+  const deletionRequests: string[] = [];
+  page.on("request", request => {
+    if (request.url().endsWith(endpoint) && request.method() === "DELETE") deletionRequests.push(request.url());
+  });
   await page.goto("/journal/branden/portfolios");
   const remove = page.getByRole("button", { name: "Delete portfolio Legacy", exact: true });
   await expect(remove).toBeVisible();
@@ -31,6 +37,7 @@ test("portfolio delete confirms scope, downloads a backup, persists, and rejects
   page.once("dialog", dialog => dialog.accept());
   await remove.click();
   await expect(page.getByText("Could not download a journal backup. Portfolio was not deleted.")).toBeVisible();
+  expect(deletionRequests).toHaveLength(0);
   expect((await (await page.request.get(endpoint)).json()).portfolios).toContain("Legacy");
   await page.unroute("**/api/settings/branden-backup");
 
@@ -38,8 +45,17 @@ test("portfolio delete confirms scope, downloads a backup, persists, and rejects
   const download = page.waitForEvent("download");
   const deleted = page.waitForResponse(response => response.url().endsWith(endpoint) && response.request().method() === "DELETE");
   await remove.click();
-  expect((await download).suggestedFilename()).toMatch(/^branden-journal-backup-/);
+  const backupFile = await download;
+  expect(backupFile.suggestedFilename()).toMatch(/^branden-journal-backup-/);
+  const backupPath = testInfo.outputPath("journal-before-deletion.json");
+  await backupFile.saveAs(backupPath);
+  expect(await backupFile.failure()).toBeNull();
+  const backup = JSON.parse(await readFile(backupPath, "utf8"));
+  expect(backup).toMatchObject({ format: "branden-journal-backup", version: 1, userId: "branden" });
+  expect(backup.trades).toContainEqual(expect.objectContaining({ id: originalTrade.id, symbol: "LEGACY", portfolioTag: "Legacy" }));
+  expect(backup.settings.branden_portfolio_names.portfolios).toEqual(["Keep", "Legacy"]);
   expect((await deleted).status()).toBe(200);
+  expect(deletionRequests).toHaveLength(1);
   await expect(remove).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Delete portfolio Keep", exact: true })).toBeVisible();
   const settings = await (await page.request.get(endpoint)).json();

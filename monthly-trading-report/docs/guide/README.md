@@ -27,7 +27,7 @@ Branden's journal and monthly reports use React. Cam's journal uses HTML and bro
 
 ## Current coverage and next step
 
-The repository has Node regression tests, Playwright browser/API checks using isolated JSON storage, and a GitHub Actions verification workflow. **PostgreSQL integration testing is the next planned exercise; it is not implemented by this documentation.** A dedicated staging environment and deployment gates are not established by the repository configuration reviewed here.
+The repository has Node regression tests, Playwright browser/API checks using isolated JSON storage, and a GitHub Actions verification workflow. A focused PostgreSQL integration test now covers Branden's backup export/import and snapshot consistency; broader database coverage remains a gap. The next learning exercise can walk through that test. A dedicated staging environment and deployment gates are not established by the repository configuration reviewed here.
 
 AI assisted the project and these documents. The diagrams describe this application, not Deepvue's architecture. Recorded test evidence belongs in the [audit](../audit.md); recommendations and known gaps are identified on the relevant pages.
 

@@ -10,6 +10,7 @@ A **scenario** states behavior in plain language. A **fixture** supplies control
 | --- | --- |
 | Unit/domain tests | Parsing, calculations, execution grouping, and other focused logic for supplied cases. |
 | Local integration and directly invoked route tests | Selected components work together, including temporary JSON storage and handler responses. |
+| PostgreSQL backup integration | Branden's real storage functions export/import a synthetic trade and screenshot, preserve the other owner, and keep a consistent export snapshot during an update. CI uses a disposable PostgreSQL 16 service. |
 | Mocked-service tests | Code handles prepared market/AI responses and injected email transports. This is not proof of live provider compatibility. |
 | Static or extracted UI checks | Particular markup or functions behave as asserted; a complete browser is not exercised. |
 | Playwright suite | Two browser workflows and a real HTTP permission case against a local app with JSON persistence. |
@@ -19,7 +20,7 @@ A **scenario** states behavior in plain language. A **fixture** supplies control
 
 **Cam browser example:** the current Playwright suite covers the CSV workflow we used in the lesson. It does not exercise Branden's React import and edit screens. Those are separate flows, as shown on the [data-flow page](02-data-flow.md).
 
-**Planned next:** a focused PostgreSQL integration test. The current suites do not establish PostgreSQL transaction, schema-change, or concurrent-write correctness.
+**Database scope:** [the backup test](../../tests/branden-backup-postgres.test.ts) exercises export/import and cancelled-export cleanup. Unit checks also verify incremental image fetching and failure handling. This does not establish all PostgreSQL import transactions, schema changes, or concurrent-write correctness. The database case skips locally unless `BACKUP_TEST_DATABASE_URL` points at an isolated localhost test database; CI provides it.
 
 ## What happens when we run Playwright?
 

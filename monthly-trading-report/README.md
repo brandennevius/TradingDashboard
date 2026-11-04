@@ -56,7 +56,7 @@ Run from this directory after `npm ci`:
 | --- | --- |
 | `npm run dev` | Development server on port 3000 |
 | `npm run typecheck` | Strict TypeScript checking without incremental output |
-| `npm test` | All 27 Node test files, explicitly under `tests/`, with inherited database/data-directory/provider settings cleared |
+| `npm test` | Node tests under `tests/`, with inherited database/data-directory/provider settings cleared; the PostgreSQL backup case skips without its isolated test database |
 | `npm run test:cam` | Focused Cam support/analytics/CSV/paper regression group |
 | `npm run test:auth` | Authentication configuration unit checks |
 | `npm run test:cf-import` / `npm run test:ibkr-import` | Broker parser/reconciliation and local-store groups |
@@ -92,6 +92,16 @@ All application configuration below is server-side; no secret belongs in a `NEXT
 | `SNAPSHOT_EMAIL_FROM`, `SNAPSHOT_EMAIL_TO` | Optional snapshot sender/recipient; incomplete SMTP configuration disables sending |
 
 `NODE_ENV` is managed by Next.js. Browser tooling uses generated `E2E_DATA_DIR` and `E2E_PASSWORD`; do not configure them manually. `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` is an optional local test override. `IBKR_HISTORY_FILE` and `IBKR_DAILY_FILE` enable an existing private-file regression that is otherwise skipped; never upload private statements as CI artifacts. `REVIEW_QA_PATH` optionally writes the existing generated document QA sample during Node tests.
+
+`BACKUP_TEST_DATABASE_URL` enables the focused PostgreSQL backup integration test. CI supplies a disposable PostgreSQL 16 service automatically. Local runs require host `localhost` and a database named `trading_dashboard_backup_test` (or that prefix followed by a lowercase alphanumeric suffix). The test creates and removes its own schema. This variable must never point at a deployed journal database.
+
+### Journal backup before portfolio deletion
+
+The backup endpoint streams the existing version-1 JSON format. PostgreSQL exports use a consistent read-only snapshot, fetch trades/reports in batches, and fetch screenshot bytes one image at a time. This avoids loading and encoding the entire screenshot collection before sending the response. Cancellation and failures close the transaction and release its connection.
+
+The portfolio UI retrieves the backup body and initiates its download before requesting deletion. A failed backup must leave the portfolio intact. Tests inspect the actual downloaded JSON as well as the deletion result.
+
+Streaming export does not remove the existing size limit on uploads to the backup-restore HTTP endpoint. Large-file restoration through Vercel still needs a separate transport strategy; the database regression verifies the underlying export/import format and store functions, not large HTTP uploads.
 
 ## Integrations and limits
 

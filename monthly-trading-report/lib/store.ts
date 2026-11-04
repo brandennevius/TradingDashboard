@@ -15,6 +15,8 @@ import type { CfStatementReplacementTrade } from "./cf-import-reconciliation";
 import { runAtomicCfImport, type CfWorkingOrderMetadata } from "./cf-import-idempotency";
 import { normalizeTradeReviewSections } from "./trade-review";
 import { displayTradeReturnPercent } from "./trade-return";
+import { createBackupDownload, createPostgresBackupDownload, type BackupDownload, type BrandenJournalBackup } from "./branden-backup-stream";
+export type { BrandenJournalBackup } from "./branden-backup-stream";
 import type {
   ChecklistGradeBand,
   ChecklistInputType,
@@ -4126,26 +4128,7 @@ const BRANDEN_BACKUP_SETTING_KEYS = [
   "weekly_process_focus_branden"
 ] as const;
 
-export type BrandenJournalBackup = {
-  format: "branden-journal-backup";
-  version: 1;
-  exportedAt: string;
-  userId: "branden";
-  reports: MonthlyReport[];
-  trades: TradeLogEntry[];
-  settings: Record<string, unknown>;
-  tradeScreenshots: Array<{
-    id: string;
-    tradeId: string;
-    userId: string;
-    fileName: string;
-    mimeType: string;
-    imageDataBase64: string;
-    createdAt: string;
-  }>;
-};
-
-export async function exportBrandenJournalBackup(): Promise<BrandenJournalBackup> {
+export async function exportBrandenJournalBackup(): Promise<BackupDownload> {
   const exportedAt = new Date().toISOString();
   const db = getPool();
 
@@ -4162,7 +4145,7 @@ export async function exportBrandenJournalBackup(): Promise<BrandenJournalBackup
       weekly_watchlists_branden: localSettings.weekly_watchlists_branden,
       weekly_process_focus_branden: localSettings.weekly_process_focus_branden
     };
-    return {
+    return createBackupDownload({
       format: "branden-journal-backup",
       version: 1,
       exportedAt,
@@ -4171,42 +4154,20 @@ export async function exportBrandenJournalBackup(): Promise<BrandenJournalBackup
       trades,
       settings,
       tradeScreenshots: []
-    };
+    });
   }
 
   await ensureTable();
   await ensureTradeTable();
   await ensureSettingsTable();
   await ensureTradeScreenshotTable();
-  const [reportResult, tradeResult, settingResult, screenshotResult] = await Promise.all([
-    db.query(`select ${columns} from monthly_reports where user_id = $1 order by month asc`, ["branden"]),
-    db.query(`select ${tradeColumns} from trade_logs where user_id = $1 order by entry_date desc, created_at desc`, ["branden"]),
-    db.query("select key, value from app_settings where key = any($1::text[])", [BRANDEN_BACKUP_SETTING_KEYS]),
-    db.query(
-      `select id, trade_id, user_id, file_name, mime_type, image_data, created_at
-       from trade_screenshots where user_id = $1 order by created_at asc`,
-      ["branden"]
-    )
-  ]);
-
-  return {
-    format: "branden-journal-backup",
-    version: 1,
-    exportedAt,
-    userId: "branden",
-    reports: reportResult.rows.map(rowToReport),
-    trades: tradeResult.rows.map(rowToTrade),
-    settings: Object.fromEntries(settingResult.rows.map((row) => [String(row.key), row.value])),
-    tradeScreenshots: screenshotResult.rows.map((row) => ({
-      id: String(row.id),
-      tradeId: String(row.trade_id),
-      userId: String(row.user_id),
-      fileName: String(row.file_name || ""),
-      mimeType: String(row.mime_type || "image/png"),
-      imageDataBase64: (row.image_data as Buffer).toString("base64"),
-      createdAt: new Date(String(row.created_at)).toISOString()
-    }))
-  };
+  return createPostgresBackupDownload(await db.connect(), {
+    reportColumns: columns,
+    tradeColumns,
+    settingKeys: BRANDEN_BACKUP_SETTING_KEYS,
+    mapReport: row => rowToReport(row as Record<string, string | number | null>),
+    mapTrade: rowToTrade
+  });
 }
 
 function validBrandenBackup(value: unknown): value is BrandenJournalBackup {

@@ -44,6 +44,21 @@ jobs:
     name: Node regressions and build
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: synthetic-test-only
+          POSTGRES_DB: trading_dashboard_backup_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d trading_dashboard_backup_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      BACKUP_TEST_DATABASE_URL: postgresql://postgres:synthetic-test-only@localhost:5432/trading_dashboard_backup_test
     defaults:
       run:
         working-directory: monthly-trading-report
