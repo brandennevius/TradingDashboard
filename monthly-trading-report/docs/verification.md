@@ -8,6 +8,7 @@ Define expected trader behavior before changing code. Choose the lowest test lay
 | --- | --- | --- |
 | Unit/domain | `tests/cam-broker-csv-import.test.ts`, `cam-paper-import.test.mjs`, `cf-statement-import.test.ts`, `trade-merge.test.ts`, `trade-excursion.test.ts`, snapshot tests | Parsing, grouping, duplicate identities, quantity/fee calculations, and session rules for supplied examples |
 | Local storage integration | `tests/trade-merge-store.test.ts`, `ibkr-flex.test.ts`, `setup-versioning.test.ts`, `trade-market-context.test.ts` | Domain changes survive real temporary JSON reads/writes; not PostgreSQL transaction behavior |
+| PostgreSQL backup integration | `tests/branden-backup-postgres.test.ts`, with the CI PostgreSQL 16 service | Real store export/import, exact screenshot bytes, owner preservation, consistent read snapshot, and cancelled-export cleanup in a disposable schema; not a production Supabase check |
 | Direct route invocation | `tests/daily-portfolio-snapshot.test.ts`, `month-to-date-snapshot.test.ts` include handler calls | Request/response validation for invoked functions; no browser or running HTTP server |
 | Mocked external service | `tests/alpaca-market-data.test.ts`, `market-data.test.ts`, `trade-review-export.test.ts`; injected snapshot email transports | Parsing, fallbacks, request shapes, error handling, and mocked response lifecycle; not live entitlements, provider uptime, AI quality, or email delivery |
 | Static/extracted UI | `tests/market-context-ui.test.ts` renders static React markup; `cam-analytics.test.mjs`, `cam-support.test.mjs`, `cam-paper-import.test.mjs` inspect source or execute extracted functions in a VM | Specific rendering/handler logic; not a complete browser interaction |
@@ -56,7 +57,7 @@ Retained traces and screenshots contain synthetic test data and temporary sessio
 `.github/workflows/verification.yml` runs on all pull requests, pushes to `main`, and manual dispatch. It uses Node **24.19.0**, `npm ci`, commit-pinned Actions, Ubuntu 24.04, read-only repository permissions, bounded job timeouts, and cancellation of superseded runs. The independent jobs are:
 
 - **TypeScript** — `npm run typecheck`.
-- **Node regressions and build** — `npm test`, then `npm run build`.
+- **Node regressions and build** — `npm test`, then `npm run build`; an isolated PostgreSQL 16 service enables the focused backup integration case.
 - **Playwright Chromium** — install locked browser/dependencies, then `npm run test:e2e`; upload HTML report, screenshots, and traces on failure.
 
 After the first successful hosted run, a repository admin can select those three exact check names in branch protection/rulesets and require review. Repository rules were not changed by this work. No selective execution or automatic production deployment is included. Pin updates should keep `.nvmrc`, the package engine, lockfile, and hosting runtime compatible. Reassess selective execution only after measuring pipeline duration.

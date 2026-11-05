@@ -53,7 +53,7 @@ Cam also caches records in browser localStorage. That cache differs from the ser
 
 ## What to verify in either journal
 
-Check the displayed result, the successful save response, and the saved records. Reloading with a fresh browser checks recovery without relying on the original browser's state. Verify quantities, prices, fees, execution identities, account/portfolio boundaries, and preservation of the intended manual fields. PostgreSQL integration coverage remains the next planned exercise.
+Check the displayed result, the successful save response, and the saved records. Reloading with a fresh browser checks recovery without relying on the original browser's state. Verify quantities, prices, fees, execution identities, account/portfolio boundaries, and preservation of the intended manual fields. PostgreSQL coverage currently includes a focused backup export/import test; the full broker-import workflow still needs database-backed integration coverage.
 
 ## Where to look later
 

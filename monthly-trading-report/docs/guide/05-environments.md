@@ -12,10 +12,10 @@ flowchart LR
     browserTest["Current automated browser test"] --> testData["Temporary JSON storage"]
     preview["Vercel branch preview"] -.-> previewData["Preview data settings: verify isolation"]
     production["Production storage path"] --> postgres["Supabase PostgreSQL"]
-    futureTest["Planned database integration test"] -.-> futureData["Disposable PostgreSQL"]
+    databaseTest["PostgreSQL backup integration test"] --> databaseData["Disposable PostgreSQL 16"]
 ```
 
-Dashed connections identify an unverified configuration or planned addition. The diagram does not assert that the planned test database or a dedicated staging environment already exists.
+The dashed connection identifies unverified preview data configuration. A disposable PostgreSQL database is supplied by CI for the focused backup test; a dedicated staging environment is not established here.
 
 | Environment | Purpose and current status |
 | --- | --- |
@@ -24,7 +24,7 @@ Dashed connections identify an unverified configuration or planned addition. The
 | Vercel preview | Feature-branch builds were observed in the initial audit. Current Vercel metadata lists `DATABASE_URL` for Production, not Preview; preview persistence has not been validated. A separate URL does not establish a separate database. |
 | Dedicated staging | A useful possible rehearsal environment; this repository does not establish a staging branch or separately provisioned staging system. |
 | Production | The application uses Supabase-hosted PostgreSQL. Vercel production-branch settings and environment isolation still need confirmation. |
-| Planned database testing | Next exercise: verify the real PostgreSQL storage path using disposable synthetic data. No PostgreSQL CI service or integration suite is added yet. |
+| PostgreSQL backup testing | The Node regression job starts disposable PostgreSQL 16. A narrowly scoped test uses its own schema and synthetic data to exercise Branden's backup storage path. This does not test Supabase production configuration. |
 
 ## How Vercel fits with PRs
 

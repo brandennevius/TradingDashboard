@@ -12,7 +12,7 @@ export async function GET() {
   try {
     const backup = await exportBrandenJournalBackup();
     const date = backup.exportedAt.slice(0, 10);
-    return new NextResponse(JSON.stringify(backup), {
+    return new NextResponse(backup.body, {
       headers: {
         "Content-Type": "application/json; charset=utf-8",
         "Content-Disposition": `attachment; filename="branden-journal-backup-${date}.json"`,
@@ -20,6 +20,7 @@ export async function GET() {
       }
     });
   } catch (error) {
+    console.error("Branden journal backup could not be started", error);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not export the journal backup." },
       { status: 500 }
