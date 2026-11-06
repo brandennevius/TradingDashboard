@@ -460,7 +460,7 @@ function getReportFilteredTrades() {
     if (end && d && d > end) return false;
     if (!valueMatchesAny((t.ticker || t.symbol || '').toUpperCase(), tickers)) return false;
     if (!valueMatchesAny(t.setup || '', setupsSelected)) return false;
-    if (!valueMatchesAny(t.portfolioTag || '', portfoliosSelected)) return false;
+    if (!valueMatchesAny(portfolioFilterKey(t.portfolioTag), portfoliosSelected)) return false;
     if (direction && (t.direction || '') !== direction) return false;
     if (!valueMatchesAny(getWinLoss(t), resultsSelected)) return false;
     if (gradesSelected.length) {
@@ -1375,11 +1375,11 @@ function closeDatePicker() { document.querySelectorAll('.date-picker-popover').f
 const MULTI_SELECT_IDS = ['reportTicker','reportSetup','reportPortfolio','reportResult','reportGrade','reportSecondaryTag','reportMistakeTag','logReportTicker','logReportSetup','logReportPortfolio','logReportResult','logReportGrade','logReportSecondaryTag','logReportMistakeTag','compareGradeA','compareGradeB','playbookSetup','playbookGrade','playbookPortfolio','playbookMistake'];
 
 function labelForMultiSelect(select) {
-  const selected = Array.from(select.selectedOptions || []).map(o => o.value).filter(Boolean);
+  const selected = Array.from(select.selectedOptions || []).filter(o => o.value);
   const allCount = Array.from(select.options || []).filter(o => o.value).length;
   const placeholder = select.options[0]?.textContent || 'All';
   if (!selected.length || selected.length === allCount) return placeholder;
-  if (selected.length === 1) return selected[0] === '__NONE__' ? (Array.from(select.options).find(o=>o.value==='__NONE__')?.textContent || 'None') : selected[0];
+  if (selected.length === 1) return selected[0].textContent || selected[0].value;
   return `${selected.length} selected`;
 }
 
@@ -1450,14 +1450,34 @@ document.addEventListener('click', (e) => {
   if (!e.target.closest('.multi-check')) document.querySelectorAll('.multi-check.open').forEach(m => m.classList.remove('open'));
 });
 
+function portfolioFilterKey(name) {
+  const trimmed = String(name || '').trim();
+  return trimmed ? `portfolio:${trimmed.toLowerCase()}` : '';
+}
+
+function refreshPortfolioFilterOptions(...ids) {
+  const names = new Map();
+  [...portfolios.map(p => p.name), ...trades.map(t => t.portfolioTag)].forEach(name => {
+    const key = portfolioFilterKey(name);
+    if (key && !names.has(key)) names.set(key, String(name).trim());
+  });
+  const options = [{ value: '__NONE__', label: 'No portfolio' },
+    ...uniqueSorted([...names.values()]).map(name => ({ value: portfolioFilterKey(name), label: name }))];
+  ids.forEach(id => {
+    const select = $(id);
+    if (!select) return;
+    const selected = getSelectValues(id);
+    select.innerHTML = optionListMultiObjects(options, 'All portfolios', selected);
+  });
+}
+
 function refreshReportFilterOptions() {
   updateDatePickerLabels();
   const tickers = uniqueSorted(trades.map(t => (t.ticker || t.symbol || '').toUpperCase()));
   ['reportTicker','logReportTicker'].forEach(id => { const sel = $(id); if (!sel) return; const cur = getSelectValues(id); sel.innerHTML = optionListMulti(tickers, 'All tickers', cur); setSelectValues(id, cur.filter(v=>tickers.includes(v))); });
   const setupNames = uniqueSorted([...setups.map(s=>s.name), ...trades.map(t=>t.setup)]);
   ['reportSetup','logReportSetup'].forEach(id => { const sel = $(id); if (!sel) return; const cur = getSelectValues(id); sel.innerHTML = optionListMulti(setupNames, 'All setups', cur); setSelectValues(id, cur.filter(v=>setupNames.includes(v))); });
-  const portfolioNames = uniqueSorted(portfolios.map(p=>p.name));
-  ['reportPortfolio','logReportPortfolio'].forEach(id => { const sel = $(id); if (!sel) return; const cur = getSelectValues(id); sel.innerHTML = optionListMulti(portfolioNames, 'All portfolios', cur); setSelectValues(id, cur.filter(v=>portfolioNames.includes(v))); });
+  refreshPortfolioFilterOptions('reportPortfolio', 'logReportPortfolio');
   normalizeTags();
   const secondaryNames = tagNames(tags.secondary);
   const mistakeNames = tagNames(tags.mistakes);
@@ -1762,7 +1782,6 @@ function renderMonthlyReview() {
 function renderPlaybookFilters() {
   const setupSel = $('playbookSetup');
   const gradeSel = $('playbookGrade');
-  const portfolioSel = $('playbookPortfolio');
   const mistakeSel = $('playbookMistake');
   if (setupSel) {
     const cur = getSelectValues('playbookSetup');
@@ -1777,12 +1796,7 @@ function renderPlaybookFilters() {
     gradeSel.innerHTML = optionListMulti(ordered, 'All grades', cur);
     setSelectValues('playbookGrade', cur.filter(v => ordered.includes(v)));
   }
-  if (portfolioSel) {
-    const cur = getSelectValues('playbookPortfolio');
-    const portfoliosForFilter = uniqueSorted([...portfolios.map(p=>p.name), ...trades.map(t=>t.portfolioTag)]);
-    portfolioSel.innerHTML = optionListMulti(portfoliosForFilter, 'All portfolios', cur);
-    setSelectValues('playbookPortfolio', cur.filter(v => portfoliosForFilter.includes(v)));
-  }
+  refreshPortfolioFilterOptions('playbookPortfolio');
   if (mistakeSel) {
     const cur = getSelectValues('playbookMistake');
     normalizeTags();
@@ -1874,7 +1888,7 @@ function renderPlaybook() {
   let list = trades.filter(t => {
     if (!valueMatchesAny(setupNameForTrade(t), setupsSelected)) return false;
     if (!valueMatchesAny(String(t.grade || '').trim() || 'Ungraded', gradesSelected)) return false;
-    if (!valueMatchesAny(t.portfolioTag || '', portfoliosSelected)) return false;
+    if (!valueMatchesAny(portfolioFilterKey(t.portfolioTag), portfoliosSelected)) return false;
     if (!valueMatchesAny(t.mistakeTag || '', mistakesSelected)) return false;
     if (onlyShots && !(Array.isArray(t.screenshots) && t.screenshots.length)) return false;
     return true;
