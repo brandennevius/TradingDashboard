@@ -120,8 +120,8 @@ export async function runRollingJournalBackup(testPassphrase?: Buffer) {
         const stats = (await db.query("select pg_database_size(current_database())::text as bytes")).rows[0];
         if (Number(stats.bytes) >= 350_000_000) console.warn("Supabase database is at or above 350 MB.");
         const pgDumpUrl = new URL(database);
-        pgDumpUrl.searchParams.set("sslmode", localTest ? "disable" : "verify-full");
-        if (env.NODE_EXTRA_CA_CERTS && !localTest) pgDumpUrl.searchParams.set("sslrootcert", env.NODE_EXTRA_CA_CERTS);
+        pgDumpUrl.search = localTest ? "sslmode=disable" :
+          "sslmode=verify-full&sslrootcert=" + encodeURIComponent(env.NODE_EXTRA_CA_CERTS!);
         await command(env.JOURNAL_BACKUP_PG_DUMP ?? "pg_dump", [
           "--no-password", "--format=custom", "--snapshot=" + snapshot, "--file=" + dump, pgDumpUrl.toString()
         ]);
