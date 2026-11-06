@@ -116,8 +116,8 @@ Work on a feature branch, define observable acceptance criteria, implement with 
 
 The existing deployment stack is **Vercel + Supabase-hosted PostgreSQL**. The application connects with `pg` through `DATABASE_URL` and uses its own signed-session authentication, rather than Supabase Auth. Set the Vercel root directory to `monthly-trading-report`, framework to Next.js, Node to 24.x, install command to `npm ci`, and build command to `npm run build`. Configure `APP_SECRET`, `TRADER_USERS`, and `DATABASE_URL` separately for the intended environment; optional integrations require their own configuration. Tables are created/extended by store helpers on first access, so the deployment database role needs appropriate schema permissions. Review changes against a disposable/staging database before production.
 
-Screenshot Storage support requires applying `migrations/20261105-screenshot-storage.sql`
-before deploying to an existing database. Storage writes and bounded Cam history
+Private R2 screenshot support requires applying `migrations/20261105-screenshot-storage.sql`
+before deploying to an existing database. R2 writes
 are separately enabled after backup verification. Follow the [cleanup and rollback
 runbook](docs/supabase-cleanup.md); deployment alone does not clear the database quota.
 

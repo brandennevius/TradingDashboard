@@ -1,4 +1,4 @@
-# Supabase image migration and bounded journal history
+# Journal screenshot migration from Supabase PostgreSQL to Cloudflare R2
 
 This release prepares TradingDashboard for the free-plan database cleanup. It does
 not migrate production automatically. Preserve original screenshot bytes and all
@@ -9,8 +9,8 @@ membership: the shared screenshot table also backs setup examples and watchlists
 
 1. Confirm the intended project is `oomzkupuddhseewfakyn`, including the production
    Postgres connection's project identity. Read current usage/restrictions and
-   available Storage capacity/egress in Supabase; historical estimates are not
-   sufficient. Provision operator access through secret settings and approved
+   available database disk and transfer capacity in Supabase, plus R2 Standard
+   usage and capacity. Historical estimates are not sufficient. Provision operator access through secret settings and approved
    network configuration, never through committed files.
 2. Take a custom-format full `pg_dump`, save a checksummed encrypted second copy,
    and restore into an isolated database. Compare current settings, trades,
@@ -20,25 +20,26 @@ membership: the shared screenshot table also backs setup examples and watchlists
    It adds metadata and allows null image bytes, with a backing-source constraint.
    Existing bytes are retained. The script is transactional, retryable, and fails
    on lock contention after five seconds.
-4. Create the private `trade-screenshots` bucket only if current capacity and
-   transfer allowance can accommodate measured original bytes plus a growth
-   reserve. Set these **server-only production** variables:
+4. Create a dedicated private R2 Standard bucket named `trade-screenshots`.
+   In Cloudflare verify public development access and custom domains are disabled
+   and no lifecycle policy can expire screenshots. Use bucket-scoped object
+   credentials and set these server-only production variables:
 
-   - `SUPABASE_STORAGE_URL=https://oomzkupuddhseewfakyn.supabase.co`
-   - `SUPABASE_STORAGE_SERVICE_KEY`: server `service_role` key via secret settings
-   - `SUPABASE_SCREENSHOT_BUCKET=trade-screenshots`
+   - `R2_ACCOUNT_ID`
+   - `R2_SCREENSHOT_BUCKET=trade-screenshots`
+   - `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`
 
-   Keep `SCREENSHOT_STORAGE_WRITES` unset for the
-   compatibility deployment. Preview must have its own isolated DB, bucket, and
-   credentials; do not point it at production. Existing sensitive Vercel secrets
-   cannot be assumed retrievable through an environment pull.
-5. Deploy the compatibility release. It can read bytea or Storage-backed images.
-   Check existing screenshots and streamed export before changing write behavior.
-6. Set `SCREENSHOT_STORAGE_WRITES=enabled`, redeploy, and check a new image,
-   authorization and backup export. Every upload verifies the bucket is private,
-   uploads to a content-addressed immutable path, then downloads and hashes it
-   before committing a DB reference. Failed DB commits can leave unreferenced
-   objects; do not automatically delete them during this cleanup.
+   Keep `SCREENSHOT_STORAGE_WRITES` unset for the compatibility release.
+   Preview must use isolated database and bucket credentials.
+5. Deploy the compatibility release only after the schema migration. Verify both
+   journals, legacy screenshot URLs, and streamed export before copying images.
+6. After the verified copy, release, and space checks below, enable
+   `SCREENSHOT_STORAGE_WRITES=enabled` and redeploy before resuming writes.
+   New uploads become JPEGs with a 2560-pixel maximum edge and quality 85.
+   Backfill and backup imports bypass conversion and preserve original bytes.
+   Test new uploads, private image access and exports. Object writes are
+   conditional and every upload is downloaded and hash-checked before the app
+   saves its database reference. Failed DB commits can leave unreferenced objects.
 
 ## Operator commands
 
@@ -54,8 +55,9 @@ Required operator configuration:
 - `CLEANUP_EXPECTED_HOST`: exact connection hostname.
 - `CLEANUP_EXPECTED_PROJECT_REF=oomzkupuddhseewfakyn`: checks the direct hostname
   or pooler username, since multiple Supabase projects share pooler hosts and
-  database names. The Storage URL must match this project too.
-- Storage variables above.
+  database names.
+- R2 variables above, plus `CLEANUP_EXPECTED_R2_ACCOUNT_ID` and
+  `CLEANUP_EXPECTED_R2_BUCKET` to bind the manifest to the reviewed destination.
 
 Start read-only:
 
@@ -77,7 +79,7 @@ node --import tsx scripts/supabase-cleanup.ts verify /secure/cleanup-manifest.js
 ```
 
 `copy` handles one image at a time, keeps the database bytes, verifies object
-downloads, and records a resumable private manifest. It covers every row in both
+downloads, and records byte lengths, SHA-256 and MD5 in a resumable private manifest. It covers every row in both
 tables, including apparently orphaned images. It also records explicit candidate
 revision IDs and a fingerprint of the authoritative live Cam settings. Stop on
 any unexpected error; rerunning `copy` refreshes the manifest and verifies objects
@@ -104,7 +106,9 @@ pre-save snapshot, and aborts transactionally if candidates or live-state
 fingerprint changed. Nightly, recovery, migration and unknown reasons stay intact.
 `release` first verifies full table coverage and every object without bytea
 fallback, then clears bytes conditionally against matching source/metadata.
-Each cleared row retains its ID and a verified object. A partial release is
+Each cleared row retains its ID and a verified object. Set `CLEANUP_RELEASE_BATCH_SIZE` to a locally rehearsed, safe batch size.
+Measure database bytes and WAL after every batch, check disk headroom and
+checkpoint progress, and continue until `remainingRows` is zero. A partial release is
 resumable; keep all writes paused if an error occurs. This does not remove rows,
 inline images, columns, Storage objects, trades or settings.
 

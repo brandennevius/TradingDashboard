@@ -4,11 +4,11 @@ import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { Pool } from "pg";
-import { copyImageToStorage, imageHash, readStoredImage, type ScreenshotTable, type ImageSource } from "../lib/screenshot-storage";
+import { copyImageToStorage, imageHash, readStoredImage, screenshotStorageTarget, type ScreenshotTable, type ImageSource } from "../lib/screenshot-storage";
 
 const tables: ScreenshotTable[] = ["trade_screenshots", "cam_journal_screenshots"];
-type Entry = { table: ScreenshotTable; id: string; path: string; sha256: string; bytes: number };
-type Manifest = { version: 1; host: string; database: string; projectRef: string; createdAt: string; images: Entry[]; revisionIds: string[]; liveStateHash: string };
+type Entry = { table: ScreenshotTable; id: string; path: string; sha256: string; md5: string; bytes: number };
+type Manifest = { version: 2; storage?: { account: string; bucket: string }; host: string; database: string; projectRef: string; createdAt: string; images: Entry[]; revisionIds: string[]; liveStateHash: string };
 
 async function fileHash(path: string) {
   const hash = createHash("sha256");
@@ -24,14 +24,16 @@ export async function runCleanup(command = "audit", manifestFile?: string) {
   if (!process.env.CLEANUP_EXPECTED_HOST || url.hostname !== process.env.CLEANUP_EXPECTED_HOST) {
     throw new Error("CLEANUP_EXPECTED_HOST must match the intended database host exactly.");
   }
+  if (url.port === "6543") throw new Error("Use a direct or session PostgreSQL connection.");
   const projectRef = process.env.CLEANUP_EXPECTED_PROJECT_REF;
   if (!projectRef || (url.hostname !== "localhost" &&
       url.hostname !== `db.${projectRef}.supabase.co` && decodeURIComponent(url.username) !== `postgres.${projectRef}`)) {
     throw new Error("Postgres connection does not match CLEANUP_EXPECTED_PROJECT_REF.");
   }
-  if (["copy", "verify", "release"].includes(command) &&
-      new URL(process.env.SUPABASE_STORAGE_URL || "https://missing.invalid").hostname !== `${projectRef}.supabase.co`) {
-    throw new Error("Storage and Postgres must refer to the same expected Supabase project.");
+  const storage = ["copy", "verify", "release"].includes(command) ? screenshotStorageTarget() : undefined;
+  if (storage && (storage.account !== process.env.CLEANUP_EXPECTED_R2_ACCOUNT_ID ||
+      storage.bucket !== process.env.CLEANUP_EXPECTED_R2_BUCKET)) {
+    throw new Error("R2 account and bucket must match the expected migration destination.");
   }
   const mutating = !["audit", "verify"].includes(command);
   if (mutating) {
@@ -66,10 +68,13 @@ export async function runCleanup(command = "audit", manifestFile?: string) {
       try { manifest = JSON.parse(await fs.readFile(manifestFile, "utf8")); }
       catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        manifest = { version: 1, ...target, createdAt: new Date().toISOString(), images: [], revisionIds: [], liveStateHash: "" };
+        manifest = { version: 2, ...target, storage, createdAt: new Date().toISOString(), images: [], revisionIds: [], liveStateHash: "" };
       }
     } else manifest = JSON.parse(await fs.readFile(manifestFile, "utf8"));
-    if (manifest.version !== 1 || manifest.projectRef !== projectRef || manifest.host !== target.host || manifest.database !== target.database) throw new Error("Manifest target mismatch.");
+    if (manifest.version !== 2 || manifest.projectRef !== projectRef || manifest.host !== target.host || manifest.database !== target.database) throw new Error("Manifest target mismatch.");
+    if (storage && (manifest.storage?.account !== storage.account || manifest.storage?.bucket !== storage.bucket)) {
+      throw new Error("Manifest R2 destination mismatch.");
+    }
     const save = async () => {
       await fs.writeFile(`${manifestFile}.tmp`, JSON.stringify(manifest, null, 2), { mode: 0o600 });
       await fs.rename(`${manifestFile}.tmp`, manifestFile);
@@ -90,7 +95,7 @@ export async function runCleanup(command = "audit", manifestFile?: string) {
           [row.id, stored.storage_path, stored.image_sha256, stored.image_bytes, row.image_data, row.storage_path]);
           if (updated.rowCount !== 1) throw new Error("Image changed during migration; rerun copy.");
           manifest.images = manifest.images.filter(e => e.table !== table || e.id !== row.id);
-          manifest.images.push({ table, id: row.id, path: stored.storage_path, sha256: stored.image_sha256, bytes: stored.image_bytes });
+          manifest.images.push({ table, id: row.id, path: stored.storage_path, sha256: stored.image_sha256, md5: createHash("md5").update(bytes).digest("hex"), bytes: stored.image_bytes });
           await save();
           console.log(JSON.stringify({ table, id: row.id, copiedBytes: bytes.length }));
         }
@@ -106,6 +111,12 @@ export async function runCleanup(command = "audit", manifestFile?: string) {
       return;
     }
     if (command === "verify" || command === "release") {
+      const batchLimit = Number(process.env.CLEANUP_RELEASE_BATCH_SIZE);
+      if (command === "release" && (!Number.isSafeInteger(batchLimit) || batchLimit < 1)) {
+        throw new Error("Set CLEANUP_RELEASE_BATCH_SIZE to the verified safe row count for this batch.");
+      }
+      let releasedRows = 0;
+      const pending: Entry[] = [];
       // Prove exact, complete manifest coverage first. No clearing on partial success.
       for (const table of tables) {
         const count = await db.query(`select count(*)::int as count from ${table}`);
@@ -117,19 +128,25 @@ export async function runCleanup(command = "audit", manifestFile?: string) {
         const result = await db.query(`select * from ${e.table} where id=$1`, [e.id]);
         const row = result.rows[0];
         if (!row || row.storage_path !== e.path || row.image_sha256 !== e.sha256 || Number(row.image_bytes) !== e.bytes) throw new Error("Manifest identity mismatch.");
-        if (row.image_data && imageHash(row.image_data) !== e.sha256) throw new Error("Source hash changed.");
-        await readStoredImage({ ...row, image_data: null }); // force real object verification, never fallback
+        if (row.image_data) {
+          if (imageHash(row.image_data) !== e.sha256) throw new Error("Source hash changed.");
+          pending.push(e);
+        }
+        const object = await readStoredImage({ ...row, image_data: null });
+        if (createHash("md5").update(object).digest("hex") !== e.md5) throw new Error("Manifest MD5 mismatch.");
       }
       if (command === "release") {
-        for (const e of manifest.images) {
+        for (const e of pending.slice(0, batchLimit)) {
           const result = await db.query(`update ${e.table} set image_data=null
             where id=$1 and storage_path=$2 and image_sha256=$3 and image_bytes=$4
               and (image_data is null or image_data=$5)`, [e.id, e.path, e.sha256, e.bytes,
             await readStoredImage({ image_data: null, storage_path: e.path, image_sha256: e.sha256, image_bytes: e.bytes })]);
           if (result.rowCount !== 1) throw new Error("Image changed during release; stopped.");
+          releasedRows++;
         }
       }
-      console.log(JSON.stringify({ verifiedImages: manifest.images.length, released: command === "release" }));
+      const remainingRows = pending.length - releasedRows;
+      console.log(JSON.stringify({ verifiedImages: manifest.images.length, releasedRows, remainingRows }));
     } else if (command === "prune") {
       const client = await db.connect();
       try {

@@ -1,4 +1,4 @@
-import { prepareImage, readStoredImage, sharedScreenshotIds, imageHash, type ScreenshotTable, type ImageSource } from "./screenshot-storage";
+import { encodeNewScreenshot, prepareImage, readStoredImage, sharedScreenshotIds, imageHash, type ScreenshotTable, type ImageSource } from "./screenshot-storage";
 import { IBKR_SOURCE, IbkrImportError, mergeIbkrData, buildIbkrTrades, ibkrDate, ibkrSnapshotPositions, type IbkrFlexData } from "./ibkr-flex";
 import fs from "fs/promises";
 import { MERGED_TRADE_SOURCE, mergeTradeRecords, undoTradeMerge, reconcileTradeMerges } from "./trade-merge";
@@ -2295,8 +2295,9 @@ export async function saveCamJournalScreenshot(
 
   await ensureCamJournalStorageTables();
   const id = crypto.randomUUID();
+  const encoded = await encodeNewScreenshot(fileName, mimeType, imageData);
   await insertScreenshot(db, "cam_journal_screenshots",
-    [id, entityType, entityId, fileName, mimeType, imageData]
+    [id, entityType, entityId, encoded.fileName, encoded.mimeType, encoded.bytes]
   );
   return { id, url: `/api/cam-journal/screenshots/${encodeURIComponent(id)}` };
 }
@@ -4089,6 +4090,7 @@ export async function saveTradeScreenshot(
 
   await ensureTradeTable();
   await ensureTradeScreenshotTable();
+  const encoded = await encodeNewScreenshot(fileName, mimeType, imageData);
   const client = await db.connect();
   const id = crypto.randomUUID();
   const url = `/api/trades/${encodeURIComponent(tradeId)}/screenshots/${encodeURIComponent(id)}`;
@@ -4104,7 +4106,7 @@ export async function saveTradeScreenshot(
       throw new Error("Trade not found.");
     }
 
-    await insertScreenshot(client, "trade_screenshots", [id, tradeId, userId, fileName, mimeType, imageData]);
+    await insertScreenshot(client, "trade_screenshots", [id, tradeId, userId, encoded.fileName, encoded.mimeType, encoded.bytes]);
     await client.query(
       "update trade_logs set screenshots = coalesce(screenshots, '[]'::jsonb) || jsonb_build_array($3::text), updated_at = now() where id = $1 and user_id = $2",
       [tradeId, userId, url]

@@ -1,3 +1,5 @@
+import sharp from "sharp";
+import { mockR2 } from "./fixtures/mock-r2";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -18,29 +20,12 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
   const admin = new Client({ connectionString: url.toString(), ssl: false });
   await admin.connect();
   const previous = { ...process.env };
-  const originalFetch = globalThis.fetch;
-  const objects = new Map<string, Buffer>();
-  let failReads = false;
-  let failWrites = false;
+  const r2 = mockR2();
   let pool: ReturnType<typeof import("../lib/store")["getPool"]> = null;
-  globalThis.fetch = async (input, options) => {
-    if (new URL(String(input)).pathname.includes("/bucket/")) return Response.json({ public: false });
-    const key = new URL(String(input)).pathname.replace("/authenticated/", "/");
-    if (options?.method === "POST") {
-      if (failWrites) return new Response("synthetic failure", { status: 503 });
-      if (objects.has(key)) return new Response("exists", { status: 409 });
-      objects.set(key, Buffer.from(options.body as Uint8Array));
-      return new Response("ok");
-    }
-    const bytes = objects.get(key);
-    return bytes && !failReads ? new Response(new Uint8Array(bytes)) : new Response("missing", { status: 404 });
-  };
   try {
     await admin.query(`create schema ${schema}`);
     url.searchParams.set("options", `-c search_path=${schema}`);
     process.env.DATABASE_URL = url.toString();
-    process.env.SUPABASE_STORAGE_URL = "https://synthetic.supabase.co";
-    process.env.SUPABASE_STORAGE_SERVICE_KEY = "test-only";
     const store = await import("../lib/store");
     pool = store.getPool();
     assert.ok(pool);
@@ -65,7 +50,12 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
     await pool.query("update trade_screenshots set image_data=null where id=$1", [legacy.id]);
     assert.deepEqual((await store.getTradeScreenshot(legacy.id))?.imageData, bytes);
     process.env.SCREENSHOT_STORAGE_WRITES = "enabled";
-    const shared = await store.saveCamJournalScreenshot("setup-strategy-example", "example-1", "example.png", "image/png", bytes);
+    const png = await sharp({ create: { width: 32, height: 24, channels: 3, background: "#567" } }).png().toBuffer();
+    const shared = await store.saveCamJournalScreenshot("setup-strategy-example", "example-1", "example.png", "image/png", png);
+    const sharedImage = await store.getCamJournalScreenshot(shared.id);
+    assert.ok(sharedImage);
+    assert.equal((await sharp(sharedImage.imageData).metadata()).format, "jpeg");
+    const jpegBytes = sharedImage.imageData;
     await store.saveCamJournalState({ trades: [{ id: "live-1" }] });
     await pool.query("insert into app_settings(key,value) values ('setup_checklist_templates',$1::jsonb)",
       [JSON.stringify({ versions: [{ shots: [shared.url] }] })]);
@@ -92,10 +82,10 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
     assert.equal(backup.version, 1);
     assert.deepEqual(Buffer.from(backup.tradeScreenshots[0].imageDataBase64, "base64"), bytes);
     assert.equal(backup.sharedScreenshots.length, 1);
-    assert.deepEqual(Buffer.from(backup.sharedScreenshots[0].imageDataBase64, "base64"), bytes);
+    assert.deepEqual(Buffer.from(backup.sharedScreenshots[0].imageDataBase64, "base64"), jpegBytes);
     await store.importBrandenJournalBackup(backup);
     assert.deepEqual((await store.getTradeScreenshot(legacy.id))?.imageData, bytes);
-    assert.deepEqual((await store.getCamJournalScreenshot(shared.id))?.imageData, bytes);
+    assert.deepEqual((await store.getCamJournalScreenshot(shared.id))?.imageData, jpegBytes);
     const persisted = await pool.query("select image_data,storage_path from trade_screenshots");
     assert.equal(persisted.rows[0].image_data, null);
     assert.ok(persisted.rows[0].storage_path);
@@ -103,14 +93,14 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
 
     // Failed uploads must not append broken references to the parent trade.
     const before = await pool.query("select screenshots from trade_logs where id=$1", [original.id]);
-    failWrites = true;
-    await assert.rejects(store.saveTradeScreenshot(original.id, "branden", "new.png", "image/png", Buffer.from("different")), /upload failed/);
+    r2.controls.failWrites = true;
+    await assert.rejects(store.saveTradeScreenshot(original.id, "branden", "new.png", "image/png", png), /upload failed/);
     assert.deepEqual((await pool.query("select screenshots from trade_logs where id=$1", [original.id])).rows, before.rows);
-    failWrites = false;
-    failReads = true;
+    r2.controls.failWrites = false;
+    r2.controls.failReads = true;
     const failedBackup = await store.exportBrandenJournalBackup();
-    await assert.rejects(new Response(failedBackup.body).blob(), /Storage read failed/);
-    failReads = false;
+    await assert.rejects(new Response(failedBackup.body).blob(), /R2 read failed/);
+    r2.controls.failReads = false;
     const bad = structuredClone(backup);
     bad.sharedScreenshots[0].imageDataBase64 = Buffer.from("replacement").toString("base64");
     await assert.rejects(store.importBrandenJournalBackup(bad), /conflicts/);
@@ -121,9 +111,9 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
     const idle = await admin.query("select count(*)::int as count from pg_stat_activity where datname=current_database() and state='idle in transaction'");
     assert.equal(idle.rows[0].count, 0);
   } finally {
-    globalThis.fetch = originalFetch;
+    r2.restore();
     if (pool) await pool.end();
-    for (const key of ["DATABASE_URL", "SUPABASE_STORAGE_URL", "SUPABASE_STORAGE_SERVICE_KEY", "SCREENSHOT_STORAGE_WRITES"]) {
+    for (const key of ["DATABASE_URL", "SCREENSHOT_STORAGE_WRITES"]) {
       if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
     }
     try { await admin.query(`drop schema if exists ${schema} cascade`); }

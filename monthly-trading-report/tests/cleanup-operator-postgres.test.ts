@@ -1,3 +1,4 @@
+import { mockR2 } from "./fixtures/mock-r2";
 import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -18,30 +19,16 @@ test("operator refuses incomplete/corrupt copies, then prunes explicit history a
   const admin = new Client({ connectionString: url.toString(), ssl: false });
   await admin.connect();
   const previous = { ...process.env };
-  const originalFetch = globalThis.fetch;
-  const objects = new Map<string, Buffer>();
+  const r2 = mockR2();
+  const { objects } = r2;
   const directory = await mkdtemp(join(tmpdir(), "cleanup-test-"));
   let db: Client | undefined;
-  globalThis.fetch = async (input, options) => {
-    const url = new URL(String(input));
-    if (url.pathname.includes("/bucket/")) return Response.json({ public: false });
-    const path = url.pathname.replace("/authenticated/", "/");
-    if (options?.method === "POST") {
-      if (objects.has(path)) return new Response("exists", { status: 409 });
-      objects.set(path, Buffer.from(options.body as Uint8Array));
-      return new Response("ok");
-    }
-    const bytes = objects.get(path);
-    return bytes ? new Response(new Uint8Array(bytes)) : new Response("missing", { status: 404 });
-  };
   try {
     await admin.query(`create database ${name}`);
     url.pathname = `/${name}`;
     process.env.DATABASE_URL = url.toString();
     process.env.CLEANUP_EXPECTED_HOST = "localhost";
     process.env.CLEANUP_EXPECTED_PROJECT_REF = "synthetic";
-    process.env.SUPABASE_STORAGE_URL = "https://synthetic.supabase.co";
-    process.env.SUPABASE_STORAGE_SERVICE_KEY = "synthetic-only";
     db = new Client({ connectionString: url.toString(), ssl: false });
     await db.connect();
     await db.query(`create table trade_screenshots (id text primary key, mime_type text, image_data bytea not null);
@@ -77,6 +64,8 @@ test("operator refuses incomplete/corrupt copies, then prunes explicit history a
     await writeFile(manifest, completeManifest);
     await assert.rejects(runCleanup("release", manifest), /Pause writes/);
     process.env.CLEANUP_MAINTENANCE = "writes-and-jobs-paused";
+    await assert.rejects(runCleanup("release", manifest), /CLEANUP_RELEASE_BATCH_SIZE/);
+    process.env.CLEANUP_RELEASE_BATCH_SIZE = "1";
     const first = objects.entries().next().value!;
     objects.set(first[0], Buffer.from("corrupt"));
     await assert.rejects(runCleanup("release", manifest), /integrity/);
@@ -90,7 +79,9 @@ test("operator refuses incomplete/corrupt copies, then prunes explicit history a
     await runCleanup("prune", manifest);
     assert.deepEqual((await db.query("select reason from cam_journal_revisions order by id")).rows.map(row => row.reason), ["save", "nightly", "recovery"]);
     await runCleanup("release", manifest);
-    await runCleanup("release", manifest); // safe retry after partial/full release
+    assert.equal((await db.query("select count(*)::int as n from cam_journal_screenshots where image_data is not null")).rows[0].n, 1);
+    await runCleanup("release", manifest); // resumes after the first batch
+    await runCleanup("release", manifest); // safe retry after full release
     for (const table of ["trade_screenshots", "cam_journal_screenshots"]) {
       const result: QueryResult<{ image_data: Buffer | null; storage_path: string | null }> = await db.query(`select image_data, storage_path from ${table}`);
       assert.equal(result.rows.length, 1);
@@ -103,8 +94,8 @@ test("operator refuses incomplete/corrupt copies, then prunes explicit history a
     process.env.CLEANUP_EXPECTED_HOST = "wrong-host";
     await assert.rejects(runCleanup("audit"), /match the intended/);
   } finally {
-    globalThis.fetch = originalFetch;
-    for (const key of ["DATABASE_URL", "SUPABASE_STORAGE_URL", "SUPABASE_STORAGE_SERVICE_KEY",
+    r2.restore();
+    for (const key of ["DATABASE_URL", "CLEANUP_RELEASE_BATCH_SIZE",
       "CLEANUP_EXPECTED_HOST", "CLEANUP_EXPECTED_PROJECT_REF", "CLEANUP_WRITES", "CLEANUP_BACKUP_ATTESTATION", "CLEANUP_MAINTENANCE", "CLEANUP_COMPACTION"]) {
       if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
     }
