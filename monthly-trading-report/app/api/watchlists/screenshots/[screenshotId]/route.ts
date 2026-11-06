@@ -19,7 +19,7 @@ export async function GET(
     headers: {
       "Content-Type": screenshot.mimeType,
       "Content-Disposition": `inline; filename="${screenshot.fileName.replace(/["\\\r\n]/g, "_") || "watchlist-screenshot"}"`,
-      "Cache-Control": "private, max-age=86400",
+      "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff"
     }
   });

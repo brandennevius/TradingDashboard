@@ -1,3 +1,4 @@
+import { encodeNewScreenshot, prepareImage, readStoredImage, sharedScreenshotIds, imageHash, type ScreenshotTable, type ImageSource } from "./screenshot-storage";
 import { IBKR_SOURCE, IbkrImportError, mergeIbkrData, buildIbkrTrades, ibkrDate, ibkrSnapshotPositions, type IbkrFlexData } from "./ibkr-flex";
 import fs from "fs/promises";
 import { MERGED_TRADE_SOURCE, mergeTradeRecords, undoTradeMerge, reconcileTradeMerges } from "./trade-merge";
@@ -1898,10 +1899,7 @@ async function migrateSetupTemplateEmbeddedScreenshots(templates: SetupChecklist
         }
         await ensureCamJournalStorageTables();
         const id = crypto.randomUUID();
-        await db.query(
-          `insert into cam_journal_screenshots
-            (id, entity_type, entity_id, file_name, mime_type, image_data)
-           values ($1, $2, $3, $4, $5, $6)`,
+        await insertScreenshot(db, "cam_journal_screenshots",
           [
             id,
             "setup-strategy-example",
@@ -2043,10 +2041,7 @@ async function migrateWeeklyWatchlistEmbeddedScreenshots(userId: string, watchli
         }
         await ensureCamJournalStorageTables();
         const id = crypto.randomUUID();
-        await db.query(
-          `insert into cam_journal_screenshots
-            (id, entity_type, entity_id, file_name, mime_type, image_data)
-           values ($1, $2, $3, $4, $5, $6)`,
+        await insertScreenshot(db, "cam_journal_screenshots",
           [
             id,
             "watchlist-item",
@@ -2198,10 +2193,7 @@ async function migrateCamJournalEmbeddedScreenshots(state: Record<string, unknow
       const original = item.shot && typeof item.shot === "object" ? item.shot as Record<string, unknown> : {};
       const extension = item.embedded.mimeType.split("/")[1]?.replace("jpeg", "jpg") || "jpg";
       const fileName = String(original.name || `screenshot.${extension}`);
-      await client.query(
-        `insert into cam_journal_screenshots
-          (id, entity_type, entity_id, file_name, mime_type, image_data)
-         values ($1, $2, $3, $4, $5, $6)`,
+      await insertScreenshot(client, "cam_journal_screenshots",
         [id, item.entityType, item.entityId, fileName, item.embedded.mimeType, item.embedded.imageData]
       );
       const url = `/api/cam-journal/screenshots/${encodeURIComponent(id)}`;
@@ -2243,6 +2235,22 @@ export async function getCamJournalState() {
   return migrateCamJournalEmbeddedScreenshots(state);
 }
 
+async function insertScreenshot(
+  db: Pool | PoolClient, table: ScreenshotTable,
+  values: [string, string, string, string, string, Buffer], createdAt?: string
+) {
+  const [id, ownerType, ownerId, fileName, mimeType, bytes] = values;
+  const image = await prepareImage(table, id, mimeType, bytes);
+  const ownerColumns = table === "trade_screenshots" ? "trade_id, user_id" : "entity_type, entity_id";
+  await db.query(
+    `insert into ${table}
+      (id, ${ownerColumns}, file_name, mime_type, image_data, storage_path, image_sha256, image_bytes, created_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,coalesce($10::timestamptz,now()))`,
+    [id, ownerType, ownerId, fileName, mimeType, image.image_data,
+      image.storage_path || null, image.image_sha256 || null, image.image_bytes ?? null, createdAt || null]
+  );
+}
+
 async function ensureCamJournalStorageTables() {
   const db = getPool();
   if (!db) return;
@@ -2254,7 +2262,11 @@ async function ensureCamJournalStorageTables() {
       entity_id text not null,
       file_name text not null default '',
       mime_type text not null,
-      image_data bytea not null,
+      image_data bytea,
+      storage_path text,
+      image_sha256 text,
+      image_bytes bigint,
+      check (image_data is not null or (storage_path is not null and image_sha256 is not null and image_bytes is not null)),
       created_at timestamptz not null default now()
     );
     create index if not exists cam_journal_screenshots_entity_idx
@@ -2283,11 +2295,9 @@ export async function saveCamJournalScreenshot(
 
   await ensureCamJournalStorageTables();
   const id = crypto.randomUUID();
-  await db.query(
-    `insert into cam_journal_screenshots
-      (id, entity_type, entity_id, file_name, mime_type, image_data)
-     values ($1, $2, $3, $4, $5, $6)`,
-    [id, entityType, entityId, fileName, mimeType, imageData]
+  const encoded = await encodeNewScreenshot(fileName, mimeType, imageData);
+  await insertScreenshot(db, "cam_journal_screenshots",
+    [id, entityType, entityId, encoded.fileName, encoded.mimeType, encoded.bytes]
   );
   return { id, url: `/api/cam-journal/screenshots/${encodeURIComponent(id)}` };
 }
@@ -2298,7 +2308,7 @@ export async function getCamJournalScreenshot(id: string) {
 
   await ensureCamJournalStorageTables();
   const result = await db.query(
-    `select id, entity_type, entity_id, file_name, mime_type, image_data
+    `select id, entity_type, entity_id, file_name, mime_type, image_data, storage_path, image_sha256, image_bytes
      from cam_journal_screenshots where id = $1`,
     [id]
   );
@@ -2310,7 +2320,7 @@ export async function getCamJournalScreenshot(id: string) {
     entityId: String(row.entity_id),
     fileName: String(row.file_name || ""),
     mimeType: String(row.mime_type),
-    imageData: row.image_data as Buffer
+    imageData: await readStoredImage(row as ImageSource)
   };
 }
 
@@ -2327,15 +2337,30 @@ export async function snapshotCamJournalState(reason = "nightly") {
 
   await ensureSettingsTable();
   await ensureCamJournalStorageTables();
-  const current = await db.query("select value from app_settings where key = $1", ["cam_journal_state"]);
-  const state = current.rows[0]?.value;
-  if (!state) return { created: false };
-
-  await db.query("insert into cam_journal_revisions (state, reason) values ($1::jsonb, $2)", [
-    JSON.stringify(state),
-    reason
-  ]);
-  return { created: true };
+  const client = await db.connect();
+  try {
+    await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtext('cam-journal-revisions'))");
+    const current = await client.query("select value from app_settings where key = $1", ["cam_journal_state"]);
+    if (!current.rows[0]?.value) {
+      await client.query("commit");
+      return { created: false };
+    }
+    // Retries within a UTC day should not create redundant nightly snapshots.
+    const inserted = await client.query(`insert into cam_journal_revisions (state, reason)
+      select $1::jsonb, $2 where $2 <> 'nightly' or not exists (
+        select 1 from cam_journal_revisions where reason = 'nightly'
+        and (created_at at time zone 'UTC')::date = (now() at time zone 'UTC')::date
+      )`, [JSON.stringify(current.rows[0].value), reason]);
+    await client.query("commit");
+    const measured = await db.query("select pg_database_size(current_database())::text as bytes");
+    const databaseBytes = Number(measured.rows[0].bytes);
+    if (databaseBytes > 400 * 1024 * 1024) console.warn("Database size threshold exceeded", { databaseBytes });
+    return { created: Boolean(inserted.rowCount), databaseBytes, overSizeThreshold: databaseBytes > 400 * 1024 * 1024 };
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally { client.release(); }
 }
 
 export async function saveCamJournalState(state: Record<string, unknown>) {
@@ -2366,6 +2391,7 @@ export async function saveCamJournalState(state: Record<string, unknown>) {
   const client = await db.connect();
   try {
     await client.query("begin");
+    await client.query("select pg_advisory_xact_lock(hashtext('cam-journal-revisions'))");
     const current = await client.query("select value from app_settings where key = $1 for update", ["cam_journal_state"]);
     if (current.rows[0]?.value) {
       const revision = await client.query<{ id: string }>(
@@ -4038,7 +4064,11 @@ async function ensureTradeScreenshotTable() {
       user_id text not null,
       file_name text not null default '',
       mime_type text not null,
-      image_data bytea not null,
+      image_data bytea,
+      storage_path text,
+      image_sha256 text,
+      image_bytes bigint,
+      check (image_data is not null or (storage_path is not null and image_sha256 is not null and image_bytes is not null)),
       created_at timestamptz not null default now()
     )
   `);
@@ -4060,6 +4090,7 @@ export async function saveTradeScreenshot(
 
   await ensureTradeTable();
   await ensureTradeScreenshotTable();
+  const encoded = await encodeNewScreenshot(fileName, mimeType, imageData);
   const client = await db.connect();
   const id = crypto.randomUUID();
   const url = `/api/trades/${encodeURIComponent(tradeId)}/screenshots/${encodeURIComponent(id)}`;
@@ -4075,10 +4106,7 @@ export async function saveTradeScreenshot(
       throw new Error("Trade not found.");
     }
 
-    await client.query(
-      "insert into trade_screenshots (id, trade_id, user_id, file_name, mime_type, image_data) values ($1, $2, $3, $4, $5, $6)",
-      [id, tradeId, userId, fileName, mimeType, imageData]
-    );
+    await insertScreenshot(client, "trade_screenshots", [id, tradeId, userId, encoded.fileName, encoded.mimeType, encoded.bytes]);
     await client.query(
       "update trade_logs set screenshots = coalesce(screenshots, '[]'::jsonb) || jsonb_build_array($3::text), updated_at = now() where id = $1 and user_id = $2",
       [tradeId, userId, url]
@@ -4102,7 +4130,7 @@ export async function getTradeScreenshot(id: string) {
 
   await ensureTradeScreenshotTable();
   const result = await db.query(
-    "select id, trade_id, user_id, file_name, mime_type, image_data from trade_screenshots where id = $1",
+    "select id, trade_id, user_id, file_name, mime_type, image_data, storage_path, image_sha256, image_bytes from trade_screenshots where id = $1",
     [id]
   );
   const row = result.rows[0];
@@ -4117,7 +4145,7 @@ export async function getTradeScreenshot(id: string) {
     userId: String(row.user_id),
     fileName: String(row.file_name || ""),
     mimeType: String(row.mime_type),
-    imageData: row.image_data as Buffer
+    imageData: await readStoredImage(row as ImageSource)
   };
 }
 
@@ -4165,6 +4193,7 @@ export async function exportBrandenJournalBackup(): Promise<BackupDownload> {
   await ensureTradeTable();
   await ensureSettingsTable();
   await ensureTradeScreenshotTable();
+  await ensureCamJournalStorageTables();
   return createPostgresBackupDownload(await db.connect(), {
     reportColumns: columns,
     tradeColumns,
@@ -4223,6 +4252,13 @@ export async function importBrandenJournalBackup(value: unknown) {
   await ensureTradeTable();
   await ensureSettingsTable();
   await ensureTradeScreenshotTable();
+  await ensureCamJournalStorageTables();
+  const sharedIds = new Set(sharedScreenshotIds(value.settings));
+  if (value.sharedScreenshots && (!Array.isArray(value.sharedScreenshots) ||
+      value.sharedScreenshots.some(shot => !sharedIds.has(shot.id) ||
+        !["watchlist-item", "setup-strategy-example"].includes(shot.entityType)))) {
+    throw new Error("The backup contains an invalid shared screenshot reference.");
+  }
   const client = await db.connect();
   try {
     await client.query("begin");
@@ -4295,17 +4331,28 @@ export async function importBrandenJournalBackup(value: unknown) {
       if (screenshot.userId !== "branden" || !value.trades.some((trade) => trade.id === screenshot.tradeId)) {
         throw new Error("The backup contains an invalid screenshot reference.");
       }
-      await client.query(
-        `insert into trade_screenshots
-          (id, trade_id, user_id, file_name, mime_type, image_data, created_at)
-         values ($1,$2,$3,$4,$5,$6,$7)`,
-        [
-          screenshot.id, screenshot.tradeId, screenshot.userId, screenshot.fileName, screenshot.mimeType,
-          Buffer.from(screenshot.imageDataBase64, "base64"), screenshot.createdAt
-        ]
-      );
+      await insertScreenshot(client, "trade_screenshots", [
+        screenshot.id, screenshot.tradeId, screenshot.userId, screenshot.fileName, screenshot.mimeType,
+        Buffer.from(screenshot.imageDataBase64, "base64")
+      ], screenshot.createdAt);
     }
 
+    for (const shot of value.sharedScreenshots || []) {
+      const existing = await client.query("select * from cam_journal_screenshots where id = $1 for update", [shot.id]);
+      const bytes = Buffer.from(shot.imageDataBase64, "base64");
+      if (existing.rows[0]) {
+        const row = existing.rows[0];
+        if (row.entity_type !== shot.entityType || row.entity_id !== shot.entityId ||
+            row.mime_type !== shot.mimeType || row.file_name !== shot.fileName ||
+            imageHash(await readStoredImage(row)) !== imageHash(bytes)) {
+          throw new Error("Backup screenshot conflicts with an existing shared image.");
+        }
+      } else {
+        await insertScreenshot(client, "cam_journal_screenshots", [
+          shot.id, shot.entityType, shot.entityId, shot.fileName, shot.mimeType, bytes
+        ], shot.createdAt);
+      }
+    }
     await client.query("commit");
     return {
       reports: value.reports.length,

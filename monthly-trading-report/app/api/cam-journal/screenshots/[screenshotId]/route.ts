@@ -17,7 +17,7 @@ export async function GET(
     headers: {
       "Content-Type": screenshot.mimeType,
       "Content-Disposition": `inline; filename="${screenshot.fileName.replace(/["\\\r\n]/g, "_") || "screenshot"}"`,
-      "Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable"
+      "Cache-Control": "private, no-store"
     }
   });
 }

@@ -1,3 +1,4 @@
+import { readStoredImage, sharedScreenshotIds, type ImageSource } from "./screenshot-storage";
 import type { MonthlyReport, TradeLogEntry } from "./types";
 
 export type BrandenJournalBackup = {
@@ -8,6 +9,10 @@ export type BrandenJournalBackup = {
   reports: MonthlyReport[];
   trades: TradeLogEntry[];
   settings: Record<string, unknown>;
+  sharedScreenshots?: Array<{
+    id: string; entityType: string; entityId: string; fileName: string;
+    mimeType: string; imageDataBase64: string; createdAt: string;
+  }>;
   tradeScreenshots: Array<{
     id: string;
     tradeId: string;
@@ -19,7 +24,8 @@ export type BrandenJournalBackup = {
   }>;
 };
 
-type BackupSource = Omit<BrandenJournalBackup, "reports" | "trades" | "tradeScreenshots"> & {
+type BackupSource = Omit<BrandenJournalBackup, "reports" | "trades" | "tradeScreenshots" | "sharedScreenshots"> & {
+  sharedScreenshots?: Iterable<NonNullable<BrandenJournalBackup["sharedScreenshots"]>[number]> | AsyncIterable<NonNullable<BrandenJournalBackup["sharedScreenshots"]>[number]>;
   reports: Iterable<MonthlyReport> | AsyncIterable<MonthlyReport>;
   trades: Iterable<TradeLogEntry> | AsyncIterable<TradeLogEntry>;
   tradeScreenshots: Iterable<BrandenJournalBackup["tradeScreenshots"][number]> | AsyncIterable<BrandenJournalBackup["tradeScreenshots"][number]>;
@@ -47,6 +53,10 @@ async function* jsonBackup(source: BackupSource) {
   yield ',"settings":' + JSON.stringify(source.settings);
   yield ',"tradeScreenshots":';
   yield* jsonArray(source.tradeScreenshots);
+  if (source.sharedScreenshots) {
+    yield ',"sharedScreenshots":';
+    yield* jsonArray(source.sharedScreenshots);
+  }
   yield "}";
 }
 
@@ -111,10 +121,18 @@ export async function createPostgresBackupDownload(client: BackupQueryClient, op
       ["branden"]
     );
     await client.query(
-      "declare backup_screenshots no scroll cursor for select id, trade_id, user_id, file_name, mime_type, image_data, created_at from trade_screenshots where user_id = $1 order by created_at asc, id asc",
+      "declare backup_screenshots no scroll cursor for select id, trade_id, user_id, file_name, mime_type, image_data, storage_path, image_sha256, image_bytes, created_at from trade_screenshots where user_id = $1 order by created_at asc, id asc",
       ["branden"]
     );
     const settings = await client.query("select key, value from app_settings where key = any($1::text[])", [options.settingKeys]);
+
+    const sharedIds = sharedScreenshotIds(Object.fromEntries(settings.rows.map(row => [String(row.key), row.value])));
+    if (sharedIds.length) {
+      await client.query(`declare backup_shared_screenshots no scroll cursor for
+        select id, entity_type, entity_id, file_name, mime_type, image_data,
+          storage_path, image_sha256, image_bytes, created_at
+        from cam_journal_screenshots where id = any($1::text[]) order by id`, [sharedIds]);
+    }
 
     async function* rows(cursor: string, batchSize: number) {
       while (true) {
@@ -135,13 +153,27 @@ export async function createPostgresBackupDownload(client: BackupQueryClient, op
         yield {
           id: String(row.id), tradeId: String(row.trade_id), userId: String(row.user_id),
           fileName: String(row.file_name || ""), mimeType: String(row.mime_type || "image/png"),
-          imageDataBase64: (row.image_data as Buffer).toString("base64"),
+          imageDataBase64: (await readStoredImage(row as ImageSource)).toString("base64"),
           createdAt: new Date(String(row.created_at)).toISOString()
         };
       }
     }
+    async function* sharedScreenshots() {
+      let found = 0;
+      for await (const row of rows("backup_shared_screenshots", 1)) {
+        found++;
+        yield {
+          id: String(row.id), entityType: String(row.entity_type), entityId: String(row.entity_id),
+          fileName: String(row.file_name || ""), mimeType: String(row.mime_type),
+          imageDataBase64: (await readStoredImage(row as ImageSource)).toString("base64"),
+          createdAt: new Date(String(row.created_at)).toISOString()
+        };
+      }
+      if (found !== sharedIds.length) throw new Error("Backup is missing referenced shared screenshots.");
+    }
     return createBackupDownload({
       format: "branden-journal-backup", version: 1, userId: "branden", exportedAt: new Date().toISOString(),
+      ...(sharedIds.length ? { sharedScreenshots: sharedScreenshots() } : {}),
       reports: reports(), trades: trades(), tradeScreenshots: screenshots(),
       settings: Object.fromEntries(settings.rows.map(row => [String(row.key), row.value]))
     }, async completed => {

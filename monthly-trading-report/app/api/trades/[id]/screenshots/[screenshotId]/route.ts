@@ -31,7 +31,7 @@ export async function GET(
     headers: {
       "Content-Type": screenshot.mimeType,
       "Content-Disposition": `inline; filename="${safeFileName}"`,
-      "Cache-Control": "public, max-age=31536000, s-maxage=31536000, immutable"
+      "Cache-Control": "private, no-store"
     }
   });
 }

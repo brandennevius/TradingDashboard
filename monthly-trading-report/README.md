@@ -116,6 +116,11 @@ Work on a feature branch, define observable acceptance criteria, implement with 
 
 The existing deployment stack is **Vercel + Supabase-hosted PostgreSQL**. The application connects with `pg` through `DATABASE_URL` and uses its own signed-session authentication, rather than Supabase Auth. Set the Vercel root directory to `monthly-trading-report`, framework to Next.js, Node to 24.x, install command to `npm ci`, and build command to `npm run build`. Configure `APP_SECRET`, `TRADER_USERS`, and `DATABASE_URL` separately for the intended environment; optional integrations require their own configuration. Tables are created/extended by store helpers on first access, so the deployment database role needs appropriate schema permissions. Review changes against a disposable/staging database before production.
 
+Private R2 screenshot support requires applying `migrations/20261105-screenshot-storage.sql`
+before deploying to an existing database. R2 writes
+are separately enabled after backup verification. Follow the [cleanup and rollback
+runbook](docs/supabase-cleanup.md); deployment alone does not clear the database quota.
+
 `vercel.json` retains two UTC schedules: market-context archive at 22:30 Monday–Friday and Cam backup at 05:15 daily. Set `CRON_SECRET` for scheduled access. Confirm scheduling support, backups, restoration, and database permissions in your hosting plan. JSON files on a deployment filesystem do not replace durable PostgreSQL storage.
 
 A linked Vercel Next.js project named `monthly-trading-report` with Node 24.x was observed during this audit. The available metadata did not expose its root directory, Git production branch, or preview data isolation. Confirm those in Vercel before relying on preview validation; use a separate preview database and credentials. No deployment settings or branch-protection rules were changed, and no production deployment is added by this workflow. The PR branch triggered a successful existing Vercel branch build (recorded in the audit); deployed data paths were not smoke-tested. Existing Git-provider deployment behavior remains external to these checks.

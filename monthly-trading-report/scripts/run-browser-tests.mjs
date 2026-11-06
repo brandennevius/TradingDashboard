@@ -11,7 +11,8 @@ const env = { ...process.env, DATABASE_URL: "", LOCAL_DATA_DIR: directory,
   E2E_DATA_DIR: directory, E2E_PASSWORD: password, NODE_ENV: "development",
   APP_SECRET: randomUUID(), TRADER_USERS: `cam:${password},branden:${password}`,
   CODEX_JOURNAL_PASSWORD: "", ALPACA_API_KEY: "", ALPACA_API_SECRET: "",
-  OPENAI_API_KEY: "", CRON_SECRET: "", NEXT_TELEMETRY_DISABLED: "1" };
+  OPENAI_API_KEY: "", CRON_SECRET: "", R2_ACCOUNT_ID: "", R2_ACCESS_KEY_ID: "", R2_SECRET_ACCESS_KEY: "", R2_SCREENSHOT_BUCKET: "",
+  SCREENSHOT_STORAGE_WRITES: "", NEXT_TELEMETRY_DISABLED: "1" };
 for (const key of ["HOST", "PORT", "SECURE", "USERNAME", "PASSWORD"]) env[`SNAPSHOT_SMTP_${key}`] = "";
 for (const key of ["FROM", "TO"]) env[`SNAPSHOT_EMAIL_${key}`] = "";
 try {

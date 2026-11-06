@@ -6,7 +6,8 @@ import { readdir } from "node:fs/promises";
 const files = process.argv.length > 2 ? process.argv.slice(2)
   : (await readdir("tests")).filter(name => /\.test\.(ts|mjs|js)$/.test(name)).sort().map(name => `tests/${name}`);
 const env = { ...process.env, NODE_ENV: "test", DATABASE_URL: "", LOCAL_DATA_DIR: "",
-  ALPACA_API_KEY: "", ALPACA_API_SECRET: "", OPENAI_API_KEY: "", CRON_SECRET: "" };
+  ALPACA_API_KEY: "", ALPACA_API_SECRET: "", OPENAI_API_KEY: "", CRON_SECRET: "", R2_ACCOUNT_ID: "", R2_ACCESS_KEY_ID: "", R2_SECRET_ACCESS_KEY: "", R2_SCREENSHOT_BUCKET: "",
+  SCREENSHOT_STORAGE_WRITES: "" };
 for (const key of ["HOST", "PORT", "SECURE", "USERNAME", "PASSWORD"]) env[`SNAPSHOT_SMTP_${key}`] = "";
 for (const key of ["FROM", "TO"]) env[`SNAPSHOT_EMAIL_${key}`] = "";
 const child = spawn(process.execPath, ["--import", "tsx", "--test", ...files], { stdio: "inherit", env });
