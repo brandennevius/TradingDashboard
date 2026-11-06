@@ -1,4 +1,4 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, paginateListObjectsV2, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import { createHash } from "node:crypto";
 
@@ -40,6 +40,15 @@ function storage() {
     }) };
   }
   return { client: cached.client, bucket };
+}
+
+export async function screenshotBucketBytes() {
+  const { client, bucket } = storage();
+  let bytes = 0;
+  for await (const page of paginateListObjectsV2({ client }, { Bucket: bucket })) {
+    for (const object of page.Contents ?? []) bytes += object.Size ?? 0;
+  }
+  return bytes;
 }
 
 function validatePath(path: string) {
