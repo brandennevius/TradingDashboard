@@ -2335,7 +2335,6 @@ export async function snapshotCamJournalState(reason = "nightly") {
     JSON.stringify(state),
     reason
   ]);
-  await db.query("delete from cam_journal_revisions where created_at < now() - interval '90 days'");
   return { created: true };
 }
 
@@ -2369,8 +2368,13 @@ export async function saveCamJournalState(state: Record<string, unknown>) {
     await client.query("begin");
     const current = await client.query("select value from app_settings where key = $1 for update", ["cam_journal_state"]);
     if (current.rows[0]?.value) {
-      await client.query("insert into cam_journal_revisions (state, reason) values ($1::jsonb, 'save')", [
-        JSON.stringify(current.rows[0].value)
+      const revision = await client.query<{ id: string }>(
+        "insert into cam_journal_revisions (state, reason) values ($1::jsonb, 'save') returning id",
+        [JSON.stringify(current.rows[0].value)]
+      );
+      // Serialize retention with the save under the live-state row lock.
+      await client.query("delete from cam_journal_revisions where reason = 'save' and id <> $1", [
+        revision.rows[0].id
       ]);
     }
     const result = await client.query(
