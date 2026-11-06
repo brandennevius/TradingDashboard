@@ -70,9 +70,8 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
     await pool.query("insert into app_settings(key,value) values ('setup_checklist_templates',$1::jsonb)",
       [JSON.stringify({ versions: [{ shots: [shared.url] }] })]);
 
-    // Existing old checkpoints survive the new opt-in retention policy.
-    await pool.query("insert into cam_journal_revisions(state,reason,created_at) values ('{}','recovery-pinned',now()-interval '200 days'), ('{}','migration-pinned',now()-interval '200 days'), ('{}','nightly',now()-interval '31 days')");
-    process.env.CAM_JOURNAL_BOUNDED_HISTORY = "enabled";
+    // Existing old checkpoints survive both routine saves and the nightly job.
+    await pool.query("insert into cam_journal_revisions(state,reason,created_at) values ('{}','recovery-pinned',now()-interval '200 days'), ('{}','migration-pinned',now()-interval '200 days'), ('{}','nightly',now()-interval '120 days')");
     await store.saveCamJournalState({ trades: [{ id: "live-2" }] });
     await store.saveCamJournalState({ trades: [{ id: "live-3" }] });
     assert.deepEqual((await store.getCamJournalState()).trades, [{ id: "live-3" }]);
@@ -82,8 +81,10 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
     assert.equal((await store.snapshotCamJournalState()).created, true);
     assert.equal((await store.snapshotCamJournalState()).created, false);
     const history = await pool.query("select reason,state from cam_journal_revisions");
-    assert.equal(history.rows.filter(row => row.reason === "nightly").length, 1);
-    assert.deepEqual(history.rows.find(row => row.reason === "nightly").state.trades, [{ id: "live-3" }]);
+    const nightlies = history.rows.filter(row => row.reason === "nightly");
+    assert.equal(nightlies.length, 2);
+    assert.ok(nightlies.some(row => row.state.trades?.[0]?.id === "live-3"));
+    assert.ok(nightlies.some(row => Object.keys(row.state).length === 0));
     assert.equal(history.rows.filter(row => row.reason.endsWith("pinned")).length, 2);
 
     const download = await store.exportBrandenJournalBackup();
@@ -122,7 +123,7 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
   } finally {
     globalThis.fetch = originalFetch;
     if (pool) await pool.end();
-    for (const key of ["DATABASE_URL", "SUPABASE_STORAGE_URL", "SUPABASE_STORAGE_SERVICE_KEY", "SCREENSHOT_STORAGE_WRITES", "CAM_JOURNAL_BOUNDED_HISTORY"]) {
+    for (const key of ["DATABASE_URL", "SUPABASE_STORAGE_URL", "SUPABASE_STORAGE_SERVICE_KEY", "SCREENSHOT_STORAGE_WRITES"]) {
       if (previous[key] === undefined) delete process.env[key]; else process.env[key] = previous[key];
     }
     try { await admin.query(`drop schema if exists ${schema} cascade`); }

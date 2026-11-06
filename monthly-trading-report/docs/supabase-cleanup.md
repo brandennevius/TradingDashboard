@@ -28,7 +28,7 @@ membership: the shared screenshot table also backs setup examples and watchlists
    - `SUPABASE_STORAGE_SERVICE_KEY`: server `service_role` key via secret settings
    - `SUPABASE_SCREENSHOT_BUCKET=trade-screenshots`
 
-   Keep `SCREENSHOT_STORAGE_WRITES` and `CAM_JOURNAL_BOUNDED_HISTORY` unset for the
+   Keep `SCREENSHOT_STORAGE_WRITES` unset for the
    compatibility deployment. Preview must have its own isolated DB, bucket, and
    credentials; do not point it at production. Existing sensitive Vercel secrets
    cannot be assumed retrievable through an environment pull.
@@ -130,14 +130,11 @@ locks and temporary space. Measure final bytes; require the database to be under
 the actual current plan limit, preferably below 400 MiB, and verify the dashboard
 restriction clears. Database and egress restrictions are separate.
 
-After approved initial pruning, enable `CAM_JOURNAL_BOUNDED_HISTORY=enabled` and
-redeploy. Ordinary saves continue writing live `cam_journal_state` atomically,
-while retaining the newest pre-save snapshot. The daily job keeps 30 days of
-nightlies and does not prune recovery/migration/unknown reasons. Nightly retries
-within a UTC day do not create duplicate snapshots. The job returns database
-bytes and emits a warning above 400 MiB; no outbound notifications are configured.
-During the initial cleanup existing nightlies remain intact; enabling retention
-then expires nightlies older than 30 days on the next cron execution.
+Ordinary saves write live `cam_journal_state` atomically and retain the newest
+pre-save snapshot. The daily job preserves all existing nightly, recovery,
+migration and unknown revisions. Nightly retries within a UTC day do not create
+duplicate snapshots. The job returns database bytes and emits a warning above
+400 MiB. No outbound notifications are configured.
 
 Confirm save/reload, trade counts, current-state fingerprint, image counts and
 hashes, monthly reports, setup/watchlist views and export/restore. Resume users

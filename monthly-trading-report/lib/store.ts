@@ -1,5 +1,4 @@
 import { prepareImage, readStoredImage, sharedScreenshotIds, imageHash, type ScreenshotTable, type ImageSource } from "./screenshot-storage";
-import { boundedHistoryEnabled, boundedRevisionPruneSql } from "./cam-revision-retention";
 import { IBKR_SOURCE, IbkrImportError, mergeIbkrData, buildIbkrTrades, ibkrDate, ibkrSnapshotPositions, type IbkrFlexData } from "./ibkr-flex";
 import fs from "fs/promises";
 import { MERGED_TRADE_SOURCE, mergeTradeRecords, undoTradeMerge, reconcileTradeMerges } from "./trade-merge";
@@ -2352,8 +2351,6 @@ export async function snapshotCamJournalState(reason = "nightly") {
         select 1 from cam_journal_revisions where reason = 'nightly'
         and (created_at at time zone 'UTC')::date = (now() at time zone 'UTC')::date
       )`, [JSON.stringify(current.rows[0].value), reason]);
-    if (boundedHistoryEnabled()) await client.query(boundedRevisionPruneSql);
-    // Before opt-in, leave historical checkpoints untouched (including recovery).
     await client.query("commit");
     const measured = await db.query("select pg_database_size(current_database())::text as bytes");
     const databaseBytes = Number(measured.rows[0].bytes);
@@ -2396,8 +2393,13 @@ export async function saveCamJournalState(state: Record<string, unknown>) {
     await client.query("select pg_advisory_xact_lock(hashtext('cam-journal-revisions'))");
     const current = await client.query("select value from app_settings where key = $1 for update", ["cam_journal_state"]);
     if (current.rows[0]?.value) {
-      await client.query("insert into cam_journal_revisions (state, reason) values ($1::jsonb, 'save')", [
-        JSON.stringify(current.rows[0].value)
+      const revision = await client.query<{ id: string }>(
+        "insert into cam_journal_revisions (state, reason) values ($1::jsonb, 'save') returning id",
+        [JSON.stringify(current.rows[0].value)]
+      );
+      // Serialize retention with the save under the live-state row lock.
+      await client.query("delete from cam_journal_revisions where reason = 'save' and id <> $1", [
+        revision.rows[0].id
       ]);
     }
     const result = await client.query(
@@ -2409,12 +2411,6 @@ export async function saveCamJournalState(state: Record<string, unknown>) {
       `,
       ["cam_journal_state", JSON.stringify(normalized)]
     );
-    if (boundedHistoryEnabled()) {
-      // Enable only after verified backup and approved initial history pruning.
-      // Live state is still committed atomically with its pre-save checkpoint.
-      await client.query(`delete from cam_journal_revisions where reason = 'save'
-        and id <> (select max(id) from cam_journal_revisions where reason = 'save')`);
-    }
     await client.query("commit");
     return result.rows[0]?.value || normalized;
   } catch (error) {
