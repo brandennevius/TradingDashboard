@@ -12,6 +12,17 @@ export type ImageSource = {
 
 export const imageHash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 
+export const MAX_SCREENSHOT_INPUT_PIXELS = 40_000_000;
+
+export class ScreenshotPixelLimitError extends Error {
+  readonly status = 413;
+
+  constructor() {
+    super(`Screenshot exceeds the limit of ${MAX_SCREENSHOT_INPUT_PIXELS / 1_000_000} million pixels. Crop the image or reduce its width and height, then upload again.`);
+    this.name = "ScreenshotPixelLimitError";
+  }
+}
+
 export function screenshotStorageTarget() {
   const account = process.env.R2_ACCOUNT_ID;
   const bucket = process.env.R2_SCREENSHOT_BUCKET;
@@ -59,13 +70,20 @@ function validatePath(path: string) {
 
 export async function encodeNewScreenshot(fileName: string, mimeType: string, bytes: Buffer) {
   if (process.env.SCREENSHOT_STORAGE_WRITES !== "enabled") return { fileName, mimeType, bytes };
-  const jpeg = await sharp(bytes, { limitInputPixels: 40_000_000 })
-    .rotate()
-    .resize(2560, 2560, { fit: "inside", withoutEnlargement: true })
-    .flatten({ background: "#ffffff" })
-    .jpeg({ quality: 85, chromaSubsampling: "4:4:4", mozjpeg: true })
-    .toBuffer();
-  return { fileName: fileName.replace(/\.[^.]+$/, "") + ".jpg", mimeType: "image/jpeg", bytes: jpeg };
+  try {
+    const jpeg = await sharp(bytes, { limitInputPixels: MAX_SCREENSHOT_INPUT_PIXELS })
+      .rotate()
+      .resize(2560, 2560, { fit: "inside", withoutEnlargement: true })
+      .flatten({ background: "#ffffff" })
+      .jpeg({ quality: 85, chromaSubsampling: "4:4:4", mozjpeg: true })
+      .toBuffer();
+    return { fileName: fileName.replace(/\.[^.]+$/, "") + ".jpg", mimeType: "image/jpeg", bytes: jpeg };
+  } catch (error) {
+    if (error instanceof Error && /input image exceeds pixel limit/i.test(error.message)) {
+      throw new ScreenshotPixelLimitError();
+    }
+    throw error;
+  }
 }
 
 export async function readStoredImage(source: ImageSource): Promise<Buffer> {

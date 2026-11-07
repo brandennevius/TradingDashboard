@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { saveTradeScreenshot } from "@/lib/store";
+import { ScreenshotPixelLimitError } from "@/lib/screenshot-storage";
 
 const MAX_SCREENSHOT_BYTES = 3_500_000;
 
@@ -33,7 +34,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not save screenshot." },
-      { status: 500 }
+      { status: error instanceof ScreenshotPixelLimitError ? error.status : 500 }
     );
   }
 }
