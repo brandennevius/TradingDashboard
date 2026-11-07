@@ -36,6 +36,7 @@ export async function GET() {
       trades,
       portfolios: portfolioSettings.portfolios,
       defaultPortfolio: portfolioSettings.defaultPortfolio,
+      portfolioMeta: portfolioSettings.portfolioMeta || {},
       setupChecklists,
       preferences
     });

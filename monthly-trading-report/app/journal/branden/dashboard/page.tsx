@@ -3,6 +3,8 @@
 import { usePortfolioSelection } from "@/lib/portfolio-selection";
 
 import dynamic from "next/dynamic";
+import PositionSizeChart from "@/app/components/PositionSizeChart";
+import { ACCOUNT_LOSS_THRESHOLD_DOLLARS } from "@/lib/portfolio-exposure";
 import { useEffect, useMemo, useState } from "react";
 import {
   Area,
@@ -29,6 +31,7 @@ type DashboardResponse = {
   user?: TraderUser | null;
   trades?: TradeLogEntry[];
   portfolios?: string[];
+  portfolioMeta?: Record<string, { currentEquity?: number }>;
   defaultPortfolio?: string;
   setupChecklists?: SetupChecklistTemplate[];
   error?: string;
@@ -104,26 +107,6 @@ function addDays(value: Date, days: number) {
   const next = new Date(value);
   next.setDate(next.getDate() + days);
   return next;
-}
-
-function weekStartForDate(value: string) {
-  const date = dateFromYmd(value);
-  const day = date.getDay();
-  const mondayOffset = day === 0 ? -6 : 1 - day;
-  return ymdFromDate(addDays(date, mondayOffset));
-}
-
-function weekEndForStart(weekStart: string) {
-  return ymdFromDate(addDays(dateFromYmd(weekStart), 4));
-}
-
-function compactDateLabel(value: string) {
-  const date = dateFromYmd(value);
-  return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
-function weeklyLabel(weekStart: string) {
-  return `${compactDateLabel(weekStart)}-${compactDateLabel(weekEndForStart(weekStart)).replace(/^[A-Za-z]+ /, "")}`;
 }
 
 function rangedExitExecutions(trade: TradeLogEntry, startDate: string, endDate: string) {
@@ -216,6 +199,7 @@ export default function BrandenDashboardPage() {
   const [tradeId, setTradeId] = useState("");
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
+  const [portfolioMeta, setPortfolioMeta] = useState<Record<string, { currentEquity?: number }>>({});
   const [setupTemplates, setSetupTemplates] = useState<SetupChecklistTemplate[]>([]);
   const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
   const [startDate, setStartDate] = useState(currentMonthStartDate());
@@ -248,6 +232,7 @@ export default function BrandenDashboardPage() {
       const nextDefaultPortfolio = String(data.defaultPortfolio || "");
       setUser(data.user || null);
       setTrades(Array.isArray(data.trades) ? data.trades : []);
+      setPortfolioMeta(data.portfolioMeta || {});
       setSetupTemplates(Array.isArray(data.setupChecklists) ? data.setupChecklists : []);
       initializePortfolio(nextDefaultPortfolio);
       setIsLoading(false);
@@ -275,22 +260,6 @@ export default function BrandenDashboardPage() {
     [activePortfolio, endDate, startDate, visibleTrades]
   );
   const closedTrades = useMemo(() => filteredTrades.filter(countsAsSettledTrade), [filteredTrades]);
-  const openedTrades = useMemo(
-    () =>
-      visibleTrades
-        .filter((trade) => !activePortfolio || trade.portfolioTag === activePortfolio)
-        .filter((trade) => inDateRange(trade.entryDate, startDate, endDate)),
-    [activePortfolio, endDate, startDate, visibleTrades]
-  );
-  const closedLifecycleTrades = useMemo(
-    () =>
-      visibleTrades
-        .filter((trade) => !activePortfolio || trade.portfolioTag === activePortfolio)
-        .filter((trade) => countsAsClosedLifecycleTrade(trade) && inDateRange(trade.exitDate, startDate, endDate))
-        .map((trade) => tradeForRange(trade, startDate, endDate)),
-    [activePortfolio, endDate, startDate, visibleTrades]
-  );
-
   const summary = useMemo(() => {
     const wins = closedTrades.filter((trade) => normalizedTradeStatus(trade) === "WIN");
     const losses = closedTrades.filter((trade) => normalizedTradeStatus(trade) === "LOSS");
@@ -381,128 +350,6 @@ export default function BrandenDashboardPage() {
     }));
   }, [closedTrades, setupTemplates]);
 
-  const weeklyFrequencyData = useMemo(() => {
-    const grouped: Record<
-      string,
-      {
-        weekStart: string;
-        weekEnd: string;
-        openedCount: number;
-        closedCount: number;
-        netPnl: number;
-        totalR: number;
-        mistakeCount: number;
-        needsReviewCount: number;
-      }
-    > = {};
-    const ensureWeek = (weekStart: string) => {
-      grouped[weekStart] = grouped[weekStart] || {
-        weekStart,
-        weekEnd: weekEndForStart(weekStart),
-        openedCount: 0,
-        closedCount: 0,
-        netPnl: 0,
-        totalR: 0,
-        mistakeCount: 0,
-        needsReviewCount: 0
-      };
-      return grouped[weekStart];
-    };
-
-    openedTrades.forEach((trade) => {
-      const week = ensureWeek(weekStartForDate(trade.entryDate));
-      week.openedCount += 1;
-    });
-
-    closedLifecycleTrades.forEach((trade) => {
-      const week = ensureWeek(weekStartForDate(trade.exitDate));
-      week.closedCount += 1;
-      week.netPnl += Number(trade.pnl || 0);
-      week.totalR += Number(trade.rMultiple || 0);
-      week.mistakeCount += trade.mistakeTags?.length || 0;
-      if (tradeNeedsReview(trade, setupTemplates)) week.needsReviewCount += 1;
-    });
-
-    return Object.values(grouped)
-      .sort((a, b) => a.weekStart.localeCompare(b.weekStart))
-      .map((week) => ({
-        ...week,
-        label: weeklyLabel(week.weekStart),
-        avgR: week.closedCount ? week.totalR / week.closedCount : 0,
-        reviewCompletion: week.closedCount ? ((week.closedCount - week.needsReviewCount) / week.closedCount) * 100 : 100
-      }));
-  }, [closedLifecycleTrades, openedTrades, setupTemplates]);
-
-  const weeklyFrequencySummary = useMemo(() => {
-    const latest = weeklyFrequencyData[weeklyFrequencyData.length - 1] || null;
-    const previous = weeklyFrequencyData[weeklyFrequencyData.length - 2] || null;
-    const priorTwo = weeklyFrequencyData.slice(-3, -1);
-    const activeWeeks = weeklyFrequencyData.filter((week) => week.openedCount > 0 || week.closedCount > 0).length;
-    const closedSample = sum(weeklyFrequencyData.map((week) => week.closedCount));
-    const totalR = sum(weeklyFrequencyData.map((week) => week.totalR));
-    let cumulativeR = 0;
-    let peakR = 0;
-    let maxDrawdownR = 0;
-    let currentDrawdownR = 0;
-    weeklyFrequencyData.forEach((week) => {
-      cumulativeR += week.totalR;
-      peakR = Math.max(peakR, cumulativeR);
-      currentDrawdownR = cumulativeR - peakR;
-      maxDrawdownR = Math.min(maxDrawdownR, currentDrawdownR);
-    });
-    const averageOpened = weeklyFrequencyData.length ? average(weeklyFrequencyData.map((week) => week.openedCount)) : 0;
-    const latestOpened = latest?.openedCount || 0;
-    const latestAvgR = latest?.avgR || 0;
-    const latestReviewCompletion = latest?.reviewCompletion ?? 100;
-    const latestMistakes = latest?.mistakeCount || 0;
-    const priorAvgR = priorTwo.length ? average(priorTwo.map((week) => week.avgR)) : 0;
-    const openedRisingTwoWeeks =
-      weeklyFrequencyData.length >= 3 &&
-      weeklyFrequencyData[weeklyFrequencyData.length - 3].openedCount < weeklyFrequencyData[weeklyFrequencyData.length - 2].openedCount &&
-      weeklyFrequencyData[weeklyFrequencyData.length - 2].openedCount < weeklyFrequencyData[weeklyFrequencyData.length - 1].openedCount;
-    const avgRFallingTwoWeeks =
-      weeklyFrequencyData.length >= 3 &&
-      weeklyFrequencyData[weeklyFrequencyData.length - 3].avgR > weeklyFrequencyData[weeklyFrequencyData.length - 2].avgR &&
-      weeklyFrequencyData[weeklyFrequencyData.length - 2].avgR > weeklyFrequencyData[weeklyFrequencyData.length - 1].avgR;
-    const tradeCountElevated = averageOpened > 0 && latestOpened >= Math.max(averageOpened * 1.25, averageOpened + 2);
-    const drawdownWorsening = weeklyFrequencyData.length >= 2 && currentDrawdownR < 0 && latest && previous && latest.totalR < previous.totalR;
-    const noMistakeSpike = !previous || latestMistakes <= Math.max(previous.mistakeCount + 1, previous.mistakeCount * 1.5);
-    const reviewCompletionGood = latestReviewCompletion >= 80;
-
-    let status = "NORMAL";
-    let reason = "Trade frequency is stable and average R is near or above breakeven.";
-    if (closedSample < 12 || activeWeeks < 3) {
-      status = "INSUFFICIENT SAMPLE";
-      reason = `${closedSample} closed trades across ${activeWeeks} active weeks. Need at least 12 closed trades and 3 active weeks.`;
-    } else if (drawdownWorsening && latestAvgR < 0 && tradeCountElevated) {
-      status = "PAUSE / REVIEW";
-      reason = `Net R drawdown is worsening, latest average R is ${latestAvgR.toFixed(2)}R, and opened trades are elevated versus the weekly average.`;
-    } else if (openedRisingTwoWeeks && (latestAvgR < 0 || avgRFallingTwoWeeks)) {
-      status = "REDUCE FREQUENCY";
-      reason = latestAvgR < 0
-        ? `Opened trades rose for 2 weeks while latest average R is negative at ${latestAvgR.toFixed(2)}R.`
-        : "Opened trades rose for 2 weeks while average R per trade fell for 2 weeks.";
-    } else if (latestAvgR > 0 && totalR > 0 && reviewCompletionGood && noMistakeSpike) {
-      status = "CAN INCREASE CAREFULLY";
-      reason = `Average R is positive, selected-range net R is ${totalR.toFixed(2)}R, reviews are ${latestReviewCompletion.toFixed(0)}% complete, and mistakes are not spiking.`;
-    }
-
-    return {
-      latest,
-      previous,
-      status,
-      reason,
-      activeWeeks,
-      closedSample,
-      totalR,
-      currentDrawdownR,
-      maxDrawdownR,
-      averageTradesPerWeek: averageOpened,
-      bestWeekR: weeklyFrequencyData.length ? Math.max(...weeklyFrequencyData.map((week) => week.totalR)) : 0,
-      worstWeekR: weeklyFrequencyData.length ? Math.min(...weeklyFrequencyData.map((week) => week.totalR)) : 0
-    };
-  }, [weeklyFrequencyData]);
-
   if (tradeId) {
     return <LegacyTradeDetailHost />;
   }
@@ -543,141 +390,7 @@ export default function BrandenDashboardPage() {
         {!isLoading ? (
           <>
             <div className="trade-chart-rows">
-              <article className="trade-chart-panel top-chart trade-frequency-panel">
-                <div className="trade-chart-heading trade-frequency-heading">
-                  <div>
-                    <p className="eyebrow">Behavior check</p>
-                    <h3>Trade frequency vs edge</h3>
-                    <small>Frequency counts trades opened that week. Edge uses trades closed that week.</small>
-                  </div>
-                  <span>F</span>
-                </div>
-                <div className="trade-frequency-kpis">
-                  <article>
-                    <span>Frequency status</span>
-                    <strong>{weeklyFrequencySummary.status}</strong>
-                    <small>{weeklyFrequencySummary.reason}</small>
-                  </article>
-                  <article>
-                    <span>Sample</span>
-                    <strong>{weeklyFrequencySummary.closedSample} closed</strong>
-                    <small>{weeklyFrequencySummary.activeWeeks} active weeks</small>
-                  </article>
-                  <article>
-                    <span>Latest week</span>
-                    <strong>{weeklyFrequencySummary.latest ? `${weeklyFrequencySummary.latest.openedCount} opened` : "—"}</strong>
-                    <small className={(weeklyFrequencySummary.latest?.totalR || 0) >= 0 ? "trade-positive" : "trade-negative"}>
-                      {weeklyFrequencySummary.latest ? `${weeklyFrequencySummary.latest.closedCount} closed · ${weeklyFrequencySummary.latest.totalR.toFixed(2)}R · ${signedMoney(weeklyFrequencySummary.latest.netPnl)}` : "No trades"}
-                    </small>
-                  </article>
-                  <article>
-                    <span>Drawdown</span>
-                    <strong>
-                      {weeklyFrequencySummary.currentDrawdownR.toFixed(2)}R
-                    </strong>
-                    <small>Max {weeklyFrequencySummary.maxDrawdownR.toFixed(2)}R</small>
-                  </article>
-                </div>
-
-                <div className="trade-frequency-chart-grid">
-                  <section>
-                    <div className="trade-frequency-chart-title">
-                      <strong>Frequency vs quality</strong>
-                      <span>Opened trades vs average R</span>
-                    </div>
-                    <ResponsiveContainer width="100%" height={260}>
-                      <LineChart data={weeklyFrequencyData} margin={{ top: 18, right: 18, bottom: 8, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 5" stroke="rgba(47, 53, 45, 0.14)" vertical={false} />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#6f7469", fontSize: 11, fontWeight: 800 }} minTickGap={18} />
-                        <YAxis
-                          yAxisId="trades"
-                          allowDecimals={false}
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{ fill: "#6f7469", fontSize: 11 }}
-                          width={44}
-                        />
-                        <YAxis
-                          yAxisId="edge"
-                          orientation="right"
-                          domain={[
-                            (dataMin: number) => Math.min(dataMin, 0),
-                            (dataMax: number) => Math.max(dataMax, 0)
-                          ]}
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{ fill: "#6f7469", fontSize: 11 }}
-                          tickFormatter={(value) => `${Number(value).toFixed(1)}R`}
-                          width={54}
-                        />
-                        <ReferenceLine yAxisId="edge" y={0} stroke="rgba(111, 116, 105, 0.34)" strokeDasharray="4 4" />
-                        <Tooltip
-                          contentStyle={chartTooltipStyle}
-                          formatter={(value, name) => {
-                            if (name === "openedCount") return [`${Number(value)} opened trades`, "Trades opened"];
-                            if (name === "avgR") return [`${Number(value).toFixed(2)}R`, "Avg R / closed trade"];
-                            return [String(value), String(name)];
-                          }}
-                          labelFormatter={(label) => `Week: ${label}`}
-                        />
-                        <Line yAxisId="trades" type="monotone" dataKey="openedCount" name="Trades opened" stroke="#8c6a4a" strokeWidth={3} dot={{ r: 4, fill: "#8c6a4a", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                        <Line yAxisId="edge" type="monotone" dataKey="avgR" name="Avg R / closed trade" stroke="#4f7045" strokeWidth={3} dot={{ r: 4, fill: "#4f7045", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </section>
-
-                  <section>
-                    <div className="trade-frequency-chart-title">
-                      <strong>Frequency vs outcome</strong>
-                      <span>Opened trades vs weekly net R</span>
-                    </div>
-                    <ResponsiveContainer width="100%" height={260}>
-                      <LineChart data={weeklyFrequencyData} margin={{ top: 18, right: 18, bottom: 8, left: 0 }}>
-                        <CartesianGrid strokeDasharray="3 5" stroke="rgba(47, 53, 45, 0.14)" vertical={false} />
-                        <XAxis dataKey="label" axisLine={false} tickLine={false} tick={{ fill: "#6f7469", fontSize: 11, fontWeight: 800 }} minTickGap={18} />
-                        <YAxis
-                          yAxisId="trades"
-                          allowDecimals={false}
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{ fill: "#6f7469", fontSize: 11 }}
-                          width={44}
-                        />
-                        <YAxis
-                          yAxisId="edge"
-                          orientation="right"
-                          domain={[
-                            (dataMin: number) => Math.min(dataMin, 0),
-                            (dataMax: number) => Math.max(dataMax, 0)
-                          ]}
-                          axisLine={false}
-                          tickLine={false}
-                          tick={{ fill: "#6f7469", fontSize: 11 }}
-                          tickFormatter={(value) => `${Number(value).toFixed(1)}R`}
-                          width={54}
-                        />
-                        <ReferenceLine yAxisId="edge" y={0} stroke="rgba(111, 116, 105, 0.34)" strokeDasharray="4 4" />
-                        <Tooltip
-                          contentStyle={chartTooltipStyle}
-                          formatter={(value, name) => {
-                            if (name === "openedCount") return [`${Number(value)} opened trades`, "Trades opened"];
-                            if (name === "totalR") return [`${Number(value).toFixed(2)}R`, "Net R from closed trades"];
-                            return [String(value), String(name)];
-                          }}
-                          labelFormatter={(label) => `Week: ${label}`}
-                        />
-                        <Line yAxisId="trades" type="monotone" dataKey="openedCount" name="Trades opened" stroke="#8c6a4a" strokeWidth={3} dot={{ r: 4, fill: "#8c6a4a", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                        <Line yAxisId="edge" type="monotone" dataKey="totalR" name="Net R from closed trades" stroke="#4f7045" strokeWidth={3} dot={{ r: 4, fill: "#4f7045", strokeWidth: 0 }} activeDot={{ r: 6, strokeWidth: 0 }} />
-                      </LineChart>
-                    </ResponsiveContainer>
-                  </section>
-                </div>
-
-                <div className="trade-frequency-legend">
-                  <span><i className="frequency-dot frequency-bar" /> Left axis: trades opened</span>
-                  <span><i className="frequency-dot frequency-net-r" /> Right axis: R from closed trades</span>
-                </div>
-              </article>
+              <PositionSizeChart key={activePortfolio} trades={visibleTrades} portfolio={activePortfolio} startDate={startDate} endDate={endDate} suggestedBudget={activePortfolio === "CF_Statement" && portfolioMeta[activePortfolio]?.currentEquity ? Math.max(0, portfolioMeta[activePortfolio].currentEquity! - ACCOUNT_LOSS_THRESHOLD_DOLLARS) : undefined} />
 
               <div className="trade-chart-row trade-chart-row-two">
                 <article className="trade-chart-panel top-chart">
