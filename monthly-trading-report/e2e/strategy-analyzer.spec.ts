@@ -90,22 +90,18 @@ test("saved criteria drive comparisons, combined subsets and trade evidence with
     name: "Subset performance",
     exact: true
   });
-  const all = subset
-    .getByRole("row")
-    .filter({
-      has: page.getByRole("rowheader", {
-        name: "All scoped trades",
-        exact: true
-      })
-    });
-  const matching = subset
-    .getByRole("row")
-    .filter({
-      has: page.getByRole("rowheader", {
-        name: "Matching criteria",
-        exact: true
-      })
-    });
+  const all = subset.getByRole("row").filter({
+    has: page.getByRole("rowheader", {
+      name: "All scoped trades",
+      exact: true
+    })
+  });
+  const matching = subset.getByRole("row").filter({
+    has: page.getByRole("rowheader", {
+      name: "Matching criteria",
+      exact: true
+    })
+  });
   await expect(all.getByRole("cell").first()).toHaveText("6");
   await expect(all).toContainText("50.0%");
   await expect(all).toContainText("$200.00");
@@ -253,4 +249,110 @@ test("load failures explain the problem and retry recovers; empty data explains 
       name: "Start with a setup and recorded trades"
     })
   ).toBeVisible();
+});
+
+test("performance gaps sort correctly and unrecorded conditions never count as unchecked", async ({
+  page
+}) => {
+  expect(
+    (
+      await page.request.post("/api/login", {
+        data: { userId: "branden", password: process.env.E2E_PASSWORD }
+      })
+    ).status()
+  ).toBe(200);
+  const criteria = [
+    ...analyzerTemplate.criteria,
+    {
+      id: "unrecorded",
+      criteria: "Unrecorded condition",
+      points: 1,
+      inputType: "boolean"
+    }
+  ];
+  const template = {
+    ...analyzerTemplate,
+    id: "analyzer-ranking",
+    setupName: "Analyzer Ranking",
+    criteria,
+    groups: [{ id: "entry", name: "Entry", criteria }]
+  };
+  expect(
+    (
+      await page.request.put("/api/settings/setup-checklists", {
+        data: { setupChecklists: [template] }
+      })
+    ).status()
+  ).toBe(200);
+  for (const trade of analyzerTrades()) {
+    expect(
+      (
+        await page.request.post("/api/trades", {
+          data: {
+            ...trade,
+            importRowKey: `${trade.importRowKey}-ranking`,
+            setupTags: [template.setupName],
+            portfolioTag: "Analyzer Ranking"
+          }
+        })
+      ).status()
+    ).toBe(200);
+  }
+  await page.goto("/journal/branden/strategy-analyzer");
+  await page.getByLabel("Setup / version").selectOption(template.setupName);
+  await page
+    .getByRole("combobox", { name: "Portfolio", exact: true })
+    .selectOption("Analyzer Ranking");
+  const comparisons = page.getByRole("table", {
+    name: "Criterion comparisons",
+    exact: true
+  });
+  await page.getByLabel("Sort by").selectOption("average-r");
+  const rows = comparisons.locator("tbody tr");
+  // Independent fixture arithmetic: trend met = -0.75R; not met = +1R; gap = -1.75R.
+  await expect(rows.first()).toContainText("Trade with trend");
+  await expect(rows.first()).toContainText("-1.75R avg R gap");
+  await expect(rows.last()).toContainText("Unrecorded condition");
+  await page.getByLabel("Sort by").selectOption("win-rate");
+  await expect(rows.first()).toContainText("Volume confirmed");
+  await expect(rows.first()).toContainText("+66.7 pp");
+  await expect(rows.last()).toContainText("Unrecorded condition");
+
+  const subset = page.getByRole("table", {
+    name: "Subset performance",
+    exact: true
+  });
+  const matching = subset.getByRole("row").filter({
+    has: page.getByRole("rowheader", {
+      name: "Matching criteria",
+      exact: true
+    })
+  });
+  const unrecorded = page.getByLabel("Require Entry: Unrecorded condition", {
+    exact: true
+  });
+  await unrecorded.selectOption("not-met");
+  await expect(matching.getByRole("cell").first()).toHaveText("0");
+  await expect(
+    page.getByText("No trades match this combination.", { exact: false })
+  ).toBeVisible();
+  await unrecorded.selectOption("unknown");
+  await expect(matching.getByRole("cell").first()).toHaveText("6");
+  await expect(matching).toContainText("50.0%");
+  await expect(matching).toContainText("$200.00");
+  await page.getByRole("button", { name: "Clear criteria filters" }).click();
+
+  // Entry-date endpoints are inclusive; valid empty scopes keep empty rates as dashes.
+  await page.getByLabel("Entry from", { exact: true }).fill("2026-09-01");
+  await page.getByLabel("Entry through", { exact: true }).fill("2026-09-01");
+  await expect(matching.getByRole("cell").first()).toHaveText("6");
+  await page
+    .getByRole("combobox", { name: "Direction", exact: true })
+    .selectOption("SHORT");
+  await expect(matching.getByRole("cell").first()).toHaveText("0");
+  await expect(matching.getByRole("cell").nth(1)).toHaveText("—");
+  await page
+    .getByRole("combobox", { name: "Direction", exact: true })
+    .selectOption("LONG");
+  await expect(matching.getByRole("cell").first()).toHaveText("6");
 });
