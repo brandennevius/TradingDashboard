@@ -24,6 +24,7 @@ Branden's journal and monthly reports use React. Cam's journal uses HTML and bro
 | [3. Testing](03-testing.md) | How do fixtures, test scripts, assertions, and results fit together? |
 | [4. Feature to release](04-feature-to-release.md) | What goes into a PR, and how does GitHub run the checks? |
 | [5. Environments](05-environments.md) | What differs between development, testing, previews, and production? |
+| [6. Strategy Analyzer](06-strategy-analyzer.md) | How can I compare individual setup criteria and combinations against trade outcomes? |
 
 ## Current coverage and next step
 

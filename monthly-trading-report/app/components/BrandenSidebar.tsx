@@ -62,7 +62,8 @@ const brandenSidebarGroups = [
       { href: "/journal/branden/market-gauge", label: "Market Gauge", icon: <BrandenNavIcon name="gauge" /> },
       { href: "/journal/branden/benchmark", label: "Benchmark", icon: <BrandenNavIcon name="benchmark" /> },
       { href: "/journal/branden/rprp", label: "RPRP Sizer", icon: <BrandenNavIcon name="sizing" /> },
-      { href: "/journal/branden/setup-builder", label: "Setup Builder", icon: <BrandenNavIcon name="setup" /> }
+      { href: "/journal/branden/setup-builder", label: "Setup Builder", icon: <BrandenNavIcon name="setup" /> },
+      { href: "/journal/branden/strategy-analyzer", label: "Strategy Analyzer", icon: <BrandenNavIcon name="benchmark" /> }
     ]
   },
   {
