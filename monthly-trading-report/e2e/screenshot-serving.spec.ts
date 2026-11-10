@@ -44,10 +44,18 @@ test("signed screenshot routes preserve owner checks, image rendering and same-o
   } finally {await new Promise<void>(resolve=>imageServer.close(()=>resolve()));}
   // A legacy bytea row also remains fetchable for backups with direct serving on.
   const db=new Client({connectionString:process.env.DATABASE_URL,ssl:false});await db.connect();
-  try {await db.query("update trade_screenshots set storage_path=null where id='trade-shot'");}
+  try {
+    await db.query("update trade_screenshots set storage_path=null where id='trade-shot'");
+    await db.query("update cam_journal_screenshots set storage_path=null");
+  }
   finally {await db.end();}
   const fetched=await page.evaluate(async url=>{
     const response=await fetch(url);return {status:response.status,redirected:response.redirected,bytes:(await response.arrayBuffer()).byteLength};
   },tradeUrl);
   expect(fetched).toEqual({status:200,redirected:false,bytes:png.length});
+  for(const path of ['/api/cam-journal/screenshots/shared-shot','/api/watchlists/screenshots/watch-shot']) {
+    const response=await page.request.get(path);expect(response.status()).toBe(200);
+    expect(response.headers()['content-disposition']).toMatch(/^inline; filename="[\x20-\x7E]+"$/);
+    expect(await response.body()).toEqual(png);
+  }
 });

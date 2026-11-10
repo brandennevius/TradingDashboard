@@ -66,6 +66,11 @@ export function shouldRedirectScreenshot(request: Request) {
     (!destination && /^image\//i.test(request.headers.get("accept") || ""));
 }
 
+export function screenshotContentDisposition(fileName: string, fallback = "screenshot") {
+  const safeName = fileName.normalize("NFKD").replace(/[^\x20-\x7E]|["\\\r\n]/g, "_") || fallback;
+  return `inline; filename="${safeName}"`;
+}
+
 /** Call only after authorizing the metadata owner. Never fetches image bytes. */
 export async function privateScreenshotRedirect(source: {
   storage_path?: string | null; image_sha256?: string | null; image_bytes?: string | number | null;
@@ -77,12 +82,11 @@ export async function privateScreenshotRedirect(source: {
       !Number.isSafeInteger(Number(source.image_bytes)) || Number(source.image_bytes) <= 0) throw new Error("Invalid screenshot integrity metadata.");
   // Keep active formats such as SVG on the existing proxy path.
   if (!/^image\/(png|jpeg|gif|webp|avif|bmp)$/i.test(source.mime_type)) return null;
-  const safeName = source.file_name.normalize("NFKD").replace(/[^\x20-\x7E]|["\\\r\n]/g, "_") || "screenshot";
   const { client, bucket } = storage();
   const url = await getSignedUrl(client,new GetObjectCommand({
     Bucket:bucket, Key:source.storage_path,
     ResponseContentType:source.mime_type,
-    ResponseContentDisposition:`inline; filename="${safeName}"`,
+    ResponseContentDisposition:screenshotContentDisposition(source.file_name),
     ResponseCacheControl:"private, no-store"
   }),{expiresIn:60});
   return new Response(null,{status:307,headers:{Location:url,"Cache-Control":"private, no-store",

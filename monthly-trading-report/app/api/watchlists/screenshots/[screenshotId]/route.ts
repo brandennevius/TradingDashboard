@@ -1,4 +1,4 @@
-import { privateScreenshotRedirect, shouldRedirectScreenshot } from "@/lib/screenshot-storage";
+import { privateScreenshotRedirect, shouldRedirectScreenshot, screenshotContentDisposition } from "@/lib/screenshot-storage";
 import { getCamJournalScreenshotMetadata } from "@/lib/store";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
@@ -26,7 +26,7 @@ export async function GET(
   return new NextResponse(new Uint8Array(screenshot.imageData), {
     headers: {
       "Content-Type": screenshot.mimeType,
-      "Content-Disposition": `inline; filename="${screenshot.fileName.replace(/["\\\r\n]/g, "_") || "watchlist-screenshot"}"`,
+      "Content-Disposition": screenshotContentDisposition(screenshot.fileName),
       "Cache-Control": "private, no-store",
       "X-Content-Type-Options": "nosniff"
     }

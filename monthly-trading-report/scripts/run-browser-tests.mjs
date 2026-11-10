@@ -40,7 +40,7 @@ try {
       await testDatabase.query(`create table ${testSchema}.${table}(id text primary key,${owners},file_name text,mime_type text,image_data bytea,storage_path text,image_sha256 text,image_bytes bigint,created_at timestamptz default now())`);
     }
     await testDatabase.query(`insert into ${testSchema}.trade_screenshots values ('trade-shot','trade-1','branden','chart.png','image/png',$1,$2,$3,$4,now())`,[png,`trade_screenshots/trade-shot/${hash}`,hash,png.length]);
-    for (const [id,type] of [["shared-shot","setup"],["watch-shot","watchlist-item"]]) await testDatabase.query(`insert into ${testSchema}.cam_journal_screenshots values ($1,$2,'entity','chart.png','image/png',$3,$4,$5,$6,now())`,[id,type,png,`cam_journal_screenshots/${id}/${hash}`,hash,png.length]);
+    for (const [id,type] of [["shared-shot","setup"],["watch-shot","watchlist-item"]]) await testDatabase.query(`insert into ${testSchema}.cam_journal_screenshots values ($1,$2,'entity','chart\u202f.png','image/png',$3,$4,$5,$6,now())`,[id,type,png,`cam_journal_screenshots/${id}/${hash}`,hash,png.length]);
   }
   const args=process.argv.slice(2).filter(arg=>arg!=="--screenshot-routes");
   const child = spawn(process.execPath, ["node_modules/@playwright/test/cli.js", "test", ...args],
