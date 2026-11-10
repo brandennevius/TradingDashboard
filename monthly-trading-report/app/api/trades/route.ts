@@ -1,3 +1,4 @@
+import { privateJsonResponse } from "@/lib/private-json-response";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { listTrades, upsertTrade } from "@/lib/store";
@@ -88,7 +89,7 @@ function tradeStatus(value: unknown): TradeStatus {
   return value === "WIN" || value === "LOSS" || value === "BREAKEVEN" ? value : "OPEN";
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   const user = await getSessionUser();
 
   if (!user) {
@@ -97,7 +98,7 @@ export async function GET() {
 
   try {
     const trades = await listTrades();
-    return NextResponse.json({ trades });
+    return privateJsonResponse(request, { trades });
   } catch (error) {
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Could not load trades." },
@@ -170,7 +171,9 @@ export async function POST(request: Request) {
   };
 
   try {
-    const result = await upsertTrade(input);
+    const requestKey = request.headers.get("idempotency-key") || undefined;
+    if (requestKey && !/^[a-f0-9-]{36}$/i.test(requestKey)) return NextResponse.json({error:"Invalid request key."},{status:400});
+    const result = await upsertTrade(input, requestKey);
     return NextResponse.json(result);
   } catch (error) {
     return NextResponse.json(

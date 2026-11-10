@@ -186,7 +186,7 @@ export default function BrandenSettingsPage() {
         fetch("/api/session", { cache: "no-store" }),
         fetch("/api/settings/branden-portfolios", { cache: "no-store" }),
         fetch("/api/settings/branden-columns", { cache: "no-store" }),
-        fetch("/api/trades", { cache: "no-store" })
+        fetch("/api/trades", { cache: "no-cache" })
       ]);
 
       const sessionData = await sessionResponse.json().catch(() => ({}));

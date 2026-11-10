@@ -1755,6 +1755,24 @@ export default function Home() {
   const [selectedHiddenTradeIds, setSelectedHiddenTradeIds] = useState<string[]>([]);
   const [fullscreenScreenshot, setFullscreenScreenshot] = useState<{ src: string; alt: string } | null>(null);
   const [isTradeModalOpen, setIsTradeModalOpen] = useState(false);
+  const pendingTradeFiles = useRef(new Map<string, {file:File; key:string}>());
+  const tradeRequestKey = useRef("");
+  const savedDraftTradeId = useRef("");
+  const tradeSaveInFlight = useRef(false);
+  useEffect(() => {
+    const pending = pendingTradeFiles.current;
+    return () => { for (const url of pending.keys()) URL.revokeObjectURL(url); };
+  }, []);
+
+
+  function resetTradeDraft() {
+    for (const url of pendingTradeFiles.current.keys()) URL.revokeObjectURL(url);
+    pendingTradeFiles.current.clear();
+    tradeRequestKey.current = "";
+    savedDraftTradeId.current = "";
+    setTradeForm(emptyTradeForm);
+  }
+
   const [newMistakeDraft, setNewMistakeDraft] = useState({ create: "", edit: "" });
   const [newCustomTagDraft, setNewCustomTagDraft] = useState({ create: "", edit: "" });
   const [setupTemplates, setSetupTemplates] = useState<SetupChecklistTemplate[]>([]);
@@ -2328,7 +2346,7 @@ export default function Home() {
   }
 
   async function loadTrades() {
-    const response = await fetch("/api/trades", { cache: "no-store" });
+    const response = await fetch("/api/trades", { cache: "no-cache" });
     const text = await response.text();
     const data = text ? JSON.parse(text) : {};
 
@@ -3578,21 +3596,18 @@ export default function Home() {
   }
 
   async function attachTradeScreenshots(files: FileList | null) {
-    if (!files?.length) {
-      return;
+    if (!files?.length) return;
+    const urls: string[] = [];
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith("image/") || file.size > 3_500_000) {
+        setStatus("Choose image files smaller than 3.5 MB each.");
+        continue;
+      }
+      const url = URL.createObjectURL(file);
+      pendingTradeFiles.current.set(url, {file, key:crypto.randomUUID()});
+      urls.push(url);
     }
-
-    const reads = Array.from(files).map(
-      (file) =>
-        new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result || ""));
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(file);
-        })
-    );
-    const screenshots = await Promise.all(reads);
-    setTradeForm((current) => ({ ...current, screenshots: [...current.screenshots, ...screenshots] }));
+    setTradeForm(current => ({...current,screenshots:[...current.screenshots,...urls]}));
   }
 
   async function attachEditTradeScreenshots(files: FileList | null) {
@@ -3953,32 +3968,46 @@ export default function Home() {
 
   async function saveTrade(event: FormEvent) {
     event.preventDefault();
+    if (tradeSaveInFlight.current) return;
+    tradeSaveInFlight.current = true;
     setStatus("Saving trade...");
-
-    if (tradeForm.portfolioTag.trim() && !savedPortfolios.includes(tradeForm.portfolioTag.trim())) {
-      const savedPortfolioList = await saveBrandenPortfolios([...savedPortfolios, tradeForm.portfolioTag.trim()]);
-
-      if (!savedPortfolioList) {
-        return;
+    try {
+      if (tradeForm.portfolioTag.trim() && !savedPortfolios.includes(tradeForm.portfolioTag.trim())) {
+        if (!await saveBrandenPortfolios([...savedPortfolios,tradeForm.portfolioTag.trim()])) return;
       }
-    }
-
-    const response = await fetch("/api/trades", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(tradePayloadFromForm(tradeForm))
-    });
-    const data = await response.json();
-
-    if (!response.ok) {
-      setStatus(data.error || "Could not save trade.");
-      return;
-    }
-
-    setStatus(`${tradeForm.symbol.toUpperCase()} trade saved.`);
-    setTradeForm(emptyTradeForm);
-    setIsTradeModalOpen(false);
-    await loadTrades();
+      tradeRequestKey.current ||= crypto.randomUUID();
+      const payload = tradePayloadFromForm(tradeForm);
+      payload.screenshots = payload.screenshots.filter(value => !value.startsWith("blob:"));
+      const draftId = savedDraftTradeId.current;
+      const response = await fetch(draftId ? `/api/trades/${encodeURIComponent(draftId)}` : "/api/trades", {
+        method:draftId ? "PUT" : "POST",
+        headers:{"Content-Type":"application/json","Idempotency-Key":tradeRequestKey.current},
+        body:JSON.stringify(payload)
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not save trade.");
+      const tradeId = draftId || data.trade?.id;
+      if (!tradeId) throw new Error("Saved trade response has no ID.");
+      savedDraftTradeId.current = tradeId;
+      for (const [url, pending] of pendingTradeFiles.current) {
+        if (!tradeForm.screenshots.includes(url)) continue;
+        setStatus("Trade saved. Uploading screenshots...");
+        const formData = new FormData(); formData.append("file",pending.file);
+        const upload = await fetch(`/api/trades/${encodeURIComponent(tradeId)}/screenshots`, {
+          method:"POST",headers:{"Idempotency-Key":pending.key},body:formData
+        });
+        const result = await upload.json();
+        if (!upload.ok || !result.url) throw new Error(result.error || "Screenshot upload failed.");
+        setTradeForm(current => ({...current,screenshots:current.screenshots.map(value => value===url ? result.url : value)}));
+        pendingTradeFiles.current.delete(url); URL.revokeObjectURL(url);
+      }
+      setStatus(`${tradeForm.symbol.toUpperCase()} trade saved.`);
+      resetTradeDraft(); setIsTradeModalOpen(false);
+      await loadTrades();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not save trade.";
+      setStatus(savedDraftTradeId.current ? `Trade saved; remaining screenshots need retry. ${message} Click Save to retry.` : message);
+    } finally {tradeSaveInFlight.current=false;}
   }
 
   async function saveTradeEdit(event: FormEvent) {
@@ -6383,7 +6412,7 @@ export default function Home() {
                 ) : null}
                 <div className="form-actions">
                   <button type="submit">Save trade</button>
-                  <button className="trade-muted-button" type="button" onClick={() => setTradeForm(emptyTradeForm)}>
+                  <button className="trade-muted-button" type="button" onClick={resetTradeDraft}>
                     Clear
                   </button>
                   {status ? <span className="status">{status}</span> : null}

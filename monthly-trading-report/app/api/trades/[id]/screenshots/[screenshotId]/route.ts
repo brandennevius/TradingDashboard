@@ -1,9 +1,11 @@
+import { privateScreenshotRedirect, shouldRedirectScreenshot } from "@/lib/screenshot-storage";
+import { getTradeScreenshotMetadata } from "@/lib/store";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { getTradeScreenshot } from "@/lib/store";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string; screenshotId: string }> }
 ) {
   const user = await getSessionUser();
@@ -13,6 +15,12 @@ export async function GET(
   }
 
   const { id, screenshotId } = await context.params;
+  if (shouldRedirectScreenshot(request)) {
+    const metadata = await getTradeScreenshotMetadata(screenshotId);
+    if (!metadata || metadata.trade_id !== id || metadata.user_id !== (user.journalOwnerId || user.id)) return NextResponse.json({error:"Screenshot not found."},{status:404});
+    const redirect = await privateScreenshotRedirect(metadata);
+    if (redirect) return redirect;
+  }
   const screenshot = await getTradeScreenshot(screenshotId);
   const allowedOwnerId = user.journalOwnerId || user.id;
 

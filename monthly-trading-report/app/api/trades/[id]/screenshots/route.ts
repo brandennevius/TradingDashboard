@@ -28,7 +28,9 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   }
 
   try {
-    const saved = await saveTradeScreenshot(id, user.id, file.name, file.type, Buffer.from(await file.arrayBuffer()));
+    const uploadKey = request.headers.get("idempotency-key") || undefined;
+    if (uploadKey && !/^[a-f0-9-]{36}$/i.test(uploadKey)) return NextResponse.json({error:"Invalid upload key."},{status:400});
+    const saved = await saveTradeScreenshot(id, user.id, file.name, file.type, Buffer.from(await file.arrayBuffer()), uploadKey);
     return NextResponse.json(saved);
   } catch (error) {
     return NextResponse.json(

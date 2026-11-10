@@ -1,15 +1,23 @@
+import { privateScreenshotRedirect, shouldRedirectScreenshot } from "@/lib/screenshot-storage";
+import { getCamJournalScreenshotMetadata } from "@/lib/store";
 import { NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { deleteCamJournalScreenshot, getCamJournalScreenshot } from "@/lib/store";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ screenshotId: string }> }
 ) {
   const user = await getSessionUser();
   if (!user) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
 
   const { screenshotId } = await context.params;
+  if (shouldRedirectScreenshot(request)) {
+    const metadata = await getCamJournalScreenshotMetadata(screenshotId);
+    if (!metadata) return NextResponse.json({error:"Screenshot not found."},{status:404});
+    const redirect = await privateScreenshotRedirect(metadata);
+    if (redirect) return redirect;
+  }
   const screenshot = await getCamJournalScreenshot(screenshotId);
   if (!screenshot) return NextResponse.json({ error: "Screenshot not found." }, { status: 404 });
 

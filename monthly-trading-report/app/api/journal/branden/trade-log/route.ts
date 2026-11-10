@@ -1,3 +1,4 @@
+import { privateJsonResponse } from "@/lib/private-json-response";
 import { NextResponse } from "next/server";
 import { createApiTimer } from "@/lib/apiTiming";
 import { getSessionUser } from "@/lib/auth";
@@ -8,7 +9,7 @@ import {
   listBrandenVisibleTrades
 } from "@/lib/store";
 
-export async function GET() {
+export async function GET(request: Request) {
   const logTiming = createApiTimer("/api/journal/branden/trade-log");
   const user = await getSessionUser();
 
@@ -31,7 +32,7 @@ export async function GET() {
       preferences: Array.isArray(preferences) ? preferences.length : 0
     });
 
-    return NextResponse.json({
+    return privateJsonResponse(request, {
       user,
       trades,
       portfolios: portfolioSettings.portfolios,

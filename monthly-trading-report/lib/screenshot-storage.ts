@@ -1,6 +1,7 @@
 import { GetObjectCommand, paginateListObjectsV2, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import sharp from "sharp";
 import { createHash } from "node:crypto";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 export type ScreenshotTable = "trade_screenshots" | "cam_journal_screenshots";
 export type ImageSource = {
@@ -55,6 +56,37 @@ function validatePath(path: string) {
   if (!/^(trade_screenshots|cam_journal_screenshots)\/[A-Za-z0-9_-]+\/[a-f0-9]{64}$/.test(path)) {
     throw new Error("Invalid screenshot Storage path.");
   }
+}
+
+/** Browser fetch/backup requests stay same-origin; only image views redirect. */
+export function shouldRedirectScreenshot(request: Request) {
+  if (process.env.SCREENSHOT_DIRECT_SERVING !== "enabled" || new URL(request.url).searchParams.get("proxy") === "1") return false;
+  const destination = request.headers.get("sec-fetch-dest");
+  return destination === "image" || destination === "document" ||
+    (!destination && /^image\//i.test(request.headers.get("accept") || ""));
+}
+
+/** Call only after authorizing the metadata owner. Never fetches image bytes. */
+export async function privateScreenshotRedirect(source: {
+  storage_path?: string | null; image_sha256?: string | null; image_bytes?: string | number | null;
+  mime_type: string; file_name: string;
+}) {
+  if (process.env.SCREENSHOT_DIRECT_SERVING !== "enabled" || !source.storage_path) return null;
+  validatePath(source.storage_path);
+  if (!source.image_sha256 || !source.storage_path.endsWith(`/${source.image_sha256}`) ||
+      !Number.isSafeInteger(Number(source.image_bytes)) || Number(source.image_bytes) <= 0) throw new Error("Invalid screenshot integrity metadata.");
+  // Keep active formats such as SVG on the existing proxy path.
+  if (!/^image\/(png|jpeg|gif|webp|avif|bmp)$/i.test(source.mime_type)) return null;
+  const safeName = source.file_name.normalize("NFKD").replace(/[^\x20-\x7E]|["\\\r\n]/g, "_") || "screenshot";
+  const { client, bucket } = storage();
+  const url = await getSignedUrl(client,new GetObjectCommand({
+    Bucket:bucket, Key:source.storage_path,
+    ResponseContentType:source.mime_type,
+    ResponseContentDisposition:`inline; filename="${safeName}"`,
+    ResponseCacheControl:"private, no-store"
+  }),{expiresIn:60});
+  return new Response(null,{status:307,headers:{Location:url,"Cache-Control":"private, no-store",
+    "Vary":"Cookie", "Referrer-Policy":"no-referrer", "X-Content-Type-Options":"nosniff"}});
 }
 
 export async function encodeNewScreenshot(fileName: string, mimeType: string, bytes: Buffer) {

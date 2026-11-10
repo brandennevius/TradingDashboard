@@ -1,3 +1,4 @@
+import { hasInlineImages, writeTradeWithInlineScreenshots } from "./inline-trade-screenshots";
 import { encodeNewScreenshot, prepareImage, readStoredImage, sharedScreenshotIds, imageHash, type ScreenshotTable, type ImageSource } from "./screenshot-storage";
 import { IBKR_SOURCE, IbkrImportError, mergeIbkrData, buildIbkrTrades, ibkrDate, ibkrSnapshotPositions, type IbkrFlexData } from "./ibkr-flex";
 import fs from "fs/promises";
@@ -455,7 +456,10 @@ function executionSourceKeys(executions: TradeExecution[] | undefined) {
   );
 }
 
-function stableTradeId(input: TradeLogInput) {
+function stableTradeId(input: TradeLogInput, requestKey?: string) {
+  if (requestKey && !input.importSource.trim() && !input.importRowKey.trim()) {
+    return `${input.userId}-${crypto.createHash("sha256").update(JSON.stringify([input.userId,requestKey])).digest("hex")}`;
+  }
   if (input.importSource.trim() && input.importRowKey.trim()) {
     const hash = crypto
       .createHash("sha1")
@@ -3265,7 +3269,7 @@ export async function replaceCfStatementImport(
   }
 }
 
-export async function upsertTrade(input: TradeLogInput) {
+export async function upsertTrade(input: TradeLogInput, requestKey?: string) {
   const now = new Date().toISOString();
   const db = getPool();
   const hasImportKey = Boolean(input.importSource.trim() && input.importRowKey.trim());
@@ -3285,6 +3289,10 @@ export async function upsertTrade(input: TradeLogInput) {
             trade.importRowKey === input.importRowKey
         )
       : null;
+    if (requestKey && !hasImportKey) {
+      const prior = trades.find(trade => trade.id === stableTradeId(input, requestKey));
+      if (prior) return {trade:prior,mode:"updated"} as const;
+    }
     const isContinuation = Boolean(isCfImport && isCfBaselineRow(input.importRowKey) && !existing);
     if (isContinuation) {
       existing = await findExistingOpenCfTradeForContinuation(
@@ -3313,7 +3321,7 @@ export async function upsertTrade(input: TradeLogInput) {
           ? mergeCfContinuationIntoOpenTrade(existing, input)
           : mergeCfImportIntoExisting(existing, input, preserveBrokerFields)
         : input;
-    const id = existing?.id || stableTradeId(input);
+    const id = existing?.id || stableTradeId(input, requestKey);
     const next: TradeLogEntry = {
       ...mergedInput,
       importSource: mergedInput.importSource || "",
@@ -3345,7 +3353,7 @@ export async function upsertTrade(input: TradeLogInput) {
   }
 
   await ensureTradeTable();
-  let id = stableTradeId(input);
+  let id = stableTradeId(input, requestKey);
   let existingImportedTradeId = "";
   let existingImportedTrade: TradeLogEntry | null = null;
   let isContinuation = false;
@@ -3395,7 +3403,7 @@ export async function upsertTrade(input: TradeLogInput) {
   }
 
   if (!existingImportedTradeId) {
-    id = stableTradeId(input);
+    id = stableTradeId(input, requestKey);
   }
 
   const preserveBrokerFields = Boolean(
@@ -3456,7 +3464,9 @@ export async function upsertTrade(input: TradeLogInput) {
     "none"
   ];
 
-  const result = await db.query(
+  if (hasInlineImages(mergedInput.screenshots)) await ensureTradeScreenshotTable();
+  const result = await writeTradeWithInlineScreenshots(
+    db, id, mergedInput.userId, mergedInput.screenshots, 33,
     `
       insert into trade_logs (
         id, user_id, import_source, import_row_key, symbol, side, status, entry_date, exit_date, open_time, close_time, avg_entry, exit_price,
@@ -3468,7 +3478,7 @@ export async function upsertTrade(input: TradeLogInput) {
         $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
         $21, $22, $23, $24::jsonb, $25::jsonb, $26::jsonb, $27, $28, $29, $30, $31::jsonb, $32, $33::jsonb, $34::jsonb, $35::jsonb, $36::jsonb, $37, $38, $39
       )
-      on conflict (id) do update set
+      ${requestKey && !hasImportKey ? "on conflict (id) do update set id = trade_logs.id" : `on conflict (id) do update set
         import_source = excluded.import_source,
         import_row_key = excluded.import_row_key,
         symbol = excluded.symbol,
@@ -3506,7 +3516,7 @@ export async function upsertTrade(input: TradeLogInput) {
         hidden = case when excluded.import_source = 'manual-combine' then excluded.hidden else trade_logs.hidden end,
         group_id = '',
         group_role = 'none',
-        updated_at = now()
+        updated_at = now()`}
       returning ${tradeColumns};
     `,
     values
@@ -3605,7 +3615,9 @@ export async function updateTrade(id: string, userId: string, input: TradeLogInp
     JSON.stringify(input.executions || [])
   ];
 
-  const result = await db.query(
+  if (hasInlineImages(input.screenshots)) await ensureTradeScreenshotTable();
+  const result = await writeTradeWithInlineScreenshots(
+    db, id, userId, input.screenshots, 32,
     `
       update trade_logs set
         import_source = $3,
@@ -4080,7 +4092,8 @@ export async function saveTradeScreenshot(
   userId: string,
   fileName: string,
   mimeType: string,
-  imageData: Buffer
+  imageData: Buffer,
+  uploadKey?: string
 ) {
   const db = getPool();
 
@@ -4092,7 +4105,7 @@ export async function saveTradeScreenshot(
   await ensureTradeScreenshotTable();
   const encoded = await encodeNewScreenshot(fileName, mimeType, imageData);
   const client = await db.connect();
-  const id = crypto.randomUUID();
+  const id = uploadKey ? crypto.createHash("sha256").update(JSON.stringify([tradeId,userId,uploadKey])).digest("hex") : crypto.randomUUID();
   const url = `/api/trades/${encodeURIComponent(tradeId)}/screenshots/${encodeURIComponent(id)}`;
 
   try {
@@ -4106,9 +4119,16 @@ export async function saveTradeScreenshot(
       throw new Error("Trade not found.");
     }
 
-    await insertScreenshot(client, "trade_screenshots", [id, tradeId, userId, encoded.fileName, encoded.mimeType, encoded.bytes]);
+    const existing = await client.query("select trade_id,user_id,image_sha256,image_data from trade_screenshots where id=$1", [id]);
+    if (existing.rows[0]) {
+      const row = existing.rows[0];
+      const hash = row.image_sha256 || (row.image_data && imageHash(row.image_data));
+      if (row.trade_id !== tradeId || row.user_id !== userId || hash !== imageHash(encoded.bytes)) throw new Error("Upload retry does not match the original screenshot.");
+    } else {
+      await insertScreenshot(client, "trade_screenshots", [id, tradeId, userId, encoded.fileName, encoded.mimeType, encoded.bytes]);
+    }
     await client.query(
-      "update trade_logs set screenshots = coalesce(screenshots, '[]'::jsonb) || jsonb_build_array($3::text), updated_at = now() where id = $1 and user_id = $2",
+      "update trade_logs set screenshots = coalesce(screenshots, '[]'::jsonb) || jsonb_build_array($3::text), updated_at = now() where id = $1 and user_id = $2 and not coalesce(screenshots, '[]'::jsonb) @> jsonb_build_array($3::text)",
       [tradeId, userId, url]
     );
     await client.query("commit");
@@ -4483,4 +4503,20 @@ export async function importIbkrFlexStatement(userId: string, portfolioTag: stri
     return plan.result;
   } catch(error) { await client.query("rollback"); throw error; }
   finally { client.release(); }
+}
+
+export async function getTradeScreenshotMetadata(id: string) {
+  const db = getPool();
+  if (!db) return null;
+  const result = await db.query<{id:string; storage_path:string|null; image_sha256:string|null; image_bytes:string|null; file_name:string; mime_type:string; trade_id:string; user_id:string }>(
+    "select id, trade_id, user_id, file_name, mime_type, storage_path, image_sha256, image_bytes from trade_screenshots where id=$1", [id]);
+  return result.rows[0] || null;
+}
+
+export async function getCamJournalScreenshotMetadata(id: string) {
+  const db = getPool();
+  if (!db) return null;
+  const result = await db.query<{id:string; storage_path:string|null; image_sha256:string|null; image_bytes:string|null; file_name:string; mime_type:string; entity_type:string; entity_id:string }>(
+    "select id, entity_type, entity_id, file_name, mime_type, storage_path, image_sha256, image_bytes from cam_journal_screenshots where id=$1", [id]);
+  return result.rows[0] || null;
 }

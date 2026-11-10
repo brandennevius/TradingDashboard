@@ -218,7 +218,7 @@ export default function BrandenDashboardPage() {
     async function loadDashboard() {
       setIsLoading(true);
       setError("");
-      const response = await fetch("/api/journal/branden/trade-log", { cache: "no-store" });
+      const response = await fetch("/api/journal/branden/trade-log", { cache: "no-cache" });
       const data = (await response.json().catch(() => ({}))) as DashboardResponse;
 
       if (cancelled) return;

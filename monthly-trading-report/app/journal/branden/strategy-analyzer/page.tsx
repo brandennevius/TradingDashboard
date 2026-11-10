@@ -88,7 +88,7 @@ export default function StrategyAnalyzerPage() {
     setLoading(true);
     setError("");
     fetch("/api/journal/branden/trade-log", {
-      cache: "no-store",
+      cache: "no-cache",
       signal: controller.signal
     })
       .then(async (response) => {

@@ -471,7 +471,7 @@ export default function BrandenTradeLogPage() {
       setIsLoading(true);
       setError("");
 
-      const tradeLogResponse = await fetch("/api/journal/branden/trade-log", { cache: "no-store" });
+      const tradeLogResponse = await fetch("/api/journal/branden/trade-log", { cache: "no-cache" });
       const tradeLogData = await tradeLogResponse.json().catch(() => ({}));
 
       if (cancelled) {
