@@ -46,15 +46,25 @@ import type { TradeExcursionResult } from "./trade-excursion";
 let pool: Pool | null = null;
 
 export function getPool() {
-  if (!process.env.DATABASE_URL) {
+  const configuredUrl = process.env.DATABASE_URL;
+  if (!configuredUrl) {
     return null;
   }
 
   if (!pool) {
+    const databaseUrl = new URL(configuredUrl);
+    const useTransactionPooler = process.env.NODE_ENV === "production" &&
+      databaseUrl.hostname.endsWith(".pooler.supabase.com") &&
+      (databaseUrl.port === "" || databaseUrl.port === "5432");
+    if (useTransactionPooler) {
+      // Serverless instances share backend connections through transaction mode.
+      databaseUrl.port = "6543";
+    }
     pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
+      connectionString: useTransactionPooler ? databaseUrl.toString() : configuredUrl,
+      ssl: configuredUrl.includes("localhost") ? false : { rejectUnauthorized: false }
     });
+    if (useTransactionPooler) console.info("Database pool: Supabase transaction mode (6543)");
   }
 
   return pool;
