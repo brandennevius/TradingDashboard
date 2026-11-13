@@ -6,7 +6,7 @@ import test from "node:test";
 import { Client } from "pg";
 import { readFile } from "node:fs/promises";
 import { trade } from "./fixtures/trade-review-export";
-import { copyImageToStorage } from "../lib/screenshot-storage";
+import { copyImageToStorage, ScreenshotPixelLimitError } from "../lib/screenshot-storage";
 
 const databaseUrl = process.env.BACKUP_TEST_DATABASE_URL;
 
@@ -56,6 +56,16 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
     assert.ok(sharedImage);
     assert.equal((await sharp(sharedImage.imageData).metadata()).format, "jpeg");
     const jpegBytes = sharedImage.imageData;
+    // A rejected oversized image must not upload objects, insert rows, or append references.
+    const oversized = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="8001" height="5000"><rect width="100%" height="100%" fill="#567"/></svg>');
+    const objectsBefore = r2.objects.size;
+    const referencesBefore = await pool.query("select screenshots from trade_logs where id=$1", [original.id]);
+    const rowsBefore = await pool.query("select count(*)::int as count from cam_journal_screenshots");
+    await assert.rejects(store.saveTradeScreenshot(original.id, "branden", "large.svg", "image/svg+xml", oversized), ScreenshotPixelLimitError);
+    await assert.rejects(store.saveCamJournalScreenshot("watchlist-item", "large-example", "large.svg", "image/svg+xml", oversized), ScreenshotPixelLimitError);
+    assert.equal(r2.objects.size, objectsBefore);
+    assert.deepEqual((await pool.query("select screenshots from trade_logs where id=$1", [original.id])).rows, referencesBefore.rows);
+    assert.deepEqual((await pool.query("select count(*)::int as count from cam_journal_screenshots")).rows, rowsBefore.rows);
     await store.saveCamJournalState({ trades: [{ id: "live-1" }] });
     await pool.query("insert into app_settings(key,value) values ('setup_checklist_templates',$1::jsonb)",
       [JSON.stringify({ versions: [{ shots: [shared.url] }] })]);
