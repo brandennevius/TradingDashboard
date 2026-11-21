@@ -1748,6 +1748,17 @@ export default function Home() {
   const pendingImportPortfolioRef = useRef("");
   const [columnPreferences, setColumnPreferences] = useState<Record<string, BrandenColumnPreference[]>>({});
   const [selectedTradeId, setSelectedTradeId] = useState("");
+  const screenshotTradeRef = useRef(selectedTradeId);
+  const screenshotUploadLock = useRef(false);
+  const screenshotOnlyUpdateRef = useRef("");
+  const screenshotDragDepth = useRef(0);
+  const [isDraggingScreenshot, setIsDraggingScreenshot] = useState(false);
+  const [screenshotUpload, setScreenshotUpload] = useState({ tradeId: "", busy: false, message: "", error: false });
+  useEffect(() => {
+    screenshotTradeRef.current = selectedTradeId;
+    screenshotDragDepth.current = 0;
+    setIsDraggingScreenshot(false);
+  }, [selectedTradeId]);
   const [selectedTradeIds, setSelectedTradeIds] = useState<string[]>([]);
   const [selectedTradeExcursion, setSelectedTradeExcursion] = useState<TradeExcursionResult | null>(null);
   const [isTradeExcursionLoading, setIsTradeExcursionLoading] = useState(false);
@@ -2218,7 +2229,9 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (selectedTrade) {
+    const screenshotOnlyTradeId = screenshotOnlyUpdateRef.current;
+    screenshotOnlyUpdateRef.current = "";
+    if (selectedTrade && selectedTrade.id !== screenshotOnlyTradeId) {
       setEditTradeForm(tradeToForm(selectedTrade, setupTemplates));
     }
   }, [selectedTrade, setupTemplates]);
@@ -3610,45 +3623,49 @@ export default function Home() {
     setTradeForm(current => ({...current,screenshots:[...current.screenshots,...urls]}));
   }
 
-  async function attachEditTradeScreenshots(files: FileList | null) {
-    if (!files?.length || !selectedTrade) {
+  async function attachEditTradeScreenshots(files: FileList | File[] | null) {
+    if (!files?.length || !selectedTrade || selectedTrade.userId !== user?.id || user.readOnly || screenshotUploadLock.current) return;
+    const activeTradeId = selectedTrade.id;
+    const images = Array.from(files);
+    const invalid = images.find(file => !file.type.startsWith("image/") || file.size > 3_500_000);
+    if (invalid) {
+      setScreenshotUpload({ tradeId: activeTradeId, busy: false, error: true,
+        message: `${invalid.name}: choose an image smaller than 3.5 MB. No files were uploaded.` });
       return;
     }
-
-    const activeTradeId = selectedTrade.id;
-    const uploadedUrls: string[] = [];
-
-    for (const [index, file] of Array.from(files).entries()) {
-      setStatus(`Saving screenshot ${index + 1} of ${files.length}...`);
-      const formData = new FormData();
-      formData.append("file", file);
-      const response = await fetch(`/api/trades/${activeTradeId}/screenshots`, {
-        method: "POST",
-        body: formData
-      });
-      const data = await response.json().catch(() => ({}));
-
-      if (!response.ok || !data.url) {
-        setStatus(data.error || `Could not save screenshot ${index + 1}.`);
-        return;
+    screenshotUploadLock.current = true;
+    let saved = 0;
+    try {
+      for (const [index, file] of images.entries()) {
+        setScreenshotUpload({ tradeId: activeTradeId, busy: true, error: false,
+          message: `Saving image ${index + 1} of ${images.length}…` });
+        const formData = new FormData();
+        formData.append("file", file);
+        const response = await fetch(`/api/trades/${encodeURIComponent(activeTradeId)}/screenshots`, {
+          method: "POST", body: formData,
+          headers: { "Idempotency-Key": crypto.randomUUID() },
+          signal: AbortSignal.timeout(90_000)
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok || !data.url) throw new Error(data.error || `Could not save ${file.name}.`);
+        const url = String(data.url);
+        // Each successful upload is already persisted by the API, even if a later file fails.
+        screenshotOnlyUpdateRef.current = activeTradeId;
+        setTrades(current => current.map(trade => trade.id === activeTradeId
+          ? { ...trade, screenshots: Array.from(new Set([...trade.screenshots, url])) } : trade));
+        if (screenshotTradeRef.current === activeTradeId) {
+          setEditTradeForm(current => ({ ...current, screenshots: Array.from(new Set([...current.screenshots, url])) }));
+        }
+        saved++;
       }
-
-      uploadedUrls.push(String(data.url));
+      setScreenshotUpload({ tradeId: activeTradeId, busy: false, error: false,
+        message: `${saved} ${saved === 1 ? "image" : "images"} saved.` });
+    } catch (error) {
+      setScreenshotUpload({ tradeId: activeTradeId, busy: false, error: true,
+        message: `${saved ? `${saved} ${saved === 1 ? "image" : "images"} saved. ` : ""}${error instanceof Error ? error.message : "Upload failed. Please try again."}` });
+    } finally {
+      screenshotUploadLock.current = false;
     }
-
-    setEditTradeForm((current) => ({
-      ...current,
-      screenshots: [...current.screenshots, ...uploadedUrls]
-    }));
-    setTrades((current) =>
-      current.map((trade) =>
-        trade.id === activeTradeId
-          ? { ...trade, screenshots: [...trade.screenshots, ...uploadedUrls] }
-          : trade
-      )
-    );
-    setSelectedTradeId(activeTradeId);
-    setStatus(`${uploadedUrls.length} ${uploadedUrls.length === 1 ? "screenshot" : "screenshots"} saved securely.`);
   }
 
   async function importBrokerStatement(files: FileList | null) {
@@ -4013,7 +4030,7 @@ export default function Home() {
   async function saveTradeEdit(event: FormEvent) {
     event.preventDefault();
 
-    if (!selectedTrade) {
+    if (!selectedTrade || screenshotUploadLock.current) {
       return;
     }
 
@@ -5673,8 +5690,8 @@ export default function Home() {
                               type="file"
                               accept="image/*"
                               multiple
-                              onChange={(event) => attachEditTradeScreenshots(event.target.files)}
-                              disabled={selectedTrade.userId !== user.id}
+                              onChange={(event) => { void attachEditTradeScreenshots(event.target.files); event.currentTarget.value = ""; }}
+                              disabled={selectedTrade.userId !== user.id || screenshotUpload.busy}
                             />
                           </label>
                         </>
@@ -5736,9 +5753,37 @@ export default function Home() {
                 </div>
               </article>
 
-	              <article className="trade-detail-section">
-	                <div className="trade-section-heading-row">
-	                  <h3>Screenshots</h3>
+                <article
+                  className={`trade-detail-section trade-image-dropzone${isDraggingScreenshot ? " is-dragging" : ""}`}
+                  aria-label="Trade screenshots"
+                  aria-busy={screenshotUpload.busy}
+                  onDragEnter={event => {
+                    if (!event.dataTransfer.types.includes("Files")) return;
+                    event.preventDefault();
+                    if (selectedTrade.userId !== user.id || user.readOnly || screenshotUploadLock.current) return;
+                    screenshotDragDepth.current++;
+                    setIsDraggingScreenshot(true);
+                  }}
+                  onDragOver={event => {
+                    if (!event.dataTransfer.types.includes("Files")) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = selectedTrade.userId === user.id && !user.readOnly && !screenshotUploadLock.current ? "copy" : "none";
+                  }}
+                  onDragLeave={event => {
+                    event.preventDefault();
+                    screenshotDragDepth.current = Math.max(0, screenshotDragDepth.current - 1);
+                    if (!screenshotDragDepth.current) setIsDraggingScreenshot(false);
+                  }}
+                  onDrop={event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    screenshotDragDepth.current = 0;
+                    setIsDraggingScreenshot(false);
+                    void attachEditTradeScreenshots(Array.from(event.dataTransfer.files));
+                  }}
+                >
+                  <div className="trade-section-heading-row">
+                    <h3>Screenshots</h3>
                     <span className="trade-review-required-note">
                       <span className="review-required-marker">*</span> at least one screenshot required
                     </span>
@@ -5748,7 +5793,8 @@ export default function Home() {
 	                      <input
 	                        type="file"
 	                        accept="image/*"
-	                        multiple
+                            multiple
+                            disabled={screenshotUpload.busy}
 	                        onChange={(event) => {
 	                          attachEditTradeScreenshots(event.target.files);
 	                          event.currentTarget.value = "";
@@ -5757,6 +5803,12 @@ export default function Home() {
 	                    </label>
 	                  ) : null}
 	                </div>
+                  {selectedTrade.userId === user.id && !user.readOnly ? (
+                    <p className="trade-image-drop-hint">{isDraggingScreenshot ? "Drop images to upload and save" : "Drag image files here to upload and save, or click Upload. Up to 3.5 MB each."}</p>
+                  ) : null}
+                  {screenshotUpload.tradeId === selectedTrade.id && screenshotUpload.message ? (
+                    <p role="status" aria-live="polite" className={`status${screenshotUpload.error ? " error" : ""}`}>{screenshotUpload.message}</p>
+                  ) : null}
 	                {editTradeForm.screenshots.length || editTradeForm.chartLinks.length ? (
                   <div className="trade-large-screenshots">
                     {editTradeForm.screenshots.map((screenshot, index) => (
@@ -5889,8 +5941,8 @@ export default function Home() {
                 </dl>
 	                {selectedTrade.userId === user.id ? (
                   <div className="trade-detail-actions">
-                    <button type="submit">Save changes</button>
-                    <button className="trade-muted-button" type="button" onClick={() => setEditTradeForm(tradeToForm(selectedTrade, setupTemplates))}>
+                    <button type="submit" disabled={screenshotUpload.busy}>Save changes</button>
+                    <button className="trade-muted-button" type="button" disabled={screenshotUpload.busy} onClick={() => setEditTradeForm(tradeToForm(selectedTrade, setupTemplates))}>
                       Reset changes
                     </button>
                     <button className="trade-muted-button" type="button" onClick={() => updateTradeVisibility([selectedTrade], true)}>
