@@ -25,6 +25,8 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
   try {
     await admin.query(`create schema ${schema}`);
     url.searchParams.set("options", `-c search_path=${schema}`);
+    // Test files share a database, but only this pool's transactions belong to this test.
+    url.searchParams.set("application_name", schema);
     process.env.DATABASE_URL = url.toString();
     const store = await import("../lib/store");
     pool = store.getPool();
@@ -108,8 +110,36 @@ test("PostgreSQL Storage cutover preserves live saves, history checkpoints, shar
     // Legacy files without the optional shared section remain importable.
     delete backup.sharedScreenshots;
     await store.importBrandenJournalBackup(backup);
-    const idle = await admin.query("select count(*)::int as count from pg_stat_activity where datname=current_database() and state='idle in transaction'");
-    assert.equal(idle.rows[0].count, 0);
+    const idleCount = async () => (await admin.query(
+      "select count(*)::int as count from pg_stat_activity where datname = current_database() and application_name = $1 and state = 'idle in transaction'",
+      [schema]
+    )).rows[0].count;
+    assert.equal(await idleCount(), 0);
+
+    // Reproduce a concurrent suite holding a valid snapshot: it must not be
+    // mistaken for a leak here, while an open transaction in our pool must count.
+    const peerUrl = new URL(databaseUrl!);
+    peerUrl.searchParams.set("application_name", `peer_${schema}`);
+    const peer = new Client({ connectionString: peerUrl.toString(), ssl: false });
+    await peer.connect();
+    try {
+      await peer.query("begin");
+      const databaseWide = await admin.query("select count(*)::int as count from pg_stat_activity where datname = current_database() and state = 'idle in transaction'");
+      assert.ok(databaseWide.rows[0].count >= 1);
+      assert.equal(await idleCount(), 0);
+      const ownClient = await pool.connect();
+      try {
+        await ownClient.query("begin");
+        assert.equal(await idleCount(), 1);
+      } finally {
+        try { await ownClient.query("rollback"); }
+        finally { ownClient.release(); }
+      }
+      assert.equal(await idleCount(), 0);
+    } finally {
+      try { await peer.query("rollback"); }
+      finally { await peer.end(); }
+    }
   } finally {
     r2.restore();
     if (pool) await pool.end();
