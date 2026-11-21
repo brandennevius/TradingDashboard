@@ -21,6 +21,8 @@ test("PostgreSQL backup round-trips a consistent snapshot with screenshots and p
   try {
     await admin.query(`create schema ${schema}`);
     url.searchParams.set("options", `-c search_path=${schema}`);
+    // Test files share a database, but only this pool's transactions belong to this test.
+    url.searchParams.set("application_name", schema);
     process.env.DATABASE_URL = url.toString();
     const store = await import("../lib/store");
     pool = store.getPool();
@@ -56,7 +58,10 @@ test("PostgreSQL backup round-trips a consistent snapshot with screenshots and p
 
     const cancelled = await store.exportBrandenJournalBackup();
     await cancelled.body.cancel();
-    const idle = await admin.query("select count(*)::int as count from pg_stat_activity where datname = current_database() and state = 'idle in transaction'");
+    const idle = await admin.query(
+      "select count(*)::int as count from pg_stat_activity where datname = current_database() and application_name = $1 and state = 'idle in transaction'",
+      [schema]
+    );
     assert.equal(idle.rows[0].count, 0);
   } finally {
     if (pool) await pool.end();
