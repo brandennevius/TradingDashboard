@@ -23,7 +23,18 @@ export default function PositionSizeChart({trades,portfolio,startDate,endDate,su
         <XAxis dataKey="date" tickFormatter={d=>String(d).slice(5,10)} minTickGap={35} tick={{fill:"#6f7469",fontSize:11}}/>
         <YAxis domain={[0,"auto"]} tickFormatter={v=>`${Number(v).toFixed(0)}%`} width={65} tick={{fill:"#6f7469",fontSize:11}}/>
         <ReferenceLine y={100} stroke="#a85757" strokeDasharray="4 4" ifOverflow="extendDomain"/>
-        <Tooltip content={({active,payload,label})=>active && payload?.length ? <div className="position-size-tooltip"><strong>{String(label)}</strong>{payload.map(p=><div key={String(p.dataKey)} style={{color:p.color}}>{p.name}: {Number(p.value).toFixed(2)}% · {money(Number(p.value)*budget/100)}</div>)}<strong>Total: {Number(payload[0]?.payload.total).toFixed(2)}% · {money(Number(payload[0]?.payload.dollars))}</strong></div>:null}/>
+        <Tooltip content={({active,payload,label}) => {
+          if (!active || !payload?.length) return null;
+          // Every series appears in Recharts' payload, even before entry or after exit.
+          // Use the hovered point's remaining exposure, not the trade's current status.
+          const positions = payload.filter(p => Number.isFinite(Number(p.value)) && Number(p.value) > 0);
+          return <div className="position-size-tooltip">
+            <strong>{String(label)}</strong>
+            {positions.length ? positions.map(p => <div key={String(p.dataKey)} style={{color:p.color}}>{p.name}: {Number(p.value).toFixed(2)}% · {money(Number(p.value)*budget/100)}</div>) : <div>No open positions at this time.</div>}
+            <strong>Total: {Number(payload[0]?.payload.total).toFixed(2)}% · {money(Number(payload[0]?.payload.dollars))}</strong>
+          </div>;
+        }}/>
+
         {data.series.map((s,i)=><Area key={s.key} dataKey={s.key} name={s.label} stackId="positions" type="stepAfter" stroke={colors[i%colors.length]} fill={colors[i%colors.length]} fillOpacity={.55} strokeWidth={2} isAnimationActive={false}/>)}
       </AreaChart></ResponsiveContainer>:<p className="status">No positions held during this date range.</p>}
       <div className="position-size-legend">{data.series.map((s,i)=><span key={s.key}><i style={{background:colors[i%colors.length]}}/>{s.label}</span>)}</div>
