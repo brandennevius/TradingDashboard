@@ -64,6 +64,10 @@ test("store keeps IBKR isolated, preserves stops, and saves cash ledger and date
     assert.equal(list[0].id,trade.id);
     const snapshots=await store.listBrokerPortfolioSnapshots("branden","IBKR Personal");
     assert.equal(snapshots[0].source,"IBKR_FLEX_XML"); assert.equal(snapshots[0].currentEquity,99);
+    assert.deepEqual(await store.listBrokerPortfolioEquityHistory("branden"), [{
+      portfolioTag: "IBKR Personal", date: snapshots[0].coverageDate, equity: 99
+    }]);
+    assert.deepEqual(await store.listBrokerPortfolioEquityHistory("cam"), []);
     const settings=JSON.parse(await fs.readFile(path.join(dir,'data/app-settings.json'),'utf8'));
     assert.equal(settings['ibkr_flex:branden:IBKR Personal'].cashTransactions.length,1);
     await assert.rejects(store.importIbkrFlexStatement("branden","IBKR Personal",{...parsed,accountId:"OTHER"},hash,"test.xml"),/different IBKR/);
