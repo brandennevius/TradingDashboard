@@ -4,6 +4,7 @@ import { usePortfolioSelection } from "@/lib/portfolio-selection";
 
 import dynamic from "next/dynamic";
 import PositionSizeChart from "@/app/components/PositionSizeChart";
+import type { AccountEquitySnapshot } from "@/lib/account-equity-history";
 import { ACCOUNT_LOSS_THRESHOLD_DOLLARS } from "@/lib/portfolio-exposure";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -199,6 +200,9 @@ export default function BrandenDashboardPage() {
   const [tradeId, setTradeId] = useState("");
   const [user, setUser] = useState<TraderUser | null>(null);
   const [trades, setTrades] = useState<TradeLogEntry[]>([]);
+  const [equityHistory, setEquityHistory] = useState<AccountEquitySnapshot[]>([]);
+  const [equityPortfolios, setEquityPortfolios] = useState<string[]>([]);
+  const [equityError, setEquityError] = useState("");
   const [portfolioMeta, setPortfolioMeta] = useState<Record<string, { currentEquity?: number }>>({});
   const [setupTemplates, setSetupTemplates] = useState<SetupChecklistTemplate[]>([]);
   const [activePortfolio, setActivePortfolio, initializePortfolio] = usePortfolioSelection("");
@@ -218,7 +222,11 @@ export default function BrandenDashboardPage() {
     async function loadDashboard() {
       setIsLoading(true);
       setError("");
-      const response = await fetch("/api/journal/branden/trade-log", { cache: "no-cache" });
+      const [response, equityResponse] = await Promise.all([
+        fetch("/api/journal/branden/trade-log", { cache: "no-cache" }),
+        fetch("/api/journal/branden/equity-history", { cache: "no-cache" }).catch(() => null)
+      ]);
+      const equityData = await equityResponse?.json().catch(() => ({}));
       const data = (await response.json().catch(() => ({}))) as DashboardResponse;
 
       if (cancelled) return;
@@ -232,6 +240,9 @@ export default function BrandenDashboardPage() {
       const nextDefaultPortfolio = String(data.defaultPortfolio || "");
       setUser(data.user || null);
       setTrades(Array.isArray(data.trades) ? data.trades : []);
+      setEquityHistory(Array.isArray(equityData?.equityHistory) ? equityData.equityHistory : []);
+      setEquityPortfolios(Array.isArray(data.portfolios) ? data.portfolios : []);
+      setEquityError(equityResponse?.ok ? "" : "Account equity history could not be loaded.");
       setPortfolioMeta(data.portfolioMeta || {});
       setSetupTemplates(Array.isArray(data.setupChecklists) ? data.setupChecklists : []);
       initializePortfolio(nextDefaultPortfolio);
@@ -390,7 +401,7 @@ export default function BrandenDashboardPage() {
         {!isLoading ? (
           <>
             <div className="trade-chart-rows">
-              <PositionSizeChart key={activePortfolio} trades={visibleTrades} portfolio={activePortfolio} startDate={startDate} endDate={endDate} suggestedBudget={activePortfolio === "CF_Statement" && portfolioMeta[activePortfolio]?.currentEquity ? Math.max(0, portfolioMeta[activePortfolio].currentEquity! - ACCOUNT_LOSS_THRESHOLD_DOLLARS) : undefined} />
+              <PositionSizeChart key={activePortfolio} equityHistory={equityHistory} equityPortfolios={equityPortfolios} equityError={equityError} trades={visibleTrades} portfolio={activePortfolio} startDate={startDate} endDate={endDate} suggestedBudget={activePortfolio === "CF_Statement" && portfolioMeta[activePortfolio]?.currentEquity ? Math.max(0, portfolioMeta[activePortfolio].currentEquity! - ACCOUNT_LOSS_THRESHOLD_DOLLARS) : undefined} />
 
               <div className="trade-chart-row trade-chart-row-two">
                 <article className="trade-chart-panel top-chart">

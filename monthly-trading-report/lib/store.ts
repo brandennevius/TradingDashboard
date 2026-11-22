@@ -1331,6 +1331,29 @@ function rowToBrokerPortfolioSnapshot(row: Record<string, unknown>): BrokerPortf
   });
 }
 
+/** Compact equity projection: excludes positions, orders and source documents. */
+export async function listBrokerPortfolioEquityHistory(userId: string) {
+  const db = getPool();
+  if (!db) {
+    return (await listBrokerPortfolioSnapshots(userId)).flatMap(snapshot => {
+      const equity = snapshot.currentEquity ?? snapshot.statementEquity;
+      return equity !== null && Number.isFinite(equity) ? [{ portfolioTag: snapshot.portfolioTag, date: snapshot.coverageDate, equity: equity! }] : [];
+    });
+  }
+  try {
+    const result = await db.query(
+      `select portfolio_tag, coverage_date, coalesce(current_equity, statement_equity) as equity
+       from broker_portfolio_snapshots where user_id = $1
+       and coalesce(current_equity, statement_equity) is not null order by coverage_date, portfolio_tag`, [userId]
+    );
+    return result.rows.flatMap(row => Number.isFinite(Number(row.equity))
+      ? [{ portfolioTag: String(row.portfolio_tag), date: String(row.coverage_date), equity: Number(row.equity) }] : []);
+  } catch (error) {
+    if ((error as { code?: string }).code === "42P01") return [];
+    throw error;
+  }
+}
+
 export async function listBrokerPortfolioSnapshots(userId: string, portfolioTag?: string) {
   const db = getPool();
   if (!db) {
